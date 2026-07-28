@@ -1,4 +1,4 @@
-// CLI engine for guards. The GUI (guards-gui.ps1) shells to this for every
+﻿// CLI engine for guards. The GUI (guards-gui.ps1) shells to this for every
 // mutation; agents use `vault-keys` and `apply` to consume user-uploaded
 // secrets without the values ever entering a conversation, and `list` /
 // `run` / `trash` to work the runbox (see AGENTS.md). Values travel
@@ -89,7 +89,7 @@ function firstComment(file) {
 
 function hasKeepMarker(file) {
   try {
-    return /guards:\s*keep/i.test(readFileSync(file, "utf8").split(/\r?\n/).slice(0, 10).join("\n"));
+    return readFileSync(file, "utf8").split(/\r?\n/).slice(0, 10).some((l) => /^\s*(#|\/\/)\s*guards:\s*keep/i.test(l));
   } catch { return false; }
 }
 
@@ -126,7 +126,7 @@ function trashedScripts(c) {
 }
 
 // Hidden attribute keeps trash invisible in Explorer; the GUI's "Show deleted"
-// toggle is how it becomes visible again. Best-effort — dot-folder either way.
+// toggle is how it becomes visible again. Best-effort â€” dot-folder either way.
 function ensureTrash(runboxDir) {
   const trash = path.join(runboxDir, ".trash");
   if (!existsSync(trash)) {
@@ -158,7 +158,7 @@ function resolveRef(items, ref, what) {
     fail(`no ${what} named "${ref}". Available:\n${items.map((i) => `  ${i.label}:${i.name}`).join("\n") || "  (none)"}`);
   }
   if (matches.length > 1) {
-    fail(`"${ref}" is ambiguous — say which one:\n${matches.map((i) => `  ${i.label}:${i.name}`).join("\n")}`);
+    fail(`"${ref}" is ambiguous â€” say which one:\n${matches.map((i) => `  ${i.label}:${i.name}`).join("\n")}`);
   }
   return matches[0];
 }
@@ -231,13 +231,13 @@ switch (cmd) {
     c.projects = (c.projects ?? []).filter((x) => norm(x).toLowerCase() !== p.toLowerCase());
     writeJson(CONFIG, c);
     console.log(`watching: ${c.projects.join(", ") || "(only the central runbox)"}`);
-    console.log(`note: ${p}\\.guards was left on disk — delete it by hand if you want it gone`);
+    console.log(`note: ${p}\\.guards was left on disk â€” delete it by hand if you want it gone`);
     break;
   }
   case "list": {
     const items = pendingScripts(config());
     if (args[0] === "--json") { console.log(JSON.stringify(items)); break; }
-    if (!items.length) { console.log("runbox is empty — no pending scripts."); break; }
+    if (!items.length) { console.log("runbox is empty â€” no pending scripts."); break; }
     for (const i of items) {
       console.log(`${i.label}:${i.name}${i.keep ? "  [keep]" : ""}\n    ${i.summary || "(no description)"}`);
     }
@@ -255,7 +255,7 @@ switch (cmd) {
     const item = resolveRef(pendingScripts(config()), ref, "pending script");
     const full = path.join(item.dir, item.name);
     const runner = RUNNERS[path.extname(item.name).toLowerCase()];
-    if (!runner) fail(`cannot run ${item.name} — supported: .ps1 .cmd .bat .mjs .js`);
+    if (!runner) fail(`cannot run ${item.name} â€” supported: .ps1 .cmd .bat .mjs .js`);
     const [exe, exeArgs] = runner(full);
     console.log(`[guards] running ${item.label}:${item.name} ...`);
     const r = spawnSync(exe, exeArgs, { stdio: "inherit", cwd: item.cwd });
@@ -263,14 +263,14 @@ switch (cmd) {
     if (code === 0 && !item.keep) {
       if (existsSync(full)) {
         moveToTrash(item);
-        console.log(`\n[guards] done — archived to the runbox trash (undo: restore ${item.name})`);
+        console.log(`\n[guards] done â€” archived to the runbox trash (undo: restore ${item.name})`);
       } else {
-        console.log(`\n[guards] done — script cleaned itself up`); // e.g. an installer that self-archives
+        console.log(`\n[guards] done â€” script cleaned itself up`); // e.g. an installer that self-archives
       }
     } else if (code === 0) {
-      console.log(`\n[guards] done — kept in the runbox (standing script)`);
+      console.log(`\n[guards] done â€” kept in the runbox (standing script)`);
     } else {
-      console.error(`\n[guards] FAILED (exit ${code}) — script left in the runbox`);
+      console.error(`\n[guards] FAILED (exit ${code}) â€” script left in the runbox`);
     }
     process.exit(code);
   }
@@ -278,7 +278,7 @@ switch (cmd) {
     const ref = args[0] ?? fail("usage: trash <name | label:name>");
     const item = resolveRef(pendingScripts(config()), ref, "pending script");
     moveToTrash(item);
-    console.log(`trashed ${item.label}:${item.name} — undo with: restore ${item.name}`);
+    console.log(`trashed ${item.label}:${item.name} â€” undo with: restore ${item.name}`);
     break;
   }
   case "restore": {
@@ -303,7 +303,7 @@ switch (cmd) {
   case "flush": {
     // Permanent. Only the GUI's confirmed button (or a human typing --really)
     // reaches this; agents must never call it.
-    if (args[0] !== "--really") fail("flush is permanent — this is the GUI's Empty-trash button. CLI: flush --really");
+    if (args[0] !== "--really") fail("flush is permanent â€” this is the GUI's Empty-trash button. CLI: flush --really");
     const items = trashedScripts(config());
     for (const i of items) rmSync(path.join(i.dir, i.name));
     console.log(`flushed ${items.length} archived script(s) for good.`);
@@ -342,7 +342,7 @@ switch (cmd) {
     if (!target || !keys.length) fail("usage: apply <targetFile> <KEY...>");
     const v = vault();
     const missing = keys.filter((k) => !(k in v));
-    if (missing.length) fail(`not in vault: ${missing.join(", ")} — the user must add these via the Guards GUI first`);
+    if (missing.length) fail(`not in vault: ${missing.join(", ")} â€” the user must add these via the Guards GUI first`);
     // Strip a UTF-8 BOM: with one, the first line never matches KEY= and a
     // stale duplicate line wins on read.
     const lines = existsSync(target)
