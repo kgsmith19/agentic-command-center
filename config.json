@@ -1,0 +1,41 @@
+{
+  "enabled": true,
+  "runboxDir": "C:/code/guards/runbox",
+  "secrets": [
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "id_rsa*",
+    "vault.json"
+  ],
+  "protected": [
+    "C:/code/guards",
+    "C:/Users/kyleg/.claude/settings.json"
+  ],
+  "repos": {
+    "C:/code/lifeos-ecosystem/lifeos": {
+      "cells": {
+        "kernel": [
+          "src/kernel/",
+          "supabase/migrations/",
+          "tests/kernel/"
+        ],
+        "interface": [
+          "src/api/",
+          "tests/api/",
+          "src/mcp_server/",
+          "tests/mcp/"
+        ],
+        "rules": [
+          ".agents/",
+          "docs/adr/"
+        ]
+      },
+      "alwaysAllowed": [
+        ".agents/task.json",
+        "cross-domain-change-request.md"
+      ]
+    }
+  }
+}
