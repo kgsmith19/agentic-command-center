@@ -19,6 +19,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ptyAnchorPid } from "./usage.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, "budget.mjs");
@@ -328,4 +329,34 @@ test("SessionStart with ACC_PTY records a pty window bound to the parent pid", (
   assert.equal(win.pipe, "acc-term-cafe12");
   assert.equal(win.consolePid, process.pid,
     "consolePid must be the hook's PARENT (the claude process; here, the test runner)");
+});
+
+// The anchor rule behind that record: the hook's immediate parent on a live
+// launch is a transient shell (node -> bash -> bash -> claude.exe) that dies
+// with the turn - recording it handed clearbot a dead pid (observed live:
+// consolePid 80480 GONE while claude.exe 70152 hosted the session). The
+// persistent process is the first NON-SHELL ancestor. Lives in usage.mjs
+// because budget.mjs runs main() on import and cannot be imported by tests.
+test("ptyAnchorPid skips transient shell ancestors and lands on claude", () => {
+  const chain = [
+    { pid: 111, name: "bash.exe" },
+    { pid: 222, name: "bash.exe" },
+    { pid: 333, name: "claude.exe" },
+    { pid: 444, name: "cmd.exe" },
+  ];
+  assert.equal(ptyAnchorPid(chain), 333);
+});
+
+test("ptyAnchorPid anchors at the immediate parent when it is not a shell", () => {
+  // The test-runner case: the hook's parent is node.exe (alive, persistent).
+  const chain = [
+    { pid: 555, name: "node.exe" },
+    { pid: 666, name: "powershell.exe" },
+    { pid: 777, name: "claude.exe" },
+  ];
+  assert.equal(ptyAnchorPid(chain), 555);
+});
+
+test("ptyAnchorPid falls back to the first ancestor when all are shells", () => {
+  assert.equal(ptyAnchorPid([{ pid: 888, name: "cmd.exe" }]), 888);
 });

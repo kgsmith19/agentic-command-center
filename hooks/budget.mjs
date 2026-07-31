@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadPolicy, contextOf, startContextOf, applyProfile } from "./usage.mjs";
+import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd } from "./goal.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -408,9 +408,14 @@ function onSessionStart(p, policy) {
   if (!HEADLESS) {
     // An ACC-hosted pty session has no HWND to find: the GUI is the terminal.
     // The persistent process across /clear (what consolePid means to goal
-    // binding) is the claude process itself - this hook's parent.
+    // binding) is the claude process - NOT this hook's raw parent, which is a
+    // transient bash/cmd wrapper that dies with the turn (recording it gave
+    // clearbot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
     if (process.env.ACC_PTY) {
-      win = { ok: true, hwnd: 0, consolePid: process.ppid, transport: "pty",
+      const chain = ancestorChain();
+      win = { ok: true, hwnd: 0,
+              consolePid: chain.length ? ptyAnchorPid(chain) : process.ppid,
+              transport: "pty",
               pipe: process.env.ACC_PTY, title: "acc-pty" };
       try { fs.writeFileSync(statePath(p.session_id, "window"), JSON.stringify(win)); } catch {}
     } else {
