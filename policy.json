@@ -61,7 +61,9 @@
     "goals":  {
                   "autoResume":  true,
                   "maxCycles":  0,
-                  "_note":  "A goal (runner/goals/) carries work across a /clear: SessionStart adopts it by CONSOLE PID and injects it, the Stop hook logs the cycle, clearbot types a constant to restart the turn. Kyle\u0027s call 2026-07-31: unbounded - the loop ends only when the model runs \u0027goal.mjs done \u003cid\u003e\u0027 or \u0027blocked \u003cid\u003e\u0027. maxCycles 0 = no cap; set a number to stop after N continuations. A RED week tier holds all resumes regardless."
+                  "kickSettleSeconds":  90,
+                  "humanHoldMinutes":  10,
+                  "_note":  "A goal (runner/goals/) carries work across a /clear: SessionStart adopts it by CONSOLE PID and injects it, the Stop hook logs the cycle, clearbot types a constant to restart the turn. Kyle\u0027s call 2026-07-31: unbounded - the loop ends only when the model runs \u0027goal.mjs done \u003cid\u003e\u0027 or \u0027blocked \u003cid\u003e\u0027. maxCycles 0 = no cap; set a number to stop after N continuations. A RED week tier holds all resumes regardless. Liveness (2026-07-31): a turn ending UNDER budget also re-arms the kick, so the loop no longer dies when a session simply finishes its turn - kickSettleSeconds is how long after a turn end a kick may fire, humanHoldMinutes is how long a prompt Kyle typed suppresses it (it expires, so walking away self-heals)."
               },
     "autoApprove":  {
                         "enabled":  true,

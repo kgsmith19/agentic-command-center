@@ -152,3 +152,80 @@ test("goal ids cannot escape the goals directory", async () => {
   assert.equal(m.readGoal("../../../etc/passwd"), null);
   assert.equal(m.setStatus("..\\..\\evil", "done"), null);
 });
+
+// --- hybrid re-kick rules (autonomy hardening, 2026-07-31) -----------------
+// The loop stalled twice on 2026-07-31 because ONLY an over-budget stop could
+// continue it: a goal session that ended its turn under the ceiling sat dead
+// (18 minutes, once) until a human typed. These pin the rules that make an
+// under-budget turn end resume by itself - and the rules that keep it quiet
+// while Kyle is actually using that console.
+
+test("recordTurnEnd re-arms the kick and stamps the turn end", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: "s1", consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id); // a kick already fired, as after a resume
+  assert.equal(m.readGoal(g.id).needsKick, false);
+
+  m.recordTurnEnd(g.id, { human: false });
+  const after = m.readGoal(g.id);
+  assert.equal(after.needsKick, true, "kick re-armed");
+  assert.ok(after.turnEndedAt, "turnEndedAt stamped");
+  assert.ok(!after.humanPromptAt, "the kick constant is a MACHINE turn");
+});
+
+test("a human-prompted turn end records the human timestamp", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: "s2", consolePid: LIVE, goalId: g.id });
+  m.recordTurnEnd(g.id, { human: true });
+  assert.ok(m.readGoal(g.id).humanPromptAt, "humanPromptAt stamped");
+});
+
+test("kick waits for the settle window, then fires", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: "s3", consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id);
+  m.recordTurnEnd(g.id, { human: false });
+  const t0 = Date.parse(m.readGoal(g.id).turnEndedAt);
+
+  const tooSoon = m.pendingKicks(t0 + 30_000, { kickSettleSeconds: 90 });
+  assert.equal(tooSoon.find((k) => k.id === g.id), undefined, "30s < 90s settle");
+
+  // Past settle AND past the 60s cooldown from markKicked.
+  const ready = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90 });
+  assert.ok(ready.find((k) => k.id === g.id), "fires once settled");
+});
+
+test("a human prompt holds the kick off, and the hold expires", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: "s4", consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id);
+  m.recordTurnEnd(g.id, { human: true });
+  const t0 = Date.parse(m.readGoal(g.id).humanPromptAt);
+
+  const held = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90, humanHoldMinutes: 10 });
+  assert.equal(held.find((k) => k.id === g.id), undefined, "quiet while Kyle is engaged");
+
+  const freed = m.pendingKicks(t0 + 11 * 60_000, { kickSettleSeconds: 90, humanHoldMinutes: 10 });
+  assert.ok(freed.find((k) => k.id === g.id), "self-heals after the hold");
+});
+
+test("a finished goal is never kicked, however long you wait", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: "s5", consolePid: LIVE, goalId: g.id });
+  m.recordTurnEnd(g.id, { human: false });
+  m.setStatus(g.id, "done", "finished");
+  assert.equal(m.pendingKicks(Date.now() + 86_400_000).find((k) => k.id === g.id), undefined);
+});
+
+test("a dead console is never kicked, however long you wait", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: "s6", consolePid: 999999, goalId: g.id });
+  m.recordTurnEnd(g.id, { human: false });
+  assert.equal(m.pendingKicks(Date.now() + 86_400_000).find((k) => k.id === g.id), undefined);
+});

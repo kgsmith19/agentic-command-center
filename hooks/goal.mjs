@@ -40,6 +40,15 @@ const KICK_DELAY_MS = 4000;
 // One kick per goal per minute, whatever happens. A resume loop that somehow
 // re-armed itself must not be able to machine-gun the console.
 const KICK_COOLDOWN_MS = 60000;
+// A turn that ends UNDER budget used to end the loop: nothing re-armed the
+// kick, so an active goal sat dead until a human typed (observed twice on
+// 2026-07-31, once for 18 minutes). These two windows are what make an
+// under-budget turn end resume instead of stall. Both are policy dials
+// (goals.kickSettleSeconds / goals.humanHoldMinutes); these are the fallbacks.
+const KICK_SETTLE_MS_DEFAULT = 90_000;
+// While Kyle is actively prompting this console, stay out of his way. The hold
+// EXPIRES, so walking away mid-conversation still self-heals into autonomy.
+const HUMAN_HOLD_MS_DEFAULT = 10 * 60_000;
 
 const nowIso = () => new Date().toISOString();
 
@@ -140,6 +149,8 @@ export function createGoal({ text, cwd, profile }) {
     needsKick: false,
     boundAt: "",
     lastKickAt: "",
+    turnEndedAt: "",
+    humanPromptAt: "",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -237,13 +248,36 @@ export function setStatus(id, status, why) {
 //   - its console must still exist
 //   - the binding must have settled (TUI ready)
 //   - the cooldown must have expired
-export function pendingKicks(now = Date.now()) {
+export function pendingKicks(now = Date.now(), opts = {}) {
+  const settleMs =
+    opts.kickSettleSeconds != null ? Number(opts.kickSettleSeconds) * 1000 : KICK_SETTLE_MS_DEFAULT;
+  const holdMs =
+    opts.humanHoldMinutes != null ? Number(opts.humanHoldMinutes) * 60000 : HUMAN_HOLD_MS_DEFAULT;
   return activeGoals()
     .filter((g) => g.needsKick)
     .filter((g) => consoleAlive(g.consolePid))
     .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= KICK_DELAY_MS)
+    // Turn-end settle: the TUI needs a moment after a turn ends, and an instant
+    // kick would race the model's own closing tool calls.
+    .filter((g) => !g.turnEndedAt || now - Date.parse(g.turnEndedAt) >= settleMs)
+    // Human hold: quiet while he is typing, self-healing once he stops.
+    .filter((g) => !g.humanPromptAt || now - Date.parse(g.humanPromptAt) >= holdMs)
     .filter((g) => !g.lastKickAt || now - Date.parse(g.lastKickAt) >= KICK_COOLDOWN_MS)
     .map((g) => ({ id: g.id, consolePid: g.consolePid, cycles: g.cycles, sessionId: g.sessionId }));
+}
+
+// Called from the Stop hook on every turn end of a goal session that did NOT go
+// over budget (the over-budget path has its own clear/resume chain). This is the
+// liveness trigger: it re-arms the kick, and pendingKicks() above decides when
+// firing it is safe. `human` marks a turn Kyle prompted, which backs the kick
+// off - see HUMAN_HOLD_MS_DEFAULT.
+export function recordTurnEnd(id, { human } = {}) {
+  const goal = readGoal(id);
+  if (!goal || goal.status !== "active") return null;
+  goal.needsKick = true;
+  goal.turnEndedAt = nowIso();
+  if (human) goal.humanPromptAt = nowIso();
+  return write(goal);
 }
 
 export function markKicked(id) {
@@ -299,7 +333,19 @@ function main() {
     return;
   }
   if (cmd === "pending") {
-    console.log(JSON.stringify(pendingKicks()));
+    // Dials live in policy.json so they can be tuned without a restart; a
+    // missing or broken policy just uses the defaults (fail open).
+    let dials = {};
+    try {
+      const pol = JSON.parse(
+        fs.readFileSync(process.env.ACC_POLICY || path.join(ROOT, "policy.json"), "utf8")
+      );
+      dials = {
+        kickSettleSeconds: pol?.goals?.kickSettleSeconds,
+        humanHoldMinutes: pol?.goals?.humanHoldMinutes,
+      };
+    } catch {}
+    console.log(JSON.stringify(pendingKicks(Date.now(), dials)));
     return;
   }
   if (cmd === "kicked") {
