@@ -48,6 +48,11 @@ $Root     = Split-Path $PSScriptRoot -Parent
 $ReqDir   = Join-Path $Root 'runner\clear-requests'
 $StopFile = Join-Path $PSScriptRoot 'clearbot.stop'
 $LogFile  = Join-Path $PSScriptRoot 'clearbot.log'
+# Liveness signal for the statusline and the SessionStart warning. The MTIME is
+# the signal; the content is for a human who opens the file. Written every Step,
+# so "older than ~30s" means this process is gone or wedged - which used to be
+# invisible, and silently ends ALL autonomy (no clears, no resumes).
+$HeartbeatFile = Join-Path $PSScriptRoot 'clearbot.heartbeat'
 $SendConsole = Join-Path $PSScriptRoot 'sendconsole.ps1'
 $MaxAgeSec = 900
 $KEYS = '/clear'          # invariant 1a.
@@ -266,6 +271,9 @@ $lastFire = @{}
 $escalated = @{}
 
 function Step {
+    # Before the kill switch: a stopped-but-alive watcher is still alive, and
+    # the difference matters when diagnosing why nothing is being typed.
+    try { Set-Content -Path $HeartbeatFile -Value ("alive {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ascii } catch {}
     if (Test-Path $StopFile) { return }                       # invariant 6
     foreach ($f in @(Get-ChildItem $ReqDir -Filter *.json -ErrorAction SilentlyContinue)) {
         $req = $null

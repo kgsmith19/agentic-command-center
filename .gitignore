@@ -12,3 +12,4 @@ watcher/*.log
 watcher/*.png
 watcher/clearbot.stop
 *.bak*
+watcher/clearbot.heartbeat
