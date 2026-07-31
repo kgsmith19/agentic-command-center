@@ -30,6 +30,9 @@
 #      There is no code path that types caller-chosen free text.
 #   2. It types only into the exact console PID the session recorded for itself
 #      via winfind.ps1. It never searches by window title and never guesses.
+#      VERIFIED, not trusted: Test-Binding re-reads runner/state/<sid>.window
+#      and refuses any request whose consolePid disagrees with it, so a request
+#      file cannot aim keystrokes at a console that is not its own session's.
 #   3. Injection is WriteConsoleInput, addressed by PID, so it needs no focus:
 #      there is no "whatever has focus" to type into by mistake, and it cannot
 #      steal focus from what Kyle is doing. Missing/dead PID => skip, never guess.
@@ -79,6 +82,30 @@ function Test-Replayable([string]$s) {
     return ($s -notmatch '[\x00-\x1f\x7f]')
 }
 
+# invariant 2, ENFORCED rather than trusted (guards OI-004): a request names the
+# console to type into, but the SESSION recorded its own console in
+# runner/state/<sid>.window. If those disagree, the request did not come from
+# that session - refuse, do not type. No window record = cannot verify = refuse.
+function Test-Binding($req) {
+    $sid = [string]$req.sessionId
+    if (-not $sid) { return $false }
+    $wf = Join-Path $Root ("runner\state\{0}.window" -f $sid)
+    if (-not (Test-Path -LiteralPath $wf)) { return $false }
+    try { $win = Get-Content $wf -Raw | ConvertFrom-Json } catch { return $false }
+    return ([int]$win.consolePid -ne 0 -and [int]$win.consolePid -eq [int]$req.consolePid)
+}
+
+# The escalation threshold must not come from the request file - that would let
+# whoever writes one choose when Esc gets pressed. policy.json is the authority.
+function Get-HardK {
+    try {
+        $pol = Get-Content (Join-Path $Root 'policy.json') -Raw | ConvertFrom-Json
+        $v = [int]$pol.context.hardK
+        if ($v -gt 0) { return $v }
+    } catch {}
+    return 600
+}
+
 function Send-Keys($cpid, [string]$text, [switch]$ClearLineFirst) {
     $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$SendConsole,'-TargetPid',$cpid,'-Text',$text)
     if ($ClearLineFirst) { $a += '-ClearLineFirst' }
@@ -104,6 +131,10 @@ function Invoke-Cd($req) {
     }
     if (-not (Test-Path -LiteralPath $dest)) {
         Log "REFUSE cd $($req.sessionId): '$dest' does not exist"; return $false
+    }
+    if (-not (Test-Binding $req)) {
+        Log "REFUSE cd $($req.sessionId): consolePid $($req.consolePid) does not match the session's own window record"
+        return $false
     }
 
     $cpid = [int]$req.consolePid
@@ -169,7 +200,12 @@ function Get-Context($transcript) {
 
 function Invoke-Clear($req) {
     # invariant 2: address the session's OWN console by PID. Never search by
-    # title, never type into "whatever is in front".
+    # title, never type into "whatever is in front" - and never take the
+    # request's word for which console that is (guards OI-004).
+    if (-not (Test-Binding $req)) {
+        Log "REFUSE $($req.sessionId): consolePid $($req.consolePid) does not match the session's own window record"
+        return $false
+    }
     $cpid = [int]$req.consolePid
     if (-not $cpid) { Log "SKIP $($req.sessionId): no consolePid recorded"; return $false }
     if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) {
@@ -304,7 +340,7 @@ function Step {
             if ($f.LastWriteTime -le $lastFire[$key]) { continue }   # not fresh
             $live = -1
             if ($req.transcript -and (Test-Path $req.transcript)) { $live = Get-Context $req.transcript }
-            if ($live -lt ([int]$req.hardK * 1000 * 0.8)) { continue } # shrank or unknown
+            if ($live -lt ((Get-HardK) * 1000 * 0.8)) { continue } # shrank or unknown
             $sid = [string]$req.sessionId
             if ($escalated.ContainsKey($sid) -and ((Get-Date) - $escalated[$sid]).TotalMinutes -lt 10) { continue }
             $escalated[$sid] = Get-Date

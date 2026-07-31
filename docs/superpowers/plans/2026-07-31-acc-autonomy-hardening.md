@@ -651,12 +651,30 @@ In `hooks/budget.mjs` `onSessionStart`, insert this immediately before the final
   } catch {}
 ```
 
-- [ ] **Step 6: Verify the SessionStart path still emits**
+- [ ] **Step 6: Verify the SessionStart path still emits — SANDBOXED**
+
+**Never run this hook against live state.** `bindSession` adopts a goal by
+console PID, so a hand-run SessionStart from a console that owns a goal
+rebinds that goal to the fake session id and breaks the real session's loop
+(guards OI-006 — this happened during implementation). Always set `ACC_ROOT`:
 
 ```bash
-echo {"hook_event_name":"SessionStart","session_id":"hbtest","cwd":"C:/code/guards"} | node hooks/budget.mjs
+SB="$(mktemp -d)"; mkdir -p "$SB/watcher" "$SB/runner/state"
+echo '{"hook_event_name":"SessionStart","session_id":"t1","cwd":"C:/code/guards"}' | ACC_ROOT="$SB" node hooks/budget.mjs
 ```
-Expected: JSON with `additionalContext` containing the `[ACC] Context budget:` line. (No warning, because the live heartbeat is fresh after Task 4.)
+Expected: JSON with `additionalContext` containing the `[ACC] Context budget:` line, and no `WARNING ... DEAD` (no heartbeat file in the sandbox = do not cry wolf).
+
+To verify the warning path, backdate a sandbox heartbeat first:
+```bash
+echo alive > "$SB/watcher/clearbot.heartbeat"
+powershell -NoProfile -Command "(Get-Item '<windows path to $SB>\watcher\clearbot.heartbeat').LastWriteTime = (Get-Date).AddMinutes(-5)"
+echo '{"hook_event_name":"SessionStart","session_id":"t1","cwd":"C:/code/guards"}' | ACC_ROOT="$SB" node hooks/budget.mjs
+```
+Expected: the `[ACC] WARNING: the clearbot watcher looks DEAD` line.
+
+**If you hijacked a live goal anyway**, repair it: re-run SessionStart from
+the real console with the true session id, then `node hooks/goal.mjs kicked <goalId>`
+to clear the spurious kick.
 
 - [ ] **Step 7: Commit**
 

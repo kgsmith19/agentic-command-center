@@ -38,6 +38,21 @@ if (-not $Esc -and [string]::IsNullOrEmpty($Text)) {
     exit 1
 }
 
+# Self-defense (guards OI-004). The closed set of typeable strings is enforced
+# by clearbot's invariant 1, one layer up - but THIS is the process that
+# actually presses keys, so it refuses the two shapes that turn one injection
+# into many: control characters (a newline SUBMITS, so a multi-line string is
+# several prompts, which is OI-004's whole point) and absurd length. It does
+# not judge content; that is the caller's job and stays there.
+if ($Text -match '[\x00-\x1f\x7f]') {
+    Write-Output 'FAIL unsafe -Text: control characters (a newline would submit)'
+    exit 1
+}
+if ($Text.Length -gt 2100) {
+    Write-Output ("FAIL unsafe -Text: {0} chars exceeds 2100" -f $Text.Length)
+    exit 1
+}
+
 Add-Type -Namespace SC -Name Con -MemberDefinition @'
 [StructLayout(LayoutKind.Sequential)]
 public struct KEY_EVENT_RECORD {

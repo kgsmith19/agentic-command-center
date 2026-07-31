@@ -113,4 +113,29 @@ line under `## Resolved`.
   `protected` (ideally with `C:/code/ROUTING.md` added), or the AGENTS.md /
   clearbot wording is changed to match reality.
 
+## OI-006 Running budget.mjs SessionStart by hand hijacks the live goal binding
+- opened: 2026-07-31 (hit while verifying the heartbeat work — self-inflicted,
+  which is exactly why it is worth recording)
+- where: hooks/budget.mjs onSessionStart → hooks/goal.mjs bindSession
+- what: `bindSession` adopts an active goal by CONSOLE PID (that is the
+  mechanism that survives a /clear, and it must stay). So piping a synthetic
+  SessionStart payload into the live hook from a console that owns a goal
+  rebinds that goal to whatever `session_id` the payload carried. Observed:
+  a smoke test with `session_id:"hbtest"` moved the live goal's sessionId to
+  "hbtest" and armed a kick, which clearbot then typed into the real console.
+  The damage is silent: the real session's Stop hook can no longer find its
+  own goal (`goalForSession` misses), so cycle logging and the new turn-end
+  liveness stop working for that session.
+- why open: the obvious guard (require a UUID-shaped session id) risks
+  breaking legitimate post-clear adoption for a hazard only reachable by
+  hand-running the hook, and AGENTS.md is explicit that guards is a
+  convention enforcer, not a security boundary. Recovery is cheap and known:
+  re-run SessionStart with the true session id, then `goal.mjs kicked <id>`.
+- mitigation in place: every verification recipe in the plan (and AGENTS.md,
+  Task 11) now sets `ACC_ROOT` to a throwaway tree, so a hand-run hook cannot
+  reach live goal state.
+- done when: either a binding guard exists that cannot break legitimate
+  post-clear adoption, or hand-running hooks against live state is impossible
+  by construction.
+
 ## Resolved
