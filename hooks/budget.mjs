@@ -86,6 +86,27 @@ function ensureClearbot() {
   } catch {}
 }
 
+// SELF-HEALING (guards OI-007): the watcher is the only thing that can clear or
+// resume a session, and when it dies the goal loop dies silently with it. A
+// turn boundary is exactly where that matters, so check there: one stat, and
+// ensureClearbot() is idempotent (start-clearbot.cmd no-ops when a watcher is
+// already up) and still honours the deliberate kill switch. A MISSING heartbeat
+// counts as dead here - unlike the status line, which stays quiet rather than
+// crying wolf, this path only costs a no-op start.
+const HEARTBEAT_STALE_MS = 30_000;
+function reviveClearbotIfDead(policy) {
+  try {
+    if (policy.autoClear?.enabled === false) return;
+    let stale = true;
+    try {
+      stale = Date.now() - fs.statSync(path.join(ROOT, "watcher", "clearbot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
+    } catch {
+      stale = true;
+    }
+    if (stale) ensureClearbot();
+  } catch {}
+}
+
 // Ask the outside watcher to type /clear. Written at the Stop hook, i.e. a turn
 // boundary with an idle prompt - never mid-turn.
 function requestClear(p, policy, ctx) {
@@ -507,6 +528,7 @@ const WAITING_RE =
 
 function onStop(p, policy) {
   ensureDirs();
+  reviveClearbotIfDead(policy);
 
   // --- waiting guard (headless only: nothing re-invokes a -p session) ---
   // stop_hook_active means a Stop hook (this one or another) already blocked

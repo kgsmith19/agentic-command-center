@@ -190,6 +190,44 @@ test("sendconsole itself refuses multi-line text", () => {
   } finally { stub.kill(); }
 });
 
+// A runbox script that fails used to throw straight out of the cycle: under
+// $ErrorActionPreference='Stop', `& node ... 2>&1` turns the child's stderr
+// into a terminating error, so the FAILED line was never logged and the rest
+// of Step was skipped. The stub engine below is a failing script's worth of
+// behaviour without dragging the real engine into the sandbox.
+function stubEngine(root, { exitCode }) {
+  fs.mkdirSync(path.join(root, "hooks"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "hooks", "engine.mjs"),
+    `const a = process.argv.slice(2);
+if (a[0] === "list") {
+  console.log(JSON.stringify([{ label: "central", name: "boom.ps1", keep: false, summary: "a script that fails" }]));
+  process.exit(0);
+}
+if (a[0] === "run") {
+  process.stderr.write("boom: this script failed\\n");
+  process.exit(${exitCode});
+}
+process.exit(0);
+`
+  );
+  const pol = JSON.parse(fs.readFileSync(path.join(root, "policy.json"), "utf8"));
+  pol.autoApprove = { enabled: true };
+  fs.writeFileSync(path.join(root, "policy.json"), JSON.stringify(pol));
+}
+
+test("a failing auto-approve script is logged, and the cycle survives it", () => {
+  const root = sandbox();
+  stubEngine(root, { exitCode: 1 });
+  const out = runOnce(root);
+  assert.match(out, /AUTO-APPROVE running central:boom\.ps1/, "attempt is logged");
+  assert.match(out, /FAILED/, "and so is the failure");
+  assert.ok(
+    fs.existsSync(path.join(root, "watcher", "clearbot.heartbeat")),
+    "the cycle still completed rather than throwing out of Step"
+  );
+});
+
 test("every cycle writes a heartbeat", () => {
   const root = sandbox();
   runOnce(root);

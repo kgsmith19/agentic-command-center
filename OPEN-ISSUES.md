@@ -138,4 +138,43 @@ line under `## Resolved`.
   post-clear adoption, or hand-running hooks against live state is impossible
   by construction.
 
+## OI-007 External (Scheduled Task) watcher supervision needs elevation
+- opened: 2026-07-31
+- where: watcher/watchdog/acc-watchdog-register-elevated.ps1
+- what: the approved design called for a Scheduled Task restarting the
+  clear-watcher at logon and every 2 minutes. `Register-ScheduledTask` fails
+  unelevated on this machine with `PermissionDenied ... HRESULT 0x80070005`,
+  and the ACC's own approval channel (runbox auto-approve) runs unelevated, so
+  the task cannot be installed autonomously.
+- what shipped instead, and why it is not a downgrade: both failure modes are
+  covered without elevation. A CRASH is healed by
+  `budget.mjs reviveClearbotIfDead` at every turn boundary — faster than a
+  2-minute poll and precisely when the watcher is about to be needed (proven
+  live: watcher killed, waited past the 30s staleness window, one Stop hook
+  brought it back: 0 running → 1). A REBOOT is covered by the Startup-folder
+  launcher (`acc-watchdog-startup.ps1`, installed 2026-07-31). The residue is
+  a watcher dying while NO session runs and no logon happens — in which case
+  nothing needs it until a session starts, and SessionStart starts it.
+- why open: only Kyle can run the elevated script, and it is genuinely
+  optional. Recorded so the deviation from the approved spec is visible
+  rather than silently dropped.
+- done when: either the task is registered from an elevated shell, or the
+  spec is amended to make in-process revive + Startup launcher the design.
+
+## OI-008 Two related runbox scripts can auto-run in an order that cancels them
+- opened: 2026-07-31
+- where: watcher/clearbot.ps1 Invoke-AutoApprove + the runbox
+- what: auto-approve runs every pending script in directory order, so shipping
+  an install script and its uninstall script together makes the net effect
+  depend on that order. Observed: `acc-watchdog-unregister.ps1` ran first and
+  reported "not registered", and had the order been reversed it would have
+  silently undone the registration seconds after it happened.
+- why open: the mechanism is working as designed (Kyle enabled auto-approve
+  deliberately); this is about how scripts are AUTHORED. Convention fix for
+  now: never leave an undo script in the runbox — undo scripts live tracked
+  under `watcher/watchdog/` and are run deliberately.
+- done when: either the convention is documented in AGENTS.md's runbox rules
+  (a `# guards: manual` marker, or "no undo scripts in the runbox"), or
+  auto-approve refuses a script whose name pairs with another pending one.
+
 ## Resolved

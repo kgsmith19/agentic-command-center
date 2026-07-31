@@ -234,6 +234,67 @@ test("a human-prompted turn end is classified as human", async () => {
   assert.ok(gm.readGoal(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
 });
 
+// --- self-healing watcher --------------------------------------------------
+// A dead clearbot means no clear and no resume, and a goal session cannot
+// notice on its own. The Stop hook is the right place to check: it IS the turn
+// boundary where a clear or a kick is about to be needed. The sandbox gets a
+// FAKE start-clearbot.cmd, so these prove the decision without starting a real
+// watcher.
+function fakeStarter(sb) {
+  const dir = path.join(sb.root, "watcher");
+  fs.mkdirSync(dir, { recursive: true });
+  const marker = path.join(dir, "STARTED");
+  fs.writeFileSync(path.join(dir, "start-clearbot.cmd"), `@echo off\r\necho started > "${marker}"\r\n`);
+  return marker;
+}
+
+function heartbeat(sb, ageMs) {
+  const dir = path.join(sb.root, "watcher");
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, "clearbot.heartbeat");
+  fs.writeFileSync(f, "alive");
+  const when = new Date(Date.now() - ageMs);
+  fs.utimesSync(f, when, when);
+}
+
+// ensureClearbot spawns detached, so the marker lands a moment later.
+function appears(file, ms = 6000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (fs.existsSync(file)) return true;
+    execFileSync("powershell", ["-NoProfile", "-Command", "Start-Sleep -Milliseconds 200"], { windowsHide: true });
+  }
+  return false;
+}
+
+test("a stale heartbeat at a turn boundary revives the watcher", () => {
+  const sb = sandbox();
+  const sid = "s-revive";
+  const marker = fakeStarter(sb);
+  heartbeat(sb, 120000);
+  runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
+  assert.ok(appears(marker), "start-clearbot was invoked");
+});
+
+test("a fresh heartbeat leaves the watcher alone", () => {
+  const sb = sandbox();
+  const sid = "s-norevive";
+  const marker = fakeStarter(sb);
+  heartbeat(sb, 2000);
+  runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
+  assert.equal(appears(marker, 2500), false, "a live watcher is not restarted");
+});
+
+test("a deliberate stop is never overridden by the revive", () => {
+  const sb = sandbox();
+  const sid = "s-killswitch";
+  const marker = fakeStarter(sb);
+  fs.writeFileSync(path.join(sb.root, "watcher", "clearbot.stop"), "stopped on purpose");
+  // no heartbeat at all = looks dead, but Kyle turned it off deliberately
+  runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
+  assert.equal(appears(marker, 2500), false, "the kill switch wins");
+});
+
 test("no goal: an under-budget stop still does nothing at all", () => {
   const sb = sandbox();
   const sid = "s-live-nogoal";

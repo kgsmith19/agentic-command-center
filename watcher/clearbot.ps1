@@ -299,8 +299,26 @@ function Invoke-AutoApprove {
         $autoTried[$ref] = Get-Date
 
         Log "AUTO-APPROVE running $ref - $($it.summary)"
-        $out = & node (Join-Path $Root 'hooks\engine.mjs') 'run' $ref 2>&1 | Out-String
-        $ok = ($LASTEXITCODE -eq 0)
+        # A failing script must be a LOGGED failure, not an exception that
+        # aborts the cycle. Under $ErrorActionPreference='Stop', redirecting a
+        # native command's stderr (2>&1) turns each stderr line into a
+        # terminating ErrorRecord, so one noisy script threw straight past the
+        # FAILED logging below and out of Step - the failure vanished from
+        # approvals.log and the rest of the cycle was skipped. Observed
+        # 2026-07-31 with acc-watchdog-register.ps1.
+        $out = ''
+        $ok = $false
+        $prevEap = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $out = & node (Join-Path $Root 'hooks\engine.mjs') 'run' $ref 2>&1 | Out-String
+            $ok = ($LASTEXITCODE -eq 0)
+        } catch {
+            $out = $_.Exception.Message
+            $ok = $false
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
         Log "AUTO-APPROVE $ref -> $(if ($ok) { 'OK' } else { "FAILED (exit $LASTEXITCODE) - left in the runbox, not retried" })"
         try {
             Add-Content -Path (Join-Path $PSScriptRoot 'approvals.log') -Encoding ascii -Value (
