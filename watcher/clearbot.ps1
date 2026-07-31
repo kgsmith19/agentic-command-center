@@ -184,7 +184,14 @@ New-Item -ItemType Directory -Force -Path $ReqDir | Out-Null
 
 function Log($m) {
     $line = "{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m
-    Write-Output $line
+    # Write-Host, NOT Write-Output. Write-Output emits into the calling
+    # function's OUTPUT stream, so every Log call inside Invoke-Clear /
+    # Invoke-Cd was captured by `$did = Invoke-Clear $req` instead of reaching
+    # the console - and worse, it made $did an ARRAY (@("...", $false)), which
+    # PowerShell treats as TRUE. A failed clear therefore looked like a success
+    # and armed the 60s throttle. Write-Host goes to the host (and so to
+    # stdout under -File) without touching the pipeline.
+    Write-Host $line
     try { Add-Content -Path $LogFile -Value $line -Encoding ascii } catch {}
 }
 
