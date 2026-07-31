@@ -406,7 +406,16 @@ function onSessionStart(p, policy) {
   // prompt: both are addressed by console pid, and a previously recorded one is
   // still the right console. Fall back to what was written last time.
   if (!HEADLESS) {
-    win = captureWindow(p.session_id) || readJson(statePath(p.session_id, "window"), null);
+    // An ACC-hosted pty session has no HWND to find: the GUI is the terminal.
+    // The persistent process across /clear (what consolePid means to goal
+    // binding) is the claude process itself - this hook's parent.
+    if (process.env.ACC_PTY) {
+      win = { ok: true, hwnd: 0, consolePid: process.ppid, transport: "pty",
+              pipe: process.env.ACC_PTY, title: "acc-pty" };
+      try { fs.writeFileSync(statePath(p.session_id, "window"), JSON.stringify(win)); } catch {}
+    } else {
+      win = captureWindow(p.session_id) || readJson(statePath(p.session_id, "window"), null);
+    }
     if (policy.autoClear?.enabled !== false) ensureClearbot();
   }
   // Record the status file's mtime so the Stop waiting-guard can tell whether

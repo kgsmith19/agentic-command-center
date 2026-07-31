@@ -70,7 +70,10 @@ function runClaudeOnce(job) {
       cwd: job.workdir, shell: true, stdio: ["pipe", "pipe", "pipe"],
       // runTimeoutMin owns the clock; never let the 600s print-mode
       // background-wait ceiling kill a session mid-task (lost run 2).
-      env: { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1" },
+      // ACC_PTY must not leak: a runner child that inherited it would
+      // masquerade as the embedded session and route clearbot's pipe writes
+      // into the wrong terminal.
+      env: { ...process.env, ACC_PTY: "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1" },
     });
     child.stdin.write(job.bootstrap);
     child.stdin.end();

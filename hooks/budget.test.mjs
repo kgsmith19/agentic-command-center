@@ -301,3 +301,31 @@ test("no goal: an under-budget stop still does nothing at all", () => {
   const t = writeTranscriptWithUser(sb, sid, 10000, "hello");
   assert.equal(runStop(sb, { sid, transcript: t, active: false }).trim(), "");
 });
+
+// --- pty window record (spec 2026-07-31): an ACC-hosted session has no HWND to
+// find - the GUI is the terminal. It sets ACC_PTY=<pipe name>; the record must
+// carry transport:"pty" + that pipe, and consolePid must be the hook's PARENT
+// (the claude process, which survives /clear; here, this test process).
+test("SessionStart with ACC_PTY records a pty window bound to the parent pid", () => {
+  const sb = sandbox({ autoClear: { enabled: false } });
+  const sid = "sid-pty";
+  execFileSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
+    env: {
+      ...process.env,
+      ACC_ROOT: sb.root,
+      ACC_POLICY: sb.policyPath,
+      ACC_GOALS_DIR: "",
+      ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+      CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
+      CLAUDE_CODE_RUNNER: "",
+      ACC_PTY: "acc-term-cafe12",
+    },
+    encoding: "utf8",
+  });
+  const win = JSON.parse(fs.readFileSync(statePath(sb, sid, "window"), "utf8"));
+  assert.equal(win.transport, "pty");
+  assert.equal(win.pipe, "acc-term-cafe12");
+  assert.equal(win.consolePid, process.pid,
+    "consolePid must be the hook's PARENT (the claude process; here, the test runner)");
+});
