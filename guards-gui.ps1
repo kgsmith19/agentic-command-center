@@ -75,8 +75,12 @@ function ConvertFrom-JsonArray([string]$Json) { # PS 5.1: '[]' parses to $null, 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Agentic Command Center'
 $form.Size = New-Object System.Drawing.Size(700, 800)
-$form.FormBorderStyle = 'FixedSingle'
-$form.MaximizeBox = $false
+$form.MinimumSize = New-Object System.Drawing.Size(700, 800)
+$form.FormBorderStyle = 'Sizable'
+$form.MaximizeBox = $true
+# Maximized by default: the Terminal tab is a working surface now, and every
+# docked control (tabs, WebView2 terminal) absorbs the space for free.
+$form.WindowState = 'Maximized'
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 
 $tabControl = New-Object System.Windows.Forms.TabControl
@@ -117,6 +121,10 @@ $chkAdv.Size = New-Object System.Drawing.Size(170, 22)
 $chkAdv.Text = 'Show advanced'
 
 $header.Controls.AddRange(@($lblStatus, $lblStatusSub, $lblStatusAct, $btnToggle, $chkAdv))
+# Resizable window: labels stretch with the width, the toggle column rides the
+# right edge instead of stranding at x=500.
+foreach ($c in @($lblStatus, $lblStatusSub, $lblStatusAct)) { $c.Anchor = 'Top,Left,Right' }
+foreach ($c in @($btnToggle, $chkAdv)) { $c.Anchor = 'Top,Right' }
 
 $form.Controls.Add($tabControl)
 $form.Controls.Add($header)
