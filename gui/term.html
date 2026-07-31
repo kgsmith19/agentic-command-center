@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ACC Terminal</title>
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0c0c0c; overflow: hidden; }
+  #term { height: 100%; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="vendor/xterm/xterm.js"></script>
+<script src="vendor/xterm/addon-fit.js"></script>
+<script>
+  // Bridge protocol (spec 2026-07-31): host->page {type:'out',data:b64} |
+  // {type:'exit'}; page->host {type:'in',data:b64} | {type:'resize',cols,rows}
+  // | {type:'ready'}. Base64 both ways so multi-byte UTF-8 never splits.
+  var term = new Terminal({
+    fontFamily: 'Cascadia Mono, Consolas, monospace',
+    fontSize: 14,
+    cursorBlink: true,
+    scrollback: 8000,
+    theme: { background: '#0c0c0c' }
+  });
+  var fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+
+  var enc = new TextEncoder();
+  function b64FromString(s) {
+    var bytes = enc.encode(s), bin = '';
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  function bytesFromB64(b64) {
+    var bin = atob(b64), out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  term.onData(function (d) {
+    window.chrome.webview.postMessage({ type: 'in', data: b64FromString(d) });
+  });
+
+  function sendSize() {
+    fit.fit();
+    window.chrome.webview.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
+  }
+  new ResizeObserver(sendSize).observe(document.getElementById('term'));
+
+  window.chrome.webview.addEventListener('message', function (e) {
+    var m = e.data;
+    if (m.type === 'out') term.write(bytesFromB64(m.data));
+    else if (m.type === 'exit') term.write('\r\n\x1b[31m[claude exited - press Go to relaunch]\x1b[0m\r\n');
+  });
+
+  sendSize();
+  window.chrome.webview.postMessage({ type: 'ready' });
+</script>
+</body>
+</html>
