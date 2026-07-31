@@ -95,10 +95,14 @@ automation's. Buttons except Start are disabled when no pty is running.
   `Get-TermPipe` resolves a pipe, check the marker: if present, return
   `@{ ok = $false; deferred = $true; out = 'paused' }` **without** touching the
   pipe and **without** falling back to keystrokes (pause means "hands off this
-  session entirely", not "use the other transport"). Callers leave the request
-  file in place, so the pending kick/clear fires on resume — resuming continues
-  the goal loop with no extra machinery. Log one `PAUSED <sid>` line per
-  skipped attempt (poll cadence is low; no throttling needed).
+  session entirely", not "use the other transport"). Deferral comes from the
+  system's natural re-arming, not file retention (the request loop deletes
+  request files unconditionally, clearbot.ps1:472): the Stop hook re-writes
+  clear requests every over-budget turn end, and `Invoke-Kicks` re-derives
+  kicks from goal state each poll and only marks a goal `kicked` on a
+  successful send (clearbot.ps1:328) — so the first poll after resume
+  delivers. Log one `PAUSED <sid>` line per skipped attempt (poll cadence is
+  low; no throttling needed).
 - Non-pty (external) sessions have no pause file and are untouched.
 - GUI close / pty dispose deletes the session's `.pause` file so a stale marker
   can never pause a future session that happens to reuse nothing (file is
@@ -117,18 +121,27 @@ an existing window record shows the chain `… claude.exe:84560 -> cmd.exe:81556
 descendant of what `CreateProcessW` started, and something in that chain is
 allocating a real console (the stray window).
 
-This is a debugging task (systematic-debugging skill), not a pre-committed fix.
-Root-cause first: reproduce the launch, capture the full process tree
-(`Win32_Process` parent chain) and identify (a) which process allocated the new
-console and (b) where the ancestry from the recorded `consolePid` actually
-tops out. Candidate fixes, in preference order:
+**MISMATCH root cause (confirmed during planning):** `hooks/budget.mjs:413`
+records `consolePid: process.ppid` on the `ACC_PTY` path — but the hook's
+immediate parent is a transient shell (hooks run as
+`node -> bash.exe -> bash.exe -> claude.exe`, per existing window-record
+chains), which exits after the turn. Observed live: recorded consolePid 80480
+is GONE while `claude.exe` 70152 (the pty child, spawned directly — `claude`
+resolves to `C:\Users\kyleg\.local\bin\claude.exe`, no cmd shim) is alive and
+hosting this very session. Consequences: the watchdog's ancestry walk dies at
+the dead pid (the MISMATCH warning), and clearbot skips every request with
+"console pid gone". Fix: budget.mjs walks the ancestor chain (one
+`Win32_Process` snapshot) and records the first **non-shell** ancestor
+(skipping bash/sh/cmd/powershell/pwsh/conhost) — the claude process itself —
+falling back to `ppid` if the walk fails. The GUI watchdog is unchanged
+(descent then resolves, or is immediate equality when the exe is spawned
+directly).
 
-1. Resolve the launcher to the real entry (`node …\cli.js` or the true exe) and
-   spawn that directly on the ConPTY, so the chain never detaches.
-2. If the relaunch is inherent to `claude.exe`, bind by a stronger token
-   instead of ancestry (e.g. match the record's `pipe` — which is already the
-   spawn-unique key — and drop the descent walk to a diagnostic).
-3. Make the watchdog walk robust to exited intermediates only if 1–2 both fail.
+**Stray console window (still a debugging task):** reproduce the launch,
+snapshot windowed processes before/after, and trace the new window's parent
+chain. Leading suspects: `ensureClearbot`'s detached `cmd.exe` spawn chain
+(budget.mjs:80, fired at every SessionStart) and the native `claude.exe`
+launcher. Fix whatever the evidence names; acceptance below.
 
 Acceptance: pty launch opens **zero** extra console windows; watchdog logs
 `pty binding OK`; E2E scenario 5 passes; clearbot pipe writes land in the
