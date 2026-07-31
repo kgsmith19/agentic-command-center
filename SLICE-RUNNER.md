@@ -19,10 +19,10 @@ main thread.
 | 5 | OI-012 delete runbox/acc-v1 (approved) | DONE — deleted; grep: only historical refs remain; AGENTS.md regression block updated to the 53-test gate |
 | 6 | OI-003 route.mjs doctor + tests + ROUTING.md line | DONE — 3 tests (route 24/24), live run clean (3 repos, exit 0) |
 | 7 | OI-007 retire Careful profile (policy.json + GUI picker) — Kyle approved | DONE — policy + picker cleaned, SmokeTest OK, screenshot verified |
-| 8 | OI-006 disable security-guidance plugin hook — Kyle approved | SCRIPT IN RUNBOX (settings.json is guarded) — auto-approve runs it; fresh-session latency verify owed |
+| 8 | OI-006 disable security-guidance plugin hook — Kyle approved | DONE — auto-approve ran the runbox script (approvals.log); enabledPlugins flag now false, backup settings.json.bak-sec-guidance-20260731; fresh-session latency verify owed |
 | 9 | OI-008 close: shadow verified evidence | DEFERRED to next session start — this session's prompt lacks the full skill listing; compare /security-review listing text vs SKILL.md description there |
 | 10 | OI-005 annotate ledger, re-check 2026-08-06 | DONE — check-on date added |
-| 11 | Housekeeping: delete 10 *.bak*, .gitignore, ledger flips, commit series + gates | todo |
+| 11 | Housekeeping: delete 10 *.bak*, .gitignore, ledger flips, commit series + gates | DONE — 12 baks deleted, .gitignore extended, ledgers flipped (OI-003/007/009/012/013 resolved), acc-architecture memory written; committed as 75af2cd (code) + fb72a5d (docs). DEVIATION: one code commit instead of baseline+per-task series — fixes landed on never-committed files, so intermediate states would be fiction. Security review ran (user skill shadow CONFIRMED loading — OI-008 evidence): findings logged as guards OI-004/OI-005, none blocking. |
 
 ## RESUME (cold-start sufficient)
 
