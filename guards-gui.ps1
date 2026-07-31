@@ -5,6 +5,23 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wp, string lp);' -Namespace Win32 -Name Cue
 
+# Embedded terminal (spec 2026-07-31). $script:TermOk gates the whole feature:
+# false -> the Go button uses the legacy cmd /k launch, nothing else changes.
+$script:TermOk = $false
+$script:pty = $null
+try {
+    $wvDir = Join-Path $PSScriptRoot 'gui\vendor\webview2'
+    Add-Type -Path (Join-Path $wvDir 'Microsoft.Web.WebView2.Core.dll')
+    Add-Type -Path (Join-Path $wvDir 'Microsoft.Web.WebView2.WinForms.dll')
+    [Microsoft.Web.WebView2.Core.CoreWebView2Environment]::SetLoaderDllFolderPath($wvDir)
+    # Evergreen runtime present? This throws if not installed.
+    [void][Microsoft.Web.WebView2.Core.CoreWebView2Environment]::GetAvailableBrowserVersionString()
+    Add-Type -Path (Join-Path $PSScriptRoot 'gui\PtyHost.cs') -ReferencedAssemblies 'System','System.Core','System.Windows.Forms'
+    $script:TermOk = $true
+} catch {
+    Write-Host "Embedded terminal unavailable ($($_.Exception.Message)); Go will use a plain console window."
+}
+
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Engine = Join-Path $Root 'hooks\engine.mjs'
 $Runbox = Join-Path $Root 'runbox'
@@ -971,20 +988,64 @@ $btnStartWork.Add_Click({
         return
     }
     try {
-        # UseShellExecute=$false is REQUIRED to pass ACC_PROFILE to the child.
-        # cmd /k keeps the window open if 'claude' is not on PATH, so a failure
-        # is visible to the user instead of a window that blinks and vanishes.
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = 'cmd.exe'
-        $psi.Arguments = '/k claude'
-        $psi.WorkingDirectory = $dir
-        $psi.UseShellExecute = $false
-        $psi.CreateNoWindow = $false
-        $psi.EnvironmentVariables['ACC_PROFILE'] = $name
-        # SessionStart reads this, binds the goal to that console, and injects the
-        # text. It is the reason the work survives every later /clear.
-        $psi.EnvironmentVariables['ACC_GOAL'] = $goal.id
-        [void][System.Diagnostics.Process]::Start($psi)
+        if ($script:TermOk -and $script:wv -and $script:wv.CoreWebView2) {
+            # Embedded launch: ACC owns the terminal (ConPTY + xterm.js), so
+            # clearbot drives the session over the pty pipe - guaranteed Enter,
+            # no keystroke injection.
+            if ($script:pty) {
+                $a = [System.Windows.Forms.MessageBox]::Show(
+                    'A session is already running in the Terminal tab. Stop it and start the new one?',
+                    'Guards', [System.Windows.Forms.MessageBoxButtons]::YesNo)
+                if ($a -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+                $script:pty.Dispose(); $script:pty = $null
+            }
+            $pipeName = 'acc-term-' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
+            $claude = (Get-Command claude -ErrorAction Stop).Source
+            $cmdline = if ($claude -match '\.(cmd|bat)$') { 'cmd.exe /c "' + $claude + '"' } else { '"' + $claude + '"' }
+            # Acc.PtyHost spawns via CreateProcessW, which inherits OUR env:
+            # set, spawn, restore. SessionStart reads ACC_GOAL to bind the goal
+            # and ACC_PTY to record transport:"pty" + the pipe name.
+            $env:ACC_GOAL = $goal.id; $env:ACC_PROFILE = $name; $env:ACC_PTY = $pipeName
+            try {
+                $script:pty = New-Object Acc.PtyHost
+                $script:pty.Start($cmdline, $dir, [int16]$script:termCols, [int16]$script:termRows, $form,
+                    [Action[string]]{ param($b64)
+                        if ($script:wv.CoreWebView2) {
+                            $script:wv.CoreWebView2.PostWebMessageAsJson('{"type":"out","data":"' + $b64 + '"}')
+                        }
+                    },
+                    [Action]{
+                        if ($script:wv.CoreWebView2) { $script:wv.CoreWebView2.PostWebMessageAsJson('{"type":"exit"}') }
+                        $script:pty = $null
+                    })
+                $script:pty.ServePipe($pipeName)
+                # Watchdog: confirm SessionStart actually bound this spawn.
+                $script:bindPipe = $pipeName
+                $script:bindDeadline = [DateTime]::UtcNow.AddSeconds(120)
+                $script:bindTimer.Start()
+                # The terminal lives on the advanced tab strip; make it visible.
+                if (-not $chkAdv.Checked) { $chkAdv.Checked = $true }
+                $tabControl.SelectedTab = $tabTerm
+            } finally {
+                Remove-Item Env:ACC_GOAL, Env:ACC_PROFILE, Env:ACC_PTY -ErrorAction SilentlyContinue
+            }
+        } else {
+            # Legacy launch (no WebView2 runtime / embedded terminal unavailable).
+            # UseShellExecute=$false is REQUIRED to pass ACC_PROFILE to the child.
+            # cmd /k keeps the window open if 'claude' is not on PATH, so a failure
+            # is visible to the user instead of a window that blinks and vanishes.
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = 'cmd.exe'
+            $psi.Arguments = '/k claude'
+            $psi.WorkingDirectory = $dir
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $false
+            $psi.EnvironmentVariables['ACC_PROFILE'] = $name
+            # SessionStart reads this, binds the goal to that console, and injects the
+            # text. It is the reason the work survives every later /clear.
+            $psi.EnvironmentVariables['ACC_GOAL'] = $goal.id
+            [void][System.Diagnostics.Process]::Start($psi)
+        }
         $script:GoalId = $goal.id
         $lblStartOut.ForeColor = [System.Drawing.Color]::FromArgb(20, 90, 40)
         $lblStartOut.Text = ("Started in {0} ({1}). It will keep restarting itself until the job is done." -f (Split-Path -Leaf $dir), $name)
@@ -992,6 +1053,92 @@ $btnStartWork.Add_Click({
     } catch {
         $lblStartOut.ForeColor = [System.Drawing.Color]::Firebrick
         $lblStartOut.Text = 'Could not start: ' + $_.Exception.Message
+    }
+})
+
+# ---------- embedded terminal tab (spec 2026-07-31) ----------
+# ACC hosts claude on a ConPTY (Acc.PtyHost) and renders it in xterm.js inside
+# a WebView2 tab. clearbot then drives the session over the pty's named pipe
+# instead of keystroke injection.
+$tabTerm = New-Object System.Windows.Forms.TabPage
+$tabTerm.Text = 'Terminal'
+$script:wv = $null
+$script:termCols = 120; $script:termRows = 30
+if ($script:TermOk) {
+    $script:wv = New-Object Microsoft.Web.WebView2.WinForms.WebView2
+    $script:wv.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $tabTerm.Controls.Add($script:wv)
+    $script:wv.add_CoreWebView2InitializationCompleted({
+        if ($script:wv.CoreWebView2) {
+            $script:wv.CoreWebView2.Navigate('file:///' + ((Join-Path $PSScriptRoot 'gui\term.html') -replace '\\', '/'))
+            $script:wv.add_WebMessageReceived({
+                param($s, $e)
+                $m = $e.WebMessageAsJson | ConvertFrom-Json
+                switch ($m.type) {
+                    'in'     { if ($script:pty) { $script:pty.WriteB64($m.data) } }
+                    'resize' {
+                        # Remember the fitted size even before a session exists,
+                        # so Start() opens the pty at the real terminal size.
+                        $script:termCols = [int]$m.cols; $script:termRows = [int]$m.rows
+                        if ($script:pty) { $script:pty.Resize([int16]$m.cols, [int16]$m.rows) }
+                    }
+                }
+            })
+        }
+    })
+    # WebView2 init must not run PS scriptblocks on threadpool threads (no
+    # runspace there): poll the environment task from a UI timer instead.
+    $script:wvEnvTask = $null
+    $script:wvInitTimer = New-Object System.Windows.Forms.Timer
+    $script:wvInitTimer.Interval = 100
+    $script:wvInitTimer.Add_Tick({
+        if ($script:wvEnvTask -and $script:wvEnvTask.IsCompleted) {
+            $script:wvInitTimer.Stop()
+            if (-not $script:wvEnvTask.IsFaulted) {
+                [void]$script:wv.EnsureCoreWebView2Async($script:wvEnvTask.Result)
+            } else {
+                Write-Host "WebView2 init failed: $($script:wvEnvTask.Exception.InnerException.Message)"
+                $script:TermOk = $false
+            }
+        }
+    })
+    $form.Add_Shown({
+        $udf = Join-Path $env:LOCALAPPDATA 'acc-webview2'
+        $script:wvEnvTask = [Microsoft.Web.WebView2.Core.CoreWebView2Environment]::CreateAsync($null, $udf, $null)
+        $script:wvInitTimer.Start()
+    })
+}
+
+# Binding watchdog (completion gate): budget.mjs must write a transport:"pty"
+# window record for THIS spawn within 120s. consolePid is the claude node
+# process - a DESCENDANT of the cmd-shim ChildPid, never assumed equal.
+$script:bindTimer = New-Object System.Windows.Forms.Timer
+$script:bindTimer.Interval = 3000
+$script:bindTimer.Add_Tick({
+    $hit = $null
+    foreach ($f in (Get-ChildItem -Path (Join-Path $PSScriptRoot 'runner\state') -Filter '*.window' -ErrorAction SilentlyContinue)) {
+        try { $w = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+        if ($w.transport -eq 'pty' -and $w.pipe -eq $script:bindPipe) { $hit = $w; break }
+    }
+    if ($hit) {
+        $script:bindTimer.Stop()
+        $p = [int]$hit.consolePid
+        $anchor = if ($script:pty) { [int]$script:pty.ChildPid } else { -1 }
+        $bound = $false
+        for ($i = 0; $i -lt 8 -and $p -gt 0; $i++) {
+            if ($p -eq $anchor) { $bound = $true; break }
+            $row = Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue
+            if (-not $row) { break }
+            $p = [int]$row.ParentProcessId
+        }
+        if ($bound) {
+            Write-Host ("pty binding OK: consolePid {0} descends from child {1}" -f $hit.consolePid, $anchor)
+        } else {
+            Write-Host ("WARN pty binding MISMATCH: record consolePid {0} does not descend from pty child {1} - clearbot writes may target the wrong session" -f $hit.consolePid, $anchor)
+        }
+    } elseif ([DateTime]::UtcNow -gt $script:bindDeadline) {
+        $script:bindTimer.Stop()
+        Write-Host ("WARN pty binding TIMEOUT: no transport:pty window record for pipe {0} within 120s - SessionStart hook likely never fired" -f $script:bindPipe)
     }
 })
 
@@ -1035,7 +1182,7 @@ $pnlWork.BringToFront()
 
 # Tab order = how often you need them. Start work is no longer among them - it
 # is the screen behind this control.
-$ordered = @($tabP, $tabG, $tabV, $tabR)
+$ordered = @($tabP, $tabG, $tabV, $tabR, $tabTerm)
 $tabControl.TabPages.Clear()
 foreach ($t in $ordered) { $tabControl.TabPages.Add($t) }
 $tabControl.Visible = $false
@@ -1053,6 +1200,19 @@ $goalTimer.Interval = 5000
 $goalTimer.Add_Tick({ if ($pnlWork.Visible) { Refresh-Goals } })
 $form.Add_Shown({ $goalTimer.Start() })
 $form.Add_FormClosed({ $goalTimer.Stop(); $goalTimer.Dispose() })
+
+# Closing the GUI kills any embedded session (the pty child lives in this
+# process). Confirm first; Dispose -> Kill terminates the child tree.
+$form.Add_FormClosing({
+    param($s, $e)
+    if ($script:pty) {
+        $a = [System.Windows.Forms.MessageBox]::Show(
+            'A Claude session is running in the Terminal tab and will be killed. Close anyway?',
+            'Guards', [System.Windows.Forms.MessageBoxButtons]::YesNo)
+        if ($a -ne [System.Windows.Forms.DialogResult]::Yes) { $e.Cancel = $true; return }
+        $script:pty.Dispose(); $script:pty = $null
+    }
+})
 
 Refresh-Process
 Refresh-ProfileNote
