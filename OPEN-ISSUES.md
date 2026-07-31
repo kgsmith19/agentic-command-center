@@ -177,6 +177,61 @@ line under `## Resolved`.
   (a `# guards: manual` marker, or "no undo scripts in the runbox"), or
   auto-approve refuses a script whose name pairs with another pending one.
 
+## OI-009 GUI process is a single point of failure for hosted sessions
+- opened: 2026-07-31
+- where: guards-gui.ps1 / gui/PtyHost.cs
+- what: an ACC-hosted claude session lives on a ConPTY inside the GUI process,
+  so a GUI crash or close kills every hosted session with it — no heartbeat,
+  no reattach, no restart story. External console sessions are unaffected.
+- why open: surfaced while shipping the embedded terminal; supervision is a
+  separate design (relates OI-007's elevation question).
+- done when: a GUI crash with a live hosted session either reattaches the
+  session on GUI restart or is detected and surfaced within a minute, proven
+  by killing the GUI mid-session in a test.
+
+## OI-010 Pipe TEXT protocol is single-line; multi-line replay still falls back
+- opened: 2026-07-31
+- where: gui/PtyHost.cs ServePipe + watcher/clearbot.ps1 Send-Pipe (OI-004
+  successor)
+- what: the TEXT op carries one line and refuses control chars (< 0x20), so a
+  multi-line replay payload cannot travel the pty path and drops to keystroke
+  injection, which refuses it too (sendconsole multi-line refusal) — multi-line
+  replays silently do not happen on any transport.
+- why open: no current caller sends multi-line replays (clearbot types only
+  closed-set constants); framing is protocol design work, not a patch.
+- done when: a framed multi-line op exists with the same content policy, with a
+  clearbot test proving a two-line replay lands via the pipe.
+
+## OI-011 Re-verify guards self-protection coverage of guards/ paths
+- opened: 2026-07-31
+- where: hooks/engine.mjs guard config (relates OI-005: self-protection off,
+  docs claim otherwise)
+- what: this branch added gui/PtyHost.cs, gui/term.html, gui/vendor/,
+  gui/ptyhost.e2e.ps1 and watcher/stubpipe.ps1 — whether the self-protection
+  path list still covers what the docs claim it covers has not been re-checked
+  since.
+- why open: verification task surfaced by the embedded-terminal completion
+  gate; OI-005 already tracks the underlying off-state.
+- done when: the protected-path list is re-verified against the post-branch
+  tree and either covers gui/ + watcher/ or the gap is ledgered precisely.
+
+## OI-012 Stray console window at embedded launch not reproduced
+- opened: 2026-07-31
+- where: guards-gui.ps1 pty launch / hooks/budget.mjs ensureClearbot
+- what: Kyle observed an extra command prompt opening as claude loaded into
+  the Terminal tab (same launch that produced the binding MISMATCH). Both
+  candidate spawn chains were instrumented and are clean: a sandboxed pty
+  launch of real claude (gui/ptyhost.e2e.ps1) produced zero new windowed
+  processes, and the full ensureClearbot chain (node detached spawn -> cmd /c
+  start-clearbot.cmd -> Start-Process -WindowStyle Hidden) executed fully
+  with zero windows. The MISMATCH root cause (dead transient-shell consolePid,
+  fixed in de669dc) came from the same launch, so the stray window may have
+  been a one-off of that broken state.
+- why open: not reproducible after the fix; no evidence left to act on.
+- done when: the Gate 4 manual launch (Kyle watching) shows zero extra
+  console windows; if one appears, its parent chain names the spawner and
+  this entry gets the real fix.
+
 ## Resolved
 
 - 2026-07-31 pty-transport liveness must never be `\\.\pipe\` enumeration:
