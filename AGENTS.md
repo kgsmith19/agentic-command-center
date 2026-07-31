@@ -96,12 +96,23 @@ fire, so edits apply with no restart. It also writes/removes
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs
-    -> 53 pass  (run from C:\code\guards; never `node --test hooks/` — the
-       runner grades the directory as one bogus failing test)
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs
+    -> 79 pass  FAST TIER, hermetic. Run from C:\code\guards; never
+       `node --test hooks/` (the runner grades the directory as one bogus
+       failing test).
+node e2e/loop.e2e.mjs [--only N]
+    -> PROOF TIER. Spawns a REAL claude and spends tokens, so run it
+       deliberately. 1 happy loop, 2 under-budget re-prompt, 3 Esc
+       escalation, 4 /cd.
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
 powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
 ```
+
+**Never run a hook by hand against live state.** `bindSession` adopts a goal by
+console PID, so piping a fake SessionStart into `budget.mjs` from a console
+that owns a goal rebinds that goal to the fake session id and quietly breaks
+the real session's loop (guards OI-006 — it happened). Always sandbox:
+`ACC_ROOT=<throwaway> ACC_POLICY=<file> node hooks/budget.mjs`.
 
 The suites that touch runner state (`budget`, `route`) sandbox themselves via
 `ACC_ROOT` + `ACC_POLICY`, because a test that reset the live `runner\state`
@@ -136,7 +147,23 @@ holds all kicks. `goal.mjs pending` decides every condition that makes a kick
 unsafe (active? console alive? binding settled? cooldown?) so there is one place
 to audit, and `clearbot.ps1` stays a dumb executor.
 
-Tests: `node --test hooks/goal.test.mjs` (14).
+Tests: `node --test hooks/goal.test.mjs` (20).
+
+Two things keep the loop from stalling, added 2026-07-31 after it stalled
+twice in one day. **Liveness:** a goal session that ends its turn UNDER the
+ceiling gets no clear, so the Stop hook re-arms the kick instead
+(`goal.mjs recordTurnEnd`), and `pendingKicks` decides when firing it is safe —
+after `goals.kickSettleSeconds` (90), and not within `goals.humanHoldMinutes`
+(10) of a prompt Kyle typed, so it stays quiet during a conversation and
+self-heals when he walks away. A turn is "his" unless the last user message is
+exactly one of clearbot's constants. Before this, a turn simply finishing ended
+the loop — observed dead for 18 minutes.
+**Supervision:** clearbot writes `watcher/clearbot.heartbeat` every cycle;
+the statusline shows `bot DEAD` and SessionStart warns when it goes stale;
+`budget.mjs reviveClearbotIfDead` restarts a stale watcher at every turn
+boundary (honouring the kill switch), and a Startup-folder launcher covers
+logon. The external Scheduled Task version is optional and needs an elevated
+shell — `watcher/watchdog/` holds it and its undo scripts.
 
 `/goal <condition>` (user skill `~\.claude\skills\goal\`) is ACC-native: it
 logs `CONDITION: <text>` into the active goal's log via `goal.mjs log`, so the
