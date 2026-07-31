@@ -179,3 +179,64 @@ test("profile context (when present) still overrides for that session", () => {
   const out = runStop(sb, { sid, transcript: t, active: false, profile: "Big" });
   assert.equal(out.trim(), "", "profile hardK 80 applied, 60k passes");
 });
+
+// --- liveness: an under-budget turn end must re-arm the kick ---------------
+// The 2026-07-31 stall, pinned. A goal session that simply finishes its turn
+// well under the ceiling used to get nothing: no clear, no resume, dead air
+// until a human typed. The Stop hook must report that turn end to the goal
+// store - silently, without changing its own output.
+
+// The classifier reads the LAST USER message, so these transcripts need one.
+function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
+  const f = path.join(sb.root, `${sid}.jsonl`);
+  const user = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-31T12:00:00.000Z",
+    message: { role: "user", content: [{ type: "text", text: userText }] },
+  });
+  fs.writeFileSync(f, user + "\n" + turn(ctxTokens, "did the work") + "\n");
+  return f;
+}
+
+// Seed a goal in the sandbox and bind this session to it, as SessionStart does.
+async function seedGoal(sb, sid) {
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_GOALS_DIR = "";
+  const gm = await import(`./goal.mjs?t=live-${Math.floor(Math.random() * 1e9)}`);
+  const g = gm.createGoal({ text: "keep going", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  gm.markKicked(g.id); // a kick already fired; needsKick is false
+  return { gm, g };
+}
+
+test("under budget with an active goal: the turn end re-arms the kick", async () => {
+  const sb = sandbox();
+  const sid = "s-live-machine";
+  const { gm, g } = await seedGoal(sb, sid);
+  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC goal.");
+
+  const out = runStop(sb, { sid, transcript: t, active: false });
+  assert.equal(out.trim(), "", "still silent - liveness must not add output");
+
+  const after = gm.readGoal(g.id);
+  assert.equal(after.needsKick, true, "kick re-armed");
+  assert.ok(after.turnEndedAt, "turn end stamped");
+  assert.ok(!after.humanPromptAt, "the kick constant is a MACHINE turn");
+});
+
+test("a human-prompted turn end is classified as human", async () => {
+  const sb = sandbox();
+  const sid = "s-live-human";
+  const { gm, g } = await seedGoal(sb, sid);
+  const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
+
+  runStop(sb, { sid, transcript: t, active: false });
+  assert.ok(gm.readGoal(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
+});
+
+test("no goal: an under-budget stop still does nothing at all", () => {
+  const sb = sandbox();
+  const sid = "s-live-nogoal";
+  const t = writeTranscriptWithUser(sb, sid, 10000, "hello");
+  assert.equal(runStop(sb, { sid, transcript: t, active: false }).trim(), "");
+});

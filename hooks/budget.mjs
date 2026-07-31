@@ -14,7 +14,7 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, goalForSession } from "./goal.mjs";
+import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd } from "./goal.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
@@ -260,6 +260,35 @@ function lastAssistantText(transcript) {
   return out;
 }
 
+// The last USER message of a transcript. Used only to tell a machine
+// continuation from something Kyle typed - see KICK_CONSTANTS.
+function lastUserText(transcript) {
+  let last = "";
+  try {
+    for (const l of fs.readFileSync(transcript, "utf8").split("\n")) {
+      if (!l || l.charCodeAt(0) !== 123) continue;
+      let o;
+      try {
+        o = JSON.parse(l);
+      } catch {
+        continue;
+      }
+      if (o.type !== "user" || o.isSidechain || !o.message) continue;
+      const c = o.message.content;
+      last = typeof c === "string"
+        ? c
+        : Array.isArray(c)
+          ? c.filter((b) => b && b.type === "text").map((b) => b.text).join("")
+          : "";
+    }
+  } catch {}
+  return String(last || "").trim();
+}
+
+// Exactly the constants clearbot types (watcher/clearbot.ps1 $KICK and
+// $QUEUEKICK). Anything else came from a human, so the kick backs off.
+const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt."];
+
 // ------------------------------------------------------------- handlers
 
 // Bind this session to the goal that owns its console (or the one the Command
@@ -500,7 +529,18 @@ function onStop(p, policy) {
   if (!p.transcript_path) allow();
   const ctx = contextOf(p.transcript_path);
   const { hardK } = policy.context;
-  if (ctx < hardK * 1000) allow();
+  if (ctx < hardK * 1000) {
+    // LIVENESS (guards OI-002): a goal session that ends its turn UNDER the
+    // ceiling gets no clear, and therefore no resume - the loop used to die
+    // right here, silently. Re-arm the kick and let goal.mjs decide when
+    // firing it is safe. Fails open: liveness must never cost a turn its
+    // clean exit.
+    try {
+      const g = goalForSession(p.session_id);
+      if (g) recordTurnEnd(g.id, { human: !KICK_CONSTANTS.includes(lastUserText(p.transcript_path)) });
+    } catch {}
+    allow();
+  }
 
   const latch = statePath(p.session_id, "budget");
   if (!fs.existsSync(latch)) {
