@@ -23,19 +23,26 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-001 start-clearbot.cmd "already running" probe matches itself
-- opened: 2026-07-31 (found cycle 2 of goal g-20260731-134525-09wb)
-- where: watcher/start-clearbot.cmd
-- what: the already-running probe matches ANY powershell whose command line
-  mentions clearbot.ps1 — including its own status probe — so it reported
-  "already running (1)" while 0 instances were running and refused to start
-  one. Same self-match class the clearbot-status check in budget.mjs (~line
-  677) already guards against.
-- why open: found mid-goal while landing OI-011a/b; logging was the assigned
-  slice, the fix was not.
-- done when: the probe requires the `-File …clearbot.ps1` token (or excludes
-  its own pid tree) exactly like the status probe, and starting when none are
-  running actually starts one.
+## OI-001 stop-clearbot.cmd's kill query matches its own probe process
+- opened: 2026-07-31 (re-scoped same day — see correction below)
+- where: watcher/stop-clearbot.cmd
+- what: the kill query is `CommandLine -like '*clearbot.ps1*'` with NO self
+  exclusion, and the probing powershell's own command line contains that
+  pattern (it is inside the Where-Object filter). So the script enumerates
+  itself and calls `Stop-Process -Force` on its own pid; if its own entry
+  comes first it dies before killing the real watcher, and Stop silently
+  leaves clearbot running. The kill switch (`clearbot.stop`) is written
+  first, so the failure is quiet rather than dangerous — but "Stop" not
+  stopping is exactly the kind of thing the operator will not notice.
+- correction: this entry originally named `start-clearbot.cmd`. Verified
+  2026-07-31 by running it against one live instance: it requires the
+  `-File …clearbot.ps1` token AND excludes `$PID`, and correctly reported
+  "clearbot already running (1)". That half is FIXED; the stop script is
+  where the self-match class still lives.
+- why open: found mid-goal; logging was the assigned slice, the fix was not.
+- done when: the stop query excludes its own pid (and requires the `-File`
+  token) like the start probe and budget.mjs `clearbot-status` do, with a
+  test that spawns a decoy process and proves only the decoy is killed.
 
 ## OI-002 Goal loop stalls when a goal session ends its turn UNDER hardK
 - opened: 2026-07-31

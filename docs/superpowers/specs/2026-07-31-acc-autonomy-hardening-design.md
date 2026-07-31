@@ -15,10 +15,11 @@ every gap:
   then-150k ceiling) and sat dead 18 minutes; cycle 3's close-out ended under
   budget and sat until Kyle typed. Two stalls in one day; this is the common
   case, since models end turns constantly.
-- **Unsupervised typer.** clearbot.ps1 is one PowerShell loop. Nothing
-  restarts it after a crash or reboot, and start-clearbot.cmd's
-  "already running" probe matches itself (guards OI-001), so the recovery
-  path is the broken part.
+- **Unsupervised typer.** clearbot.ps1 is one PowerShell loop, and nothing
+  restarts it after a crash or reboot. (Planning-time correction: the
+  start-clearbot probe was verified fixed on 2026-07-31 — it requires the
+  `-File` token and excludes its own PID. The surviving self-match bug is in
+  stop-clearbot.cmd, re-scoped as guards OI-001.)
 - **Escalation unproven.** The Esc path for a pinned over-budget turn
   (OI-011) has never fired outside a keystroke smoke test. The plain clear
   loop is 1-for-1 lifetime.
@@ -68,9 +69,10 @@ unfinished goal, never a closed one. Clearbot's kick path is unchanged.
 
 ## Section 2 — Supervision
 
-- **Probe fix (OI-001):** start-clearbot.cmd's already-running check requires
-  the `-File …clearbot.ps1` command-line token and excludes its own process
-  tree (same discrimination as budget.mjs's clearbot-status probe).
+- **Probe fix (OI-001, re-scoped):** stop-clearbot.cmd's kill query excludes
+  its own pid and requires the `-File …clearbot.ps1` token, so Stop kills the
+  watcher instead of its own probe. (start-clearbot.cmd already does this —
+  verified 2026-07-31.)
 - **Heartbeat:** clearbot touches `watcher/clearbot.heartbeat` every Step.
   Statusline shows a red `bot DEAD` segment when stale (>30s). budget.mjs
   SessionStart injects a one-line warning when stale, so a session knows the
