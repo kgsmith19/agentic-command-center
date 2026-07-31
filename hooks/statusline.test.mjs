@@ -62,7 +62,7 @@ function run(sb, transcript, profile) {
       workspace: { current_dir: sb.root },
       model: { display_name: "Test" },
     }),
-    env: { ...process.env, ACC_POLICY: sb.policyPath, ACC_PROFILE: profile || "" },
+    env: { ...process.env, ACC_POLICY: sb.policyPath, ACC_PROFILE: profile || "", ACC_ROOT: sb.root },
     encoding: "utf8",
   });
 }
@@ -89,4 +89,34 @@ test("profile without a context block: base dials show through (live policy shap
   });
   const t = writeTranscript(sb, 60000);
   assert.match(run(sb, t, "Normal"), /ctx 60k\/50k/);
+});
+
+// --- watcher liveness ------------------------------------------------------
+// A dead clearbot means no auto-clear and no goal resume. That was invisible
+// until it was noticed by hand; the status line is where it is cheapest to see.
+function heartbeat(sb, ageMs) {
+  const dir = path.join(sb.root, "watcher");
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, "clearbot.heartbeat");
+  fs.writeFileSync(f, "alive");
+  const when = new Date(Date.now() - ageMs);
+  fs.utimesSync(f, when, when);
+  return f;
+}
+
+test("a fresh heartbeat shows no warning", () => {
+  const sb = sandbox(BASE_POLICY);
+  heartbeat(sb, 2000);
+  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /bot DEAD/);
+});
+
+test("a stale heartbeat shows bot DEAD", () => {
+  const sb = sandbox(BASE_POLICY);
+  heartbeat(sb, 120000);
+  assert.match(run(sb, writeTranscript(sb, 10000)), /bot DEAD/);
+});
+
+test("no heartbeat file at all does not cry wolf", () => {
+  const sb = sandbox(BASE_POLICY);
+  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /bot DEAD/);
 });

@@ -419,6 +419,17 @@ function onSessionStart(p, policy) {
     if (queued) lines.push(queued);
   } catch {}
 
+  // If the watcher is down, this session has no auto-clear and no auto-resume.
+  // Say it once, at the top, instead of letting the goal loop fail silently.
+  try {
+    const hb = path.join(ROOT, "watcher", "clearbot.heartbeat");
+    if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
+      lines.push(
+        `[ACC] WARNING: the clearbot watcher looks DEAD (stale heartbeat). Auto-clear and auto-resume will NOT fire, so this session will not be continued for you. Start it: guards\\watcher\\start-clearbot.cmd`
+      );
+    }
+  } catch {}
+
   lines.push(
     ...[
     `[ACC] Context budget: soft ${softK}k, hard ${hardK}k. Context is checked after EVERY tool call; past ${hardK}k you will be told to checkpoint and end the turn, and the Stop hook enforces it.`,
