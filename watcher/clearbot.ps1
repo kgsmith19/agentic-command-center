@@ -106,7 +106,66 @@ function Get-HardK {
     return 600
 }
 
+# --- pty transport (spec 2026-07-31) --------------------------------------
+# A session ACC hosts on a pseudoconsole records transport:"pty" plus its pipe
+# name in runner/state/<sid>.window (hooks/budget.mjs). For those, writing the
+# pipe protocol IS pressing the keys - a lone \r on a pty is a real Enter,
+# where an injected text+CR batch reads as a paste and the CR is absorbed
+# (the bug that left every kick sitting unsubmitted). Everything else keeps
+# keystroke injection, and a dead pipe degrades to it too, so a GUI failure
+# never stalls the loop.
+function Get-TermPipe([int]$ConsolePid) {
+    # No enumeration-based liveness check here: \\.\pipe\ enumeration is not a
+    # reliable liveness signal for a .NET NamedPipeServerStream on a synchronous
+    # handle - BeginWaitForConnection's compat shim makes a correctly-listening,
+    # never-touched pipe intermittently vanish from the enumeration (observed
+    # 2026-07-31: a known-live pipe toggled found/not-found roughly every 300ms
+    # with zero connections made). Gating transport choice on that flickered the
+    # feature straight back into keystroke injection - the bug pty transport
+    # exists to avoid. The real liveness check is Send-Pipe's own Connect(2000),
+    # which already falls back to keystroke injection on failure.
+    foreach ($f in (Get-ChildItem -Path (Join-Path $Root 'runner\state') -Filter '*.window' -ErrorAction SilentlyContinue)) {
+        try { $w = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+        if ($w.transport -eq 'pty' -and [int]$w.consolePid -eq $ConsolePid -and $w.pipe) {
+            return [string]$w.pipe
+        }
+    }
+    return $null
+}
+
+# Ops entries: 'ESC', 'SUBMIT', or 'TEXT <payload>'. One op per connection,
+# matching the server. The server enforces the same refusals as
+# sendconsole.ps1 (control chars, length); content policy stays here.
+function Send-Pipe([string]$PipeName, [string[]]$Ops) {
+    foreach ($op in $Ops) {
+        try {
+            $c = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
+            $c.Connect(2000)
+            $w = New-Object System.IO.StreamWriter($c); $w.AutoFlush = $true
+            $r = New-Object System.IO.StreamReader($c)
+            $w.WriteLine($op)
+            $resp = $r.ReadLine()
+            $c.Dispose()
+            if ($resp -ne 'OK') { return @{ ok = $false; out = "$op -> $resp" } }
+        } catch { return @{ ok = $false; out = "$op -> $($_.Exception.Message)" } }
+        # The paste heuristic is exactly what broke injection: give the TUI a
+        # beat between the text and the Enter so the CR is its own keypress.
+        if ($op -like 'TEXT *') { Start-Sleep -Milliseconds 80 }
+    }
+    return @{ ok = $true; out = 'OK' }
+}
+
 function Send-Keys($cpid, [string]$text, [switch]$ClearLineFirst) {
+    $pipe = Get-TermPipe $cpid
+    if ($pipe) {
+        $ops = @()
+        if ($ClearLineFirst) { $ops += 'ESC' }
+        $ops += ('TEXT ' + $text)
+        $ops += 'SUBMIT'
+        $r = Send-Pipe $pipe $ops
+        if ($r.ok) { return @{ ok = $true; out = "pty OK pipe=$pipe" } }
+        Log "WARN pty pipe '$pipe' failed ($($r.out)) - falling back to keystroke injection"
+    }
     $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$SendConsole,'-TargetPid',$cpid,'-Text',$text)
     if ($ClearLineFirst) { $a += '-ClearLineFirst' }
     $out = & powershell @a 2>&1 | Out-String
@@ -115,6 +174,12 @@ function Send-Keys($cpid, [string]$text, [switch]$ClearLineFirst) {
 
 # invariant 1e: the only non-text injection. One Esc, nothing else.
 function Send-Esc($cpid) {
+    $pipe = Get-TermPipe $cpid
+    if ($pipe) {
+        $r = Send-Pipe $pipe @('ESC')
+        if ($r.ok) { return @{ ok = $true; out = "pty OK pipe=$pipe" } }
+        Log "WARN pty pipe '$pipe' failed ($($r.out)) - falling back to keystroke injection"
+    }
     $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $SendConsole `
                         -TargetPid $cpid -Esc 2>&1 | Out-String
     return @{ ok = ($out -match 'OK wrote='); out = $out.Trim() }
@@ -221,13 +286,14 @@ function Invoke-Clear($req) {
 
     # invariant 3: injecting into that console's input buffer needs no focus, so
     # there is no "wrong window" to guard against and nothing is stolen from Kyle.
-    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $SendConsole `
-                        -TargetPid $cpid -Text $KEYS -ClearLineFirst 2>&1 | Out-String
-    if ($out -notmatch 'OK wrote=') {
-        Log "ABORT $($req.sessionId): injection failed -> $($out.Trim())"
+    # Send-Keys picks the transport: pty pipe for ACC-hosted sessions, keystroke
+    # injection for everything else.
+    $r = Send-Keys $cpid $KEYS -ClearLineFirst
+    if (-not $r.ok) {
+        Log "ABORT $($req.sessionId): injection failed -> $($r.out)"
         return $false
     }
-    Log "CLEARED $($req.sessionId) ctx=$($req.ctx) consolePid=$cpid ($($out.Trim()))"
+    Log "CLEARED $($req.sessionId) ctx=$($req.ctx) consolePid=$cpid ($($r.out))"
     return $true
 }
 

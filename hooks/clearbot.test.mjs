@@ -235,3 +235,85 @@ test("every cycle writes a heartbeat", () => {
   assert.ok(fs.existsSync(hb), "heartbeat written");
   assert.ok(Date.now() - fs.statSync(hb).mtimeMs < 30_000, "and it is fresh");
 });
+
+// --- pty transport (spec 2026-07-31) ---------------------------------------
+// A session ACC hosts on a pseudoconsole records transport:"pty" + pipe in its
+// window record; clearbot must then write the pipe protocol and type NOTHING.
+// A pty record whose pipe is dead must fall back to keystroke injection.
+
+function startPipeStub(name) {
+  // Records each protocol line to a file; replies OK. One line per connection,
+  // like the real server (gui/PtyHost.cs). A .NET (PowerShell) server on
+  // purpose: the real server is .NET, and node's libuv pipes do not interop
+  // with the .NET NamedPipeClientStream clearbot uses (connection accepted,
+  // data never delivered - observed 2026-07-31).
+  const id = `${process.pid}-${Math.floor(Math.random() * 1e9)}`;
+  const log = path.join(os.tmpdir(), `acc-pipestub-${id}.log`);
+  const pidFile = path.join(os.tmpdir(), `acc-pipestub-${id}.pid`);
+  const readyFile = path.join(os.tmpdir(), `acc-pipestub-${id}.ready`);
+  // Launched via `cmd /c start` exactly like startStub above - the one spawn
+  // shape proven to come up while the test runner's event loop is blocked in
+  // the sleep() helper (a directly-spawned powershell never served its pipe).
+  spawn(
+    "cmd.exe",
+    ["/c", "start", "/min", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+     "-File", path.join(REPO, "watcher", "stubpipe.ps1"),
+     "-PipeName", name, "-LogFile", log, "-PidFile", pidFile, "-ReadyFile", readyFile, "-TimeoutSeconds", "120"],
+    { detached: true, stdio: "ignore" }
+  ).unref();
+  // Readiness comes from the server writing its own marker file, not from
+  // enumerating \\.\pipe\ - that enumeration raced under load (present on one
+  // poll, absent on the next), which made a live, working pipe stub look like
+  // it "never came up" (observed 2026-07-31).
+  const pipeUp = () => fs.existsSync(readyFile);
+  const end = Date.now() + 20000;
+  while (Date.now() < end && !pipeUp()) sleep(200);
+  if (!pipeUp()) throw new Error("pipe stub never came up");
+  return {
+    linesNow: () => {
+      try { return fs.readFileSync(log, "utf8").split(/\r?\n/).filter(Boolean); } catch { return []; }
+    },
+    close: () => {
+      try { process.kill(Number(fs.readFileSync(pidFile, "utf8").trim())); } catch {}
+      try { fs.unlinkSync(log); } catch {}
+      try { fs.unlinkSync(pidFile); } catch {}
+      try { fs.unlinkSync(readyFile); } catch {}
+    },
+  };
+}
+
+function writePtyWindow(root, sid, consolePid, pipe) {
+  fs.writeFileSync(
+    path.join(root, "runner", "state", `${sid}.window`),
+    JSON.stringify({ ok: true, hwnd: 0, consolePid, transport: "pty", pipe, title: "acc-pty" })
+  );
+}
+
+test("pty transport: a clear request goes to the pipe, zero keystrokes", () => {
+  const root = sandbox();
+  const stub = startStub(); // a real console that must stay SILENT
+  const pipeName = `acc-term-test-${process.pid}-${Math.floor(Math.random() * 1e6)}`;
+  const pipe = startPipeStub(pipeName);
+  try {
+    writePtyWindow(root, "s-pty", stub.pid, pipeName);
+    writeRequest(root, "s-pty", { consolePid: stub.pid });
+    const out = runOnce(root);
+    assert.match(out, /CLEARED/, "clearbot reports the clear");
+    assert.deepEqual(pipe.linesNow(), ["ESC", "TEXT /clear", "SUBMIT"], "the pipe got the exact protocol");
+    assert.equal(typed(stub, 1500).trim(), "", "pty transport must not inject keystrokes");
+  } finally { pipe.close(); stub.kill(); }
+});
+
+test("pty transport: a dead pipe falls back to keystroke injection", () => {
+  const root = sandbox();
+  const stub = startStub();
+  try {
+    // The record claims pty but nothing serves the pipe -> the clear must
+    // still land through sendconsole.
+    writePtyWindow(root, "s-ptydead", stub.pid, `acc-term-dead-${process.pid}`);
+    writeRequest(root, "s-ptydead", { consolePid: stub.pid });
+    const out = runOnce(root);
+    assert.match(out, /CLEARED/, "the clear still happens");
+    assert.match(typed(stub), /\/clear/, "via keystroke injection");
+  } finally { stub.kill(); }
+});

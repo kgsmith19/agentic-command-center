@@ -178,3 +178,23 @@ line under `## Resolved`.
   auto-approve refuses a script whose name pairs with another pending one.
 
 ## Resolved
+
+- 2026-07-31 pty-transport liveness must never be `\\.\pipe\` enumeration:
+  `Get-TermPipe` (watcher/clearbot.ps1) gated transport choice on
+  `[System.IO.Directory]::GetFiles('\\.\pipe\')` membership, which flickers
+  false on a live, correctly-listening pipe (confirmed: a touched pipe
+  toggled found/not-found every ~300ms with zero connections made) — this is
+  what stalled last session's pty-transport work and made a real feature
+  nondeterministically fall back to the keystroke path it exists to replace.
+  Fixed by dropping the enumeration check; `Get-TermPipe` now only reads the
+  window record, and Send-Pipe's own `Connect(2000)` + catch is the real
+  liveness/fallback signal (already covered by the "dead pipe falls back"
+  test). Root cause traced further to `BeginWaitForConnection` on a
+  synchronous pipe handle — .NET's compat shim for that call periodically
+  disconnects/reconnects internally; `watcher/stubpipe.ps1` (the test's pipe
+  stub) used that shape and was rewritten to a plain blocking
+  `WaitForConnection()`, matching `gui/PtyHost.cs ServePipe` exactly. Fast
+  tier: 81/81 green (`node --test hooks/budget.test.mjs hooks/goal.test.mjs
+  hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs
+  hooks/clearbot.test.mjs`), pty tests specifically green across 3
+  consecutive full-suite runs.
