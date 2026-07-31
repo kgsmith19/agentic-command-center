@@ -1,41 +1,64 @@
 {
-  "enabled": true,
-  "runboxDir": "C:/code/guards/runbox",
-  "secrets": [
-    ".env",
-    ".env.*",
-    "*.pem",
-    "*.key",
-    "id_rsa*",
-    "vault.json"
-  ],
-  "protected": [
-    "C:/code/guards",
-    "C:/Users/kyleg/.claude/settings.json"
-  ],
-  "repos": {
-    "C:/code/lifeos-ecosystem/lifeos": {
-      "cells": {
-        "kernel": [
-          "src/kernel/",
-          "supabase/migrations/",
-          "tests/kernel/"
-        ],
-        "interface": [
-          "src/api/",
-          "tests/api/",
-          "src/mcp_server/",
-          "tests/mcp/"
-        ],
-        "rules": [
-          ".agents/",
-          "docs/adr/"
-        ]
-      },
-      "alwaysAllowed": [
-        ".agents/task.json",
-        "cross-domain-change-request.md"
-      ]
-    }
-  }
+    "enabled":  true,
+    "runboxDir":  "C:/code/guards/runbox",
+    "secrets":  [
+                    ".env",
+                    ".env.*",
+                    "*.pem",
+                    "*.key",
+                    "id_rsa*",
+                    "vault.json"
+                ],
+    "protected":  [
+                      "C:/Users/kyleg/.claude/settings.json"
+                  ],
+    "repos":  {
+                  "C:/code/lifeos-ecosystem/lifeos":  {
+                                                          "cells":  {
+                                                                        "kernel":  [
+                                                                                       "src/kernel/",
+                                                                                       "supabase/migrations/",
+                                                                                       "tests/kernel/"
+                                                                                   ],
+                                                                        "interface":  [
+                                                                                          "src/api/",
+                                                                                          "tests/api/",
+                                                                                          "src/mcp_server/",
+                                                                                          "tests/mcp/"
+                                                                                      ],
+                                                                        "rules":  [
+                                                                                      ".agents/",
+                                                                                      "docs/adr/"
+                                                                                  ],
+                                                                        "calendar":  [
+                                                                                         "src/domains/calendar/",
+                                                                                         "tests/calendar/"
+                                                                                     ],
+                                                                        "ops":  [
+                                                                                    "src/domains/ops/",
+                                                                                    "tests/ops/"
+                                                                                ],
+                                                                        "documents":  [
+                                                                                          "src/domains/documents/",
+                                                                                          "tests/documents/"
+                                                                                      ],
+                                                                        "bills":  [
+                                                                                      "src/domains/bills/",
+                                                                                      "tests/bills/"
+                                                                                  ],
+                                                                        "intentions":  [
+                                                                                           "src/domains/intentions/",
+                                                                                           "tests/intentions/"
+                                                                                       ],
+                                                                        "episodes":  [
+                                                                                         "src/domains/episodes/",
+                                                                                         "tests/episodes/"
+                                                                                     ]
+                                                                    },
+                                                          "alwaysAllowed":  [
+                                                                                ".agents/task.json",
+                                                                                "cross-domain-change-request.md"
+                                                                            ]
+                                                      }
+              }
 }

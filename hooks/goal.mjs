@@ -1,0 +1,339 @@
+#!/usr/bin/env node
+// Agentic Command Center - the GOAL store. This is what makes ACC able to carry
+// a piece of work across a /clear instead of losing it.
+//
+// THE PROBLEM IT SOLVES: the auto-clear chain (Stop hook -> clear-request ->
+// clearbot -> WriteConsoleInput types "/clear") worked, but it stopped there.
+// The fresh session came up with an empty prompt and no idea what it had been
+// doing, so a human had to retype the task. A goal survives the clear because it
+// lives in a FILE, not in context.
+//
+// THE THREAD OF CONTINUITY IS THE CONSOLE PID, not the session id. A /clear ends
+// the session id and starts a new one, but the terminal window - and therefore
+// the console pid that clearbot types into - is the same process throughout. So
+// a goal binds to a console, and every session that starts in that console
+// adopts it.
+//
+// WHY THE TEXT NEVER TRAVELS AS KEYSTROKES: clearbot turns text into real key
+// events, so a newline in a task would submit a fragment (this is OI-004). The
+// goal text goes in this file; the only thing ever typed is a constant. That is
+// also what lets a multi-line task work at all.
+//
+// Fails OPEN, like every other ACC hook helper: a broken goal store must cost
+// auto-resume and nothing else.
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// ACC_ROOT: see budget.mjs. Both must honour it or a test would split its state
+// across two trees.
+const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
+export const GOALS = process.env.ACC_GOALS_DIR || path.join(ROOT, "runner", "goals");
+const DONE = path.join(GOALS, "done");
+
+// A kick is only sent once the binding has had time to settle. SessionStart runs
+// before the TUI is ready to accept input, so firing the instant a goal binds
+// types into a console that is still starting up.
+const KICK_DELAY_MS = 4000;
+// One kick per goal per minute, whatever happens. A resume loop that somehow
+// re-armed itself must not be able to machine-gun the console.
+const KICK_COOLDOWN_MS = 60000;
+
+const nowIso = () => new Date().toISOString();
+
+function ensureDirs() {
+  fs.mkdirSync(GOALS, { recursive: true });
+  fs.mkdirSync(DONE, { recursive: true });
+}
+
+function readJson(p, dflt) {
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return dflt;
+  }
+}
+
+function goalPath(id) {
+  return path.join(GOALS, `${safeId(id)}.json`);
+}
+
+export function logPath(id) {
+  return path.join(GOALS, `${safeId(id)}.log.md`);
+}
+
+// Ids are used to build file paths and are echoed into injected context, so they
+// are constrained here rather than trusted from a caller.
+function safeId(id) {
+  return String(id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+}
+
+function write(goal) {
+  goal.updatedAt = nowIso();
+  fs.writeFileSync(goalPath(goal.id), JSON.stringify(goal, null, 2) + "\n");
+  return goal;
+}
+
+export function readGoal(id) {
+  const g = readJson(goalPath(id), null);
+  return g && g.id ? g : null;
+}
+
+export function listGoals() {
+  try {
+    return fs
+      .readdirSync(GOALS)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => readJson(path.join(GOALS, f), null))
+      .filter((g) => g && g.id);
+  } catch {
+    return [];
+  }
+}
+
+export function activeGoals() {
+  return listGoals().filter((g) => g.status === "active");
+}
+
+// Is that console still alive? A goal bound to a window Kyle has since closed
+// must never be resumed - there is nothing to type into, and the pid may since
+// have been reused by an unrelated process.
+export function consoleAlive(pid) {
+  const n = Number(pid || 0);
+  if (!n) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch (e) {
+    return e && e.code === "EPERM"; // exists, owned by someone else
+  }
+}
+
+export function goalForSession(sessionId) {
+  if (!sessionId) return null;
+  return activeGoals().find((g) => g.sessionId === sessionId) || null;
+}
+
+export function createGoal({ text, cwd, profile }) {
+  ensureDirs();
+  const t = String(text || "").trim();
+  if (!t) throw new Error("a goal needs text");
+  const iso = new Date().toISOString(); // 2026-07-31T04:10:27.123Z
+  const id =
+    "g-" +
+    iso.slice(0, 10).replace(/-/g, "") +
+    "-" +
+    iso.slice(11, 19).replace(/:/g, "") +
+    "-" +
+    Math.random().toString(36).slice(2, 6);
+  const goal = {
+    id,
+    text: t,
+    cwd: cwd || "",
+    profile: profile || "",
+    status: "active",
+    consolePid: 0,
+    sessionId: "",
+    cycles: 0,
+    needsKick: false,
+    boundAt: "",
+    lastKickAt: "",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+  write(goal);
+  fs.writeFileSync(
+    logPath(id),
+    `# Goal ${id}\n\n${t}\n\n- folder: ${goal.cwd || "(not set)"}\n- profile: ${goal.profile || "(default)"}\n- opened: ${goal.createdAt}\n\n## Progress\n\n`
+  );
+  return goal;
+}
+
+// Called from SessionStart. Two ways in:
+//   - ACC_GOAL is set   -> the Command Center launched this session for that goal
+//   - otherwise         -> adopt whatever active goal owns this console
+// The second case is the one that survives a /clear, and it is deliberately not
+// conditional on how the clear happened: a goal Kyle cleared by hand resumes the
+// same way an auto-clear does.
+export function bindSession({ sessionId, consolePid, cwd, goalId }) {
+  ensureDirs();
+  let goal = goalId ? readGoal(goalId) : null;
+  if (goal && goal.status !== "active") goal = null;
+  if (!goal && consolePid) {
+    goal = activeGoals().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
+  }
+  if (!goal) return null;
+
+  const fresh = goal.sessionId !== sessionId;
+  goal.sessionId = sessionId || goal.sessionId;
+  if (consolePid) goal.consolePid = Number(consolePid);
+  if (!goal.cwd && cwd) goal.cwd = cwd;
+  if (fresh) {
+    // A new session for a live goal is exactly the state that needs a prompt
+    // typed into it - whether this is the launch or the 4th resume.
+    goal.needsKick = true;
+    goal.boundAt = nowIso();
+  }
+  return write(goal);
+}
+
+export function appendCycle(id, { sessionId, ctx, text }) {
+  const goal = readGoal(id);
+  if (!goal) return null;
+  goal.cycles = Number(goal.cycles || 0) + 1;
+  write(goal);
+  const body = String(text || "").trim().slice(0, 4000);
+  try {
+    fs.appendFileSync(
+      logPath(id),
+      `\n### Cycle ${goal.cycles} - ${nowIso()}\n` +
+        `_session ${sessionId || "?"} ended at ${Math.round(Number(ctx || 0) / 1000)}k_\n\n` +
+        (body || "_(no closing summary captured)_") +
+        "\n"
+    );
+  } catch {}
+  return goal;
+}
+
+// The tail is what gets injected into the next session, so it is bounded here
+// rather than at the call site: an unbounded log would grow until it ate the
+// very context budget this whole mechanism exists to protect.
+export function logTail(id, maxChars = 3000) {
+  try {
+    const all = fs.readFileSync(logPath(id), "utf8");
+    if (all.length <= maxChars) return all;
+    return "...(earlier progress trimmed)...\n" + all.slice(-maxChars);
+  } catch {
+    return "";
+  }
+}
+
+export function setStatus(id, status, why) {
+  const goal = readGoal(id);
+  if (!goal) return null;
+  goal.status = status;
+  goal.needsKick = false;
+  if (why) goal.why = String(why).slice(0, 500);
+  write(goal);
+  if (status === "done" || status === "blocked") {
+    try {
+      fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
+    } catch {}
+    // Archive so the live directory only ever holds work in flight.
+    try {
+      ensureDirs();
+      fs.renameSync(goalPath(id), path.join(DONE, `${safeId(id)}.json`));
+      fs.renameSync(logPath(id), path.join(DONE, `${safeId(id)}.log.md`));
+    } catch {}
+  }
+  return goal;
+}
+
+// What clearbot asks for every cycle. Everything that makes a kick unsafe is
+// decided HERE, in one place, so the watcher stays a dumb executor:
+//   - goal must be active
+//   - its console must still exist
+//   - the binding must have settled (TUI ready)
+//   - the cooldown must have expired
+export function pendingKicks(now = Date.now()) {
+  return activeGoals()
+    .filter((g) => g.needsKick)
+    .filter((g) => consoleAlive(g.consolePid))
+    .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= KICK_DELAY_MS)
+    .filter((g) => !g.lastKickAt || now - Date.parse(g.lastKickAt) >= KICK_COOLDOWN_MS)
+    .map((g) => ({ id: g.id, consolePid: g.consolePid, cycles: g.cycles, sessionId: g.sessionId }));
+}
+
+export function markKicked(id) {
+  const goal = readGoal(id);
+  if (!goal) return null;
+  goal.needsKick = false;
+  goal.lastKickAt = nowIso();
+  return write(goal);
+}
+
+// ------------------------------------------------------------- CLI
+
+function arg(argv, name, dflt = "") {
+  const i = argv.indexOf(name);
+  return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : dflt;
+}
+
+// Goal text for `new`. --text-file exists because the caller that matters is the
+// GUI, and the GUI's node shim strips double quotes and cannot pass a newline in
+// a command line at all - so a multi-line goal typed in the box would arrive
+// mangled or truncated. A file has neither problem.
+export function textFromArgs(argv) {
+  const file = arg(argv, "--text-file");
+  if (file) return fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+  return arg(argv, "--text");
+}
+
+// Positional id, falling back to the single active goal. Every command a MODEL
+// is told to run takes an explicit id (SessionStart injects it), so this fallback
+// only serves a human at a prompt.
+function resolveId(argv) {
+  const pos = argv.find((a) => /^g-/.test(a));
+  if (pos) return pos;
+  const act = activeGoals();
+  return act.length === 1 ? act[0].id : "";
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+  const cmd = argv[0] || "list";
+
+  if (cmd === "new") {
+    const g = createGoal({
+      text: textFromArgs(argv),
+      cwd: arg(argv, "--cwd"),
+      profile: arg(argv, "--profile"),
+    });
+    console.log(JSON.stringify(g));
+    return;
+  }
+  if (cmd === "list") {
+    console.log(JSON.stringify(activeGoals(), null, 2));
+    return;
+  }
+  if (cmd === "pending") {
+    console.log(JSON.stringify(pendingKicks()));
+    return;
+  }
+  if (cmd === "kicked") {
+    markKicked(resolveId(argv));
+    return;
+  }
+  if (cmd === "show") {
+    const g = readGoal(resolveId(argv));
+    console.log(g ? JSON.stringify(g, null, 2) : "no active goal");
+    return;
+  }
+  if (cmd === "log") {
+    const id = resolveId(argv);
+    const text = arg(argv, "--text") || argv.slice(1).filter((a) => !/^g-/.test(a)).join(" ");
+    const g = readGoal(id);
+    if (!g) return console.log("no active goal");
+    try {
+      fs.appendFileSync(logPath(id), `\n- ${nowIso()} ${text}\n`);
+    } catch {}
+    console.log(`logged to ${logPath(id)}`);
+    return;
+  }
+  if (cmd === "done" || cmd === "blocked" || cmd === "paused") {
+    const id = resolveId(argv);
+    if (!id) return console.log("no active goal (pass the id)");
+    setStatus(id, cmd === "paused" ? "paused" : cmd, arg(argv, "--why"));
+    console.log(`goal ${id} -> ${cmd}`);
+    return;
+  }
+  console.log(
+    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id]"
+  );
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  main();
+}

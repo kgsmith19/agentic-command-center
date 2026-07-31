@@ -1,0 +1,97 @@
+{
+    "_comment":  "Agentic Command Center - the single process dial. Hooks re-read this on every fire, so edits take effect immediately with no restart.",
+    "context":  {
+                    "softK":  400,
+                    "hardK":  600,
+                    "_note":  "STANDING (2026-07-31, Kyle, set via the ACC dials + chat instruction; SUPERSEDES the 2026-07-30 100/150 standing): 400/600 until he manually changes it again. These dials are the ONLY source of context limits for EVERY session, ACC-launched or not - profiles carry no context overrides, so the number saved here is what budget.mjs enforces and statusline.mjs displays. softK MUST stay below hardK: budget.mjs returns allow() at \u0027ctx \u003c softK*1000\u0027 before it ever tests hardK, so a softK above hardK silently disables the UserPromptSubmit and PostToolUse checks and leaves only the Stop hook. Measured baseline start context is ~35-42k (CLAUDE.md + memory index + tools). hardK is the TOTAL context ceiling, not headroom above baseline."
+                },
+    "week":  {
+                 "amberTokens":  1200000000,
+                 "redTokens":  1800000000,
+                 "_note":  "Tier counts usage from effectiveFrom onward (ACC install), so the switch cannot fire retroactively on pre-discipline burn. Baseline for reference: 2.35B tokens/7d before ACC. amber ~52% / red ~78% of that.",
+                 "effectiveFrom":  "2026-07-30T15:33:00Z"
+             },
+    "subagents":  {
+                      "mode":  "allowlist",
+                      "allow":  [
+                                    "Explore"
+                                ],
+                      "maxPerSession":  6,
+                      "exploreMaxReportLines":  80,
+                      "_note":  "Implementation work belongs in a runner session (fresh context, cheap), not an Opus subagent. Multi-finder fan-out needs an explicit time-boxed grant: \u0027node hooks/budget.mjs fanout 30\u0027 or the Command Center Process tab."
+                  },
+    "review":  {
+                   "fullLeanReview":  "manual-only",
+                   "localFullSuiteInReview":  false,
+                   "maxFinders":  3
+               },
+    "runner":  {
+                   "stopOnRed":  true,
+                   "statusFile":  "SLICE-RUNNER.md",
+                   "waitingGuard":  true
+               },
+    "promptOptimizer":  "on",
+    "rates":  {
+                  "_note":  "$ per million tokens, used for RELATIVE attribution in reports. These are list API prices, not subscription billing truth. Correct them here and every report follows.",
+                  "opus":  {
+                               "in":  15,
+                               "out":  75
+                           },
+                  "sonnet":  {
+                                 "in":  3,
+                                 "out":  15
+                             },
+                  "fable":  {
+                                "in":  3,
+                                "out":  15
+                            },
+                  "haiku":  {
+                                "in":  0.8,
+                                "out":  4
+                            },
+                  "unknown":  {
+                                  "in":  3,
+                                  "out":  15
+                              }
+              },
+    "autoClear":  {
+                      "enabled":  true,
+                      "_note":  "Outside watcher (watcher/clearbot.ps1) types /clear as real keystrokes when a session ends over hardK. Hooks cannot clear context themselves. false = fall back to telling Kyle to type it."
+                  },
+    "goals":  {
+                  "autoResume":  true,
+                  "maxCycles":  0,
+                  "_note":  "A goal (runner/goals/) carries work across a /clear: SessionStart adopts it by CONSOLE PID and injects it, the Stop hook logs the cycle, clearbot types a constant to restart the turn. Kyle\u0027s call 2026-07-31: unbounded - the loop ends only when the model runs \u0027goal.mjs done \u003cid\u003e\u0027 or \u0027blocked \u003cid\u003e\u0027. maxCycles 0 = no cap; set a number to stop after N continuations. A RED week tier holds all resumes regardless."
+              },
+    "autoApprove":  {
+                        "enabled":  true,
+                        "_note":  "The Command Center runs pending runbox scripts itself instead of waiting for a human /approve (Kyle, 2026-07-31). Scripts marked [keep] are NEVER auto-run - they stay in the runbox after running, so auto-running them would loop forever. A failed script is attempted once per watcher lifetime and then left alone. Every run is appended to watcher/approvals.log. This does NOT touch the secrets list guard.mjs protects."
+                    },
+    "profiles":  {
+                     "_note":  "Chosen in the Command Center \u0027Start work\u0027 tab. The launcher sets ACC_PROFILE=\u003cname\u003e; budget.mjs and statusline.mjs (both via usage.mjs applyProfile) apply the SUBAGENT overrides for THAT SESSION only. Context limits ALWAYS come from the base dials above - single source of truth since 2026-07-31; do not add context blocks back here, they would shadow the Process-tab dials. Sessions with no ACC_PROFILE use the base policy unchanged.",
+                     "Normal":  {
+                                    "label":  "The standard setup. Use this unless you have a reason not to.",
+                                    "subagents":  {
+                                                      "allow":  [
+                                                                    "Explore"
+                                                                ],
+                                                      "maxPerSession":  6
+                                                  }
+                                },
+                     "Heavy":  {
+                                   "label":  "More helpers. For long migrations and audits.",
+                                   "subagents":  {
+                                                     "allow":  [
+                                                                   "Explore",
+                                                                   "general-purpose"
+                                                               ],
+                                                     "maxPerSession":  12
+                                                 }
+                               }
+                 },
+    "autoCd":  {
+                   "enabled":  true,
+                   "clearOnRescope":  true,
+                   "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing."
+               }
+}

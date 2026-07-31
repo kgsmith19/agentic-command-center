@@ -1,2 +1,3 @@
 @echo off
-start "" powershell -NoProfile -Sta -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0guards-gui.ps1"
+rem renamed to 'Agentic Command Center.cmd' - this forwarder keeps old shortcuts working
+call "%~dp0Agentic Command Center.cmd"

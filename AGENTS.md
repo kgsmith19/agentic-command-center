@@ -1,4 +1,4 @@
-# guards
+# guards - Agentic Command Center
 
 Independent guard rail + control panel for Claude Code sessions on this machine.
 `hooks/guard.mjs` is a PreToolUse hook (registered in `~/.claude/settings.json`
@@ -81,3 +81,111 @@ Lifecycle (engine-owned):
   `repos` (keyed by absolute repo path, forward slashes). Secrets, locked
   paths, and watched folders are all editable from the GUI; cell maps by
   editing `config.json` directly.
+
+## Process tab (Agentic Command Center)
+
+The GUI's 4th tab is the process control plane for token discipline. It shells
+to `hooks/usage.mjs week|check` for the rolling 7-day spend and tier light, and
+edits `policy.json` in place (context soft/hard k, week amber/red token
+thresholds, subagent allowlist, finder cap) -- hooks re-read that file on every
+fire, so edits apply with no restart. It also writes/removes
+`runner\stop\slice-runner.stop` (Stop / Resume; Resume shells to
+`hooks/budget.mjs unstop`, which also flushes the tier cache) and can grant a
+30-minute fan-out window (`hooks/budget.mjs fanout 30`).
+
+## The regression, exactly
+
+```
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs
+    -> 53 pass  (run from C:\code\guards; never `node --test hooks/` — the
+       runner grades the directory as one bogus failing test)
+powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
+powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
+```
+
+The suites that touch runner state (`budget`, `route`) sandbox themselves via
+`ACC_ROOT` + `ACC_POLICY`, because a test that reset the live `runner\state`
+would delete the `.window` files running sessions depend on. `-SmokeTest`
+builds the form without showing it and cannot see layout, so screenshot the
+window whenever the GUI changes.
+
+## Goals — how a session survives its own context limit
+
+A **goal** is a piece of work that outlives the session doing it. The GUI's GO
+button creates one (`hooks/goal.mjs new --text-file`) and launches Claude with
+`ACC_GOAL=<id>`; from then on the loop runs with no human in it:
+
+`budget.mjs` Stop (over budget) → captures the closing checkpoint as the next
+cycle's handoff → clearbot types `/clear` → the new session's SessionStart adopts
+the goal and injects it → clearbot types `Continue the active ACC goal.`
+
+Two decisions carry the whole design:
+
+1. **A goal binds to the CONSOLE PID, not the session id.** A `/clear` ends the
+   session id; the terminal process is the same throughout. Every session that
+   starts in that console adopts the goal, which is what makes resumption survive
+   the clear. Queued prompts (above) are keyed the same way for the same reason.
+2. **Goal text never becomes keystrokes.** It reaches the model through
+   SessionStart context; the only thing ever typed is a constant.
+
+State: `runner\goals\<id>.json` plus a running `<id>.log.md`, archived to
+`runner\goals\done\` on completion. **The loop only ends because the model ends
+it** — `goal.mjs done <id>` or `goal.mjs blocked <id> --why "..."`, both stated
+in full in the injected block. The week kill switch is the cost brake; a red week
+holds all kicks. `goal.mjs pending` decides every condition that makes a kick
+unsafe (active? console alive? binding settled? cooldown?) so there is one place
+to audit, and `clearbot.ps1` stays a dumb executor.
+
+Tests: `node --test hooks/goal.test.mjs` (14).
+
+`/goal <condition>` (user skill `~\.claude\skills\goal\`) is ACC-native: it
+logs `CONDITION: <text>` into the active goal's log via `goal.mjs log`, so the
+directive rides the goal store and survives every `/clear` with the rest of
+the handoff; `/goal clear` logs `CONDITION MET`. It never registers a session
+Stop hook: a Stop-gate fights the budget gate (OI-011) — the loop continues BY
+ending turns — so conditions live in goal state, not hooks. With no active
+goal the condition is session-local only.
+
+## Folder routing (Start work tab)
+
+`hooks/route.mjs` scores task text against the table in `..\ROUTING.md` and
+names the narrowest folder the work belongs in. Two callers: the Start-work tab
+preselects the launch folder from the task line (`route.mjs --text "..."`), and
+a `UserPromptSubmit` hook scopes each task in-session — it fires on every prompt
+but emits only when the verdict *moves*, so a task switch re-scopes and ten
+prompts about one thing cost one line.
+
+It biases narrow on purpose: only an exact tie escalates, because widening one
+rung mid-task is cheap and starting too wide is invisible. Every verdict carries
+`parent`, the next rung up. A prompt with no signals changes nothing.
+
+When the verdict differs from the session cwd it **blocks** the prompt and
+writes a `kind:"cd"` request into `runner\clear-requests`. The clearbot picks it
+up and types `/cd <path>` into that session's console (preceded by `/clear` on a
+mid-session re-scope, since cwd alone cannot unload what was already read), then
+replays the blocked prompt so it re-runs already scoped. `policy.json.autoCd`
+turns this off (`enabled:false` = advisory line only).
+
+The blocking path is deliberately easy to escape. It falls through to plain
+advice — never eating the prompt — when: the destination was already attempted
+once this session (so a cd that fails to take cannot cause a deny loop), no
+`consolePid` was recorded, or the destination does not exist.
+
+A prompt the injector cannot type (multi-line, or over 2000 chars) is **not**
+typed more carefully — it is not typed at all. `route.mjs` writes it to
+`runner\queued\<consolePid>.md`, the post-clear session injects it at
+SessionStart and deletes it, and clearbot types the constant `Run the queued
+prompt.` That channel needs a clear to ride on, so on the *first* scope of a
+session — where there is no clear and therefore no SessionStart — an untypable
+prompt still falls through to advice.
+
+`clearbot.ps1` re-derives every check itself rather than trusting the request
+file: the destination must be byte-identical to a route in `ROUTING.md` *and*
+exist, and the replay must re-pass the printable-single-line test. Invariant 1
+in that file is the authority on what may ever be typed — read it before
+changing anything here.
+
+Signals live in `ROUTING.md`, not in the code; edit that JSON block when a repo
+is added. Tests: `node --test hooks/route.test.mjs` (21). The watcher's refusal
+gates and the live `/cd` + replay sequence were verified by injection into a
+throwaway console — do not test them against a real working session.

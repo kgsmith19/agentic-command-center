@@ -1,0 +1,348 @@
+# ACC clear-watcher ("clearbot") - the outside process that physically types
+# /clear into the Claude Code terminal when a session is over its context budget.
+#
+# WHY THIS EXISTS: hooks cannot clear context. Verified against claude.exe 2.1.220 -
+# the only clearContext path is plan-mode internal, and no hook event can run a
+# slash command. So the clear has to come from outside the process, as real
+# keystrokes. This is that outside process.
+#
+# WHY IT FIRES ON A REQUEST FILE, NOT A TIMER: budget.mjs writes a request at the
+# Stop hook, which is a TURN BOUNDARY - the session is idle and the prompt is
+# empty. Typing on a wall-clock timer could land mid-turn and inject "/clear" into
+# the middle of a tool call or a half-written file.
+#
+# SAFETY INVARIANTS (all enforced below, every cycle):
+#   1. The typeable set is closed and auditable. Three things only:
+#        a. "/clear" - a constant.
+#        b. "/cd <path>" where <path> is byte-identical to a route listed in
+#           ROUTING.md AND exists on disk. Not "a path the caller asked for" -
+#           a path from a table the guard protects. Anything else is refused.
+#        c. the session's OWN prompt, replayed verbatim after a cd, and only if
+#           it is a single line of printable text (checked again here, not
+#           trusted from the request file).
+#        d. "$KICK" - a constant. It restarts an active goal after a clear. The
+#           GOAL TEXT IS NEVER TYPED: it reaches the model through SessionStart
+#           context, so a multi-line goal is safe by construction (OI-004).
+#        e. Esc - a single constant key event, sent ONLY in the escalation path
+#           when a typed /clear did not land (the over-budget turn refuses to
+#           end, OI-011); at most once per session per 10 minutes. It interrupts
+#           the turn; it cannot type, submit, or delete anything.
+#      There is no code path that types caller-chosen free text.
+#   2. It types only into the exact console PID the session recorded for itself
+#      via winfind.ps1. It never searches by window title and never guesses.
+#   3. Injection is WriteConsoleInput, addressed by PID, so it needs no focus:
+#      there is no "whatever has focus" to type into by mistake, and it cannot
+#      steal focus from what Kyle is doing. Missing/dead PID => skip, never guess.
+#   4. Requests older than 15 minutes are discarded, not executed.
+#   5. Live context is re-checked before typing; if the session already shrank
+#      (someone cleared manually) the request is dropped.
+#   6. Kill switch: watcher/clearbot.stop present => does nothing at all.
+#   7. One clear per session per 60s, tracked in-process.
+param(
+    [int]$IntervalMs = 2000,
+    [switch]$Once
+)
+
+$ErrorActionPreference = 'Stop'
+$Root     = Split-Path $PSScriptRoot -Parent
+$ReqDir   = Join-Path $Root 'runner\clear-requests'
+$StopFile = Join-Path $PSScriptRoot 'clearbot.stop'
+$LogFile  = Join-Path $PSScriptRoot 'clearbot.log'
+$SendConsole = Join-Path $PSScriptRoot 'sendconsole.ps1'
+$MaxAgeSec = 900
+$KEYS = '/clear'          # invariant 1a.
+$KICK = 'Continue the active ACC goal.'   # invariant 1d.
+$QUEUEKICK = 'Run the queued prompt.'     # invariant 1d: never the prompt itself.
+$RoutingMd = Join-Path (Split-Path $Root -Parent) 'ROUTING.md'
+
+# invariant 1b: the set of directories this program may ever type is exactly the
+# route list in ROUTING.md. Read fresh each time so an edit there takes effect
+# without a restart, and so a tampered request file cannot widen the set.
+function Get-AllowedPaths {
+    try {
+        $md = Get-Content $RoutingMd -Raw -ErrorAction Stop
+        $m = [regex]::Match($md, '(?s)```json\s*(.*?)```')
+        if (-not $m.Success) { return @() }
+        return @(($m.Groups[1].Value | ConvertFrom-Json).routes | ForEach-Object { $_.path })
+    } catch { return @() }
+}
+
+# invariant 1c: re-derive replay safety here rather than trusting the request.
+function Test-Replayable([string]$s) {
+    if ([string]::IsNullOrEmpty($s)) { return $false }
+    if ($s.Length -gt 2000) { return $false }
+    return ($s -notmatch '[\x00-\x1f\x7f]')
+}
+
+function Send-Keys($cpid, [string]$text, [switch]$ClearLineFirst) {
+    $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$SendConsole,'-TargetPid',$cpid,'-Text',$text)
+    if ($ClearLineFirst) { $a += '-ClearLineFirst' }
+    $out = & powershell @a 2>&1 | Out-String
+    return @{ ok = ($out -match 'OK wrote='); out = $out.Trim() }
+}
+
+# invariant 1e: the only non-text injection. One Esc, nothing else.
+function Send-Esc($cpid) {
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $SendConsole `
+                        -TargetPid $cpid -Esc 2>&1 | Out-String
+    return @{ ok = ($out -match 'OK wrote='); out = $out.Trim() }
+}
+
+function Invoke-Cd($req) {
+    # What may be typed is checked BEFORE whether there is anywhere to type it.
+    # A dead pid is a boring skip; an off-table path is the thing that must never
+    # pass, so it is never allowed to hide behind an earlier return.
+    $dest = [string]$req.path
+    $allowed = Get-AllowedPaths
+    if ($allowed -notcontains $dest) {
+        Log "REFUSE cd $($req.sessionId): '$dest' is not a route in ROUTING.md"; return $false
+    }
+    if (-not (Test-Path -LiteralPath $dest)) {
+        Log "REFUSE cd $($req.sessionId): '$dest' does not exist"; return $false
+    }
+
+    $cpid = [int]$req.consolePid
+    if (-not $cpid) { Log "SKIP cd $($req.sessionId): no consolePid"; return $false }
+    if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) {
+        Log "SKIP cd $($req.sessionId): console pid $cpid is gone"; return $false
+    }
+
+    # Order matters: clear first (it resets the window, not the directory), then
+    # cd so the new folder's CLAUDE.md loads into the fresh context, then replay.
+    if ($req.clear) {
+        $r = Send-Keys $cpid $KEYS -ClearLineFirst
+        if (-not $r.ok) { Log "ABORT cd $($req.sessionId): clear failed -> $($r.out)"; return $false }
+        Start-Sleep -Milliseconds 1200
+    }
+
+    $r = Send-Keys $cpid "/cd $dest" -ClearLineFirst
+    if (-not $r.ok) { Log "ABORT cd $($req.sessionId): /cd failed -> $($r.out)"; return $false }
+    Log "CD $($req.sessionId) -> $dest (clear=$($req.clear)) consolePid=$cpid"
+
+    # invariant 1d again: an untypable prompt was written to runner/queued/ and
+    # injected by the new session's SessionStart, so all that is typed here is a
+    # constant. Nothing derived from the prompt ever becomes keystrokes.
+    $replay = [string]$req.replay
+    if ($req.queued) {
+        Start-Sleep -Milliseconds 1200
+        $r = Send-Keys $cpid $QUEUEKICK -ClearLineFirst
+        if ($r.ok) { Log "QUEUEKICK $($req.sessionId): queued prompt handed over" }
+        else       { Log "WARN $($req.sessionId): queue kick failed -> $($r.out)" }
+    } elseif (Test-Replayable $replay) {
+        Start-Sleep -Milliseconds 1200
+        $r = Send-Keys $cpid $replay -ClearLineFirst
+        if ($r.ok) { Log "REPLAY $($req.sessionId): $($replay.Length) chars" }
+        else       { Log "WARN $($req.sessionId): replay failed -> $($r.out)" }
+    } else {
+        Log "NOREPLAY $($req.sessionId): prompt not single-line printable"
+    }
+    return $true
+}
+
+New-Item -ItemType Directory -Force -Path $ReqDir | Out-Null
+
+# NOTE: the Win32 focus machinery that used to live here (SetForegroundWindow,
+# AttachThreadInput, the ALT-press unlock) is GONE on purpose. Windows refuses
+# foreground changes from a background process, so it never worked; injection via
+# sendconsole.ps1 needs no focus at all. Do not reintroduce it.
+
+function Log($m) {
+    $line = "{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m
+    Write-Output $line
+    try { Add-Content -Path $LogFile -Value $line -Encoding ascii } catch {}
+}
+
+# Live context for a transcript, via the same ledger the hooks use.
+function Get-Context($transcript) {
+    try {
+        $node = (Get-Command node -ErrorAction Stop).Source
+        $expr = "import('file:///" + ($Root -replace '\\','/') + "/hooks/usage.mjs').then(m=>{console.log(m.contextOf(process.argv[1])||0)})"
+        $v = & $node -e $expr $transcript 2>$null
+        return [int]($v | Select-Object -Last 1)
+    } catch { return -1 }
+}
+
+function Invoke-Clear($req) {
+    # invariant 2: address the session's OWN console by PID. Never search by
+    # title, never type into "whatever is in front".
+    $cpid = [int]$req.consolePid
+    if (-not $cpid) { Log "SKIP $($req.sessionId): no consolePid recorded"; return $false }
+    if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) {
+        Log "SKIP $($req.sessionId): console pid $cpid is gone"; return $false
+    }
+
+    # invariant 3: injecting into that console's input buffer needs no focus, so
+    # there is no "wrong window" to guard against and nothing is stolen from Kyle.
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $SendConsole `
+                        -TargetPid $cpid -Text $KEYS -ClearLineFirst 2>&1 | Out-String
+    if ($out -notmatch 'OK wrote=') {
+        Log "ABORT $($req.sessionId): injection failed -> $($out.Trim())"
+        return $false
+    }
+    Log "CLEARED $($req.sessionId) ctx=$($req.ctx) consolePid=$cpid ($($out.Trim()))"
+    return $true
+}
+
+# --- goal resume ---------------------------------------------------------
+# A clear with no follow-up leaves a fresh session sitting at an empty prompt,
+# which is where the old chain ended and a human had to retype the task. This is
+# the other half: if a goal owns that console and is still active, type one
+# constant to restart it.
+#
+# EVERY condition that makes a kick unsafe is decided in goal.mjs (active? console
+# alive? binding settled? cooldown expired?) so there is exactly one place to
+# audit. This function stays a dumb executor on purpose.
+function Invoke-Kicks {
+    $raw = ''
+    try { $raw = & node (Join-Path $Root 'hooks\goal.mjs') 'pending' 2>$null | Out-String } catch { return }
+    $pend = $null
+    try { $pend = $raw | ConvertFrom-Json } catch { return }
+    if (-not $pend) { return }
+
+    # A red week is a hard stop for anything that spends tokens without a human
+    # asking. Checked only when there is actually something to fire, so the normal
+    # idle loop stays free.
+    try {
+        $t = (& node (Join-Path $Root 'hooks\usage.mjs') 'check' 2>$null | Out-String | ConvertFrom-Json)
+        if ($t -and $t.tier -eq 'red') { Log 'HOLD kicks: week usage is at the RED line'; return }
+    } catch { }
+
+    foreach ($g in @($pend)) {
+        $cpid = [int]$g.consolePid
+        if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) { continue }
+        $r = Send-Keys $cpid $KICK -ClearLineFirst
+        if ($r.ok) {
+            & node (Join-Path $Root 'hooks\goal.mjs') 'kicked' $g.id 2>$null | Out-Null
+            Log "RESUMED goal $($g.id) cycle $($g.cycles) consolePid=$cpid"
+        } else {
+            Log "WARN resume $($g.id) failed -> $($r.out)"
+        }
+    }
+}
+
+# --- auto-approve ---------------------------------------------------------
+# Kyle's call: the Command Center runs the scripts Claude leaves in the runbox
+# instead of waiting for a human to press /approve. This is honest about what it
+# is - it removes a gate. It costs little that was not already gone, because a
+# session can write AND run a runbox script itself; the gate was friction, not a
+# control. What still is a control, and is untouched: the secrets list
+# (.env, *.pem, *.key, id_rsa*, vault.json) that guard.mjs protects.
+#
+# TWO THINGS MUST NOT LOOP, and both are handled here rather than trusted:
+#   - a [keep] script stays in the runbox after running, so auto-running it would
+#     re-run it every cycle forever. Standing scripts are never auto-run.
+#   - a FAILED script also stays. It is attempted once per watcher lifetime and
+#     then left alone with a log line, instead of retried into the ground.
+$autoTried = @{}
+
+function Invoke-AutoApprove {
+    $pol = $null
+    try { $pol = Get-Content (Join-Path $Root 'policy.json') -Raw | ConvertFrom-Json } catch { return }
+    if (-not $pol.autoApprove -or -not $pol.autoApprove.enabled) { return }
+
+    $items = $null
+    try { $items = & node (Join-Path $Root 'hooks\engine.mjs') 'list' '--json' 2>$null | Out-String | ConvertFrom-Json } catch { return }
+    if (-not $items) { return }
+
+    foreach ($it in @($items)) {
+        $ref = "$($it.label):$($it.name)"
+        if ($it.keep) { continue }                       # standing script - deliberate only
+        if ($autoTried.ContainsKey($ref)) { continue }   # attempted once, never hammered
+        $autoTried[$ref] = Get-Date
+
+        Log "AUTO-APPROVE running $ref - $($it.summary)"
+        $out = & node (Join-Path $Root 'hooks\engine.mjs') 'run' $ref 2>&1 | Out-String
+        $ok = ($LASTEXITCODE -eq 0)
+        Log "AUTO-APPROVE $ref -> $(if ($ok) { 'OK' } else { "FAILED (exit $LASTEXITCODE) - left in the runbox, not retried" })"
+        try {
+            Add-Content -Path (Join-Path $PSScriptRoot 'approvals.log') -Encoding ascii -Value (
+                ("{0}  {1}  {2}`r`n{3}`r`n" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $(if ($ok) { 'OK  ' } else { 'FAIL' }), $ref, $out.Trim()))
+        } catch {}
+    }
+}
+
+$lastFire = @{}
+# invariant 1e: one escalation per session per 10 minutes, tracked in-process.
+$escalated = @{}
+
+function Step {
+    if (Test-Path $StopFile) { return }                       # invariant 6
+    foreach ($f in @(Get-ChildItem $ReqDir -Filter *.json -ErrorAction SilentlyContinue)) {
+        $req = $null
+        try { $req = Get-Content $f.FullName -Raw | ConvertFrom-Json } catch {}
+        if (-not $req) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue; continue }
+
+        $age = ((Get-Date) - $f.LastWriteTime).TotalSeconds
+        if ($age -gt $MaxAgeSec) {                            # invariant 4
+            Log "STALE $($req.sessionId): ${age}s old, discarding"
+            Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue; continue
+        }
+
+        $kind = [string]$req.kind
+        if (-not $kind) { $kind = 'clear' }
+
+        # invariant 7, per kind: a cd must not be throttled by a clear that just
+        # fired, because the prompt that triggered it was blocked and is waiting
+        # to be replayed. Repeat cds are bounded upstream (one per destination).
+        $key = "$kind`:$($req.sessionId)"
+        if ($lastFire.ContainsKey($key) -and ((Get-Date) - $lastFire[$key]).TotalSeconds -lt 60) {
+            # Escalation (OI-011): a clear request RE-WRITTEN after our /clear,
+            # with live context still pinned at the ceiling, means the turn is
+            # not ending - a Stop hook keeps blocking it, so the typed /clear
+            # never executed. Esc interrupts the turn for real; then clear
+            # again. Sleep 1200ms between the two so the TUI cannot read the
+            # interrupt Esc and the ClearLineFirst Esc as a double-press.
+            if ($kind -ne 'clear') { continue }
+            if ($f.LastWriteTime -le $lastFire[$key]) { continue }   # not fresh
+            $live = -1
+            if ($req.transcript -and (Test-Path $req.transcript)) { $live = Get-Context $req.transcript }
+            if ($live -lt ([int]$req.hardK * 1000 * 0.8)) { continue } # shrank or unknown
+            $sid = [string]$req.sessionId
+            if ($escalated.ContainsKey($sid) -and ((Get-Date) - $escalated[$sid]).TotalMinutes -lt 10) { continue }
+            $escalated[$sid] = Get-Date
+            $cpid = [int]$req.consolePid
+            if (-not $cpid -or -not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) {
+                Log "SKIP escalate $($req.sessionId): console pid $cpid is gone"
+                Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue; continue
+            }
+            Log "ESCALATE $($req.sessionId): turn not ending, sending Esc + /clear"
+            $r = Send-Esc $cpid
+            if ($r.ok) {
+                Start-Sleep -Milliseconds 1200
+                if (Invoke-Clear $req) { $lastFire[$key] = Get-Date }
+            } else {
+                Log "WARN escalate $($req.sessionId): Esc failed -> $($r.out)"
+            }
+            Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue
+            continue
+        }
+
+        $did = $false
+        if ($kind -eq 'cd') {
+            $did = Invoke-Cd $req
+        } else {
+            if ($req.transcript -and (Test-Path $req.transcript)) {   # invariant 5
+                $live = Get-Context $req.transcript
+                if ($live -ge 0 -and $live -lt ($req.hardK * 1000 * 0.8)) {
+                    Log "DROP $($req.sessionId): context already down to $live - someone cleared it"
+                    Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue; continue
+                }
+            }
+            $did = Invoke-Clear $req
+        }
+
+        if ($did) { $lastFire[$key] = Get-Date }
+        Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue
+    }
+
+    Invoke-Kicks
+    Invoke-AutoApprove
+}
+
+if ($Once) { Step; exit 0 }
+
+Log "clearbot started (interval ${IntervalMs}ms, requests: $ReqDir)"
+while ($true) {
+    try { Step } catch { Log "ERROR $($_.Exception.Message)" }
+    Start-Sleep -Milliseconds $IntervalMs
+}

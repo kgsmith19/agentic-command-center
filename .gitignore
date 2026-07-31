@@ -1,2 +1,14 @@
 vault.json
 runbox/
+runner/state/
+runner/logs/
+runner/goals/
+runner/clear-requests/
+runner/queued/
+runner/stop/
+runner/alerts/
+runner/jobs/
+watcher/*.log
+watcher/*.png
+watcher/clearbot.stop
+*.bak*

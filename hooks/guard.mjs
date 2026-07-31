@@ -109,5 +109,5 @@ deny(
   `guard: "${rel}" is owned by the "${owner}" cell but this task declares ` +
     `${declared ? `"${declared}"` : "no cell"}. Either declare {"cell": "${owner}"} in ` +
     `${repoKey}/.agents/task.json (rules/ADR edits require an explicitly-declared "rules" task), ` +
-    `or write the need into cross-domain-change-request.md instead of editing across the boundary.`
+    `or write the need into ${repoKey}/cross-domain-change-request.md (repo root - always writable) instead of editing across the boundary.`
 );
