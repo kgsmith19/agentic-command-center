@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-31-acc-embedded-terminal-design.md`
 
+**Status (updated 2026-07-31, completion-gate session):** Tasks 1–3 are DONE and committed (`36ab311`, `0424bac`, `ebcbebe`). Tasks 4–8 remain. The **Completion Gate** section at the bottom is the exit criterion: run `node C:/code/guards/hooks/goal.mjs done <goal-id>` only after every gate item shows its listed evidence. Task 6 gained Step 3b (post-spawn binding watchdog) in this amendment.
+
 ## Global Constraints
 
 - Fast tier must stay green: `node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs` from `C:\code\guards` (never `node --test hooks/`).
@@ -25,6 +27,8 @@
 
 ### Task 1: Vendor xterm.js and WebView2 SDK
 
+**DONE — evidence:** commit `36ab311`; `gui/vendor/xterm/xterm.js`, `xterm.css`, `addon-fit.js`, `gui/vendor/webview2/Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.WinForms.dll`, `WebView2Loader.dll`, `gui/vendor/README.md` all present on the branch.
+
 **Files:**
 - Create: `gui/vendor/xterm/xterm.js`, `gui/vendor/xterm/xterm.css`, `gui/vendor/xterm/addon-fit.js`
 - Create: `gui/vendor/webview2/Microsoft.Web.WebView2.Core.dll`, `gui/vendor/webview2/Microsoft.Web.WebView2.WinForms.dll`, `gui/vendor/webview2/WebView2Loader.dll`
@@ -33,7 +37,7 @@
 **Interfaces:**
 - Produces: script globals `Terminal` and `FitAddon.FitAddon` (xterm UMD builds) for Task 5's `term.html`; .NET types `Microsoft.Web.WebView2.WinForms.WebView2` and `Microsoft.Web.WebView2.Core.CoreWebView2Environment` for Task 6.
 
-- [ ] **Step 1: Download and extract pinned packages**
+- [x] **Step 1: Download and extract pinned packages**
 
 ```powershell
 Set-Location C:\code\guards
@@ -59,7 +63,7 @@ Copy-Item "$t\wv2\runtimes\win-x64\native\WebView2Loader.dll"    gui\vendor\webv
 
 If a URL 404s, find the correct one on npmjs.com / nuget.org for those exact versions — do not silently pick a different major version.
 
-- [ ] **Step 2: Verify the assets load**
+- [x] **Step 2: Verify the assets load**
 
 ```powershell
 if (-not (Select-String -Path gui\vendor\xterm\xterm.js -Pattern 'Terminal' -Quiet)) { throw 'xterm.js looks wrong' }
@@ -71,18 +75,15 @@ Add-Type -Path gui\vendor\webview2\Microsoft.Web.WebView2.WinForms.dll
 
 Expected: type name prints; no exception. (Native `WebView2Loader.dll` is exercised in Task 6.)
 
-- [ ] **Step 3: Write `gui/vendor/README.md`** — list each file, package, version, source URL, and why it is vendored (offline, pinned, no install step).
+- [x] **Step 3: Write `gui/vendor/README.md`** — list each file, package, version, source URL, and why it is vendored (offline, pinned, no install step).
 
-- [ ] **Step 4: Commit**
-
-```powershell
-git add gui/vendor
-git commit -m "chore: vendor xterm 5.5.0 + fit addon and WebView2 SDK 1.0.2903.40 for the ACC embedded terminal"
-```
+- [x] **Step 4: Commit** — `36ab311`
 
 ---
 
 ### Task 2: `Acc.PtyHost` — ConPTY spawn, output pump, pipe server
+
+**DONE — evidence:** commit `0424bac`; `gui/PtyHost.cs` (class `Acc.PtyHost` at :23, `Start` :72, `Snapshot` :146, `ServePipe` :164, `Kill` :209, `Dispose` :215); integration test `gui/ptyhost.test.ps1`.
 
 **Files:**
 - Create: `gui/PtyHost.cs`
@@ -95,7 +96,7 @@ git commit -m "chore: vendor xterm 5.5.0 + fit addon and WebView2 SDK 1.0.2903.4
   - `void ServePipe(string pipeName)` — line protocol server on `\\.\pipe\<pipeName>`: request `"TEXT <payload>"` | `"SUBMIT"` | `"ESC"`, one request per connection, reply `"OK"` or `"FAIL <reason>"`. `SUBMIT` writes `\r`, `ESC` writes `\x1b`.
   - `void WriteB64(string b64)` / `void WriteText(string s)` / `void Resize(short cols, short rows)` / `string Snapshot()` (decoded output tail, ≤256 KB) / `void Kill()` / `Dispose()`.
 
-- [ ] **Step 1: Write the failing integration test**
+- [x] **Step 1: Write the failing integration test**
 
 ```powershell
 # gui/ptyhost.test.ps1 — integration test for Acc.PtyHost. Run:
@@ -156,12 +157,12 @@ Check 'child killed on dispose' (-not (Get-Process -Id $cpid -ErrorAction Silent
 exit $fail
 ```
 
-- [ ] **Step 2: Run it — expect failure (PtyHost.cs missing)**
+- [x] **Step 2: Run it — expect failure (PtyHost.cs missing)**
 
 Run: `powershell -NoProfile -ExecutionPolicy Bypass -File gui/ptyhost.test.ps1`
 Expected: throws at `Add-Type` — `Cannot find path ... PtyHost.cs`.
 
-- [ ] **Step 3: Write `gui/PtyHost.cs`**
+- [x] **Step 3: Write `gui/PtyHost.cs`**
 
 ```csharp
 // ConPTY host for the ACC embedded terminal (spec: docs/superpowers/specs/
@@ -391,21 +392,18 @@ namespace Acc
 }
 ```
 
-- [ ] **Step 4: Run the test — expect all PASS, exit 0**
+- [x] **Step 4: Run the test — expect all PASS, exit 0**
 
 Run: `powershell -NoProfile -ExecutionPolicy Bypass -File gui/ptyhost.test.ps1`
 Expected: every line `PASS ...`, exit code 0. If `CreatePseudoConsole` is not found: the machine is pre-1809 — stop and report; the design requires ConPTY.
 
-- [ ] **Step 5: Commit**
-
-```powershell
-git add gui/PtyHost.cs gui/ptyhost.test.ps1
-git commit -m "feat: Acc.PtyHost - ConPTY spawn, output pump, TEXT/SUBMIT/ESC pipe server"
-```
+- [x] **Step 5: Commit** — `0424bac`
 
 ---
 
 ### Task 3: Clearbot pty transport (single choke point in `Send-Keys`)
+
+**DONE — evidence:** commit `ebcbebe`; `watcher/clearbot.ps1` (`Get-TermPipe` :117, `Send-Pipe` :139, `Send-Keys` pipe-first switch :158–179 including the ESC path); tests `hooks/clearbot.test.mjs:292` ("clear request goes to the pipe, zero keystrokes") and `:307` ("dead pipe falls back") — suite verified green 2026-07-31, 10 pass / 0 fail; test double `watcher/stubpipe.ps1`. Note: `Get-TermPipe` deliberately dropped the `Test-Path \\.\pipe\` liveness probe from the original Step 3 sketch — liveness is `Send-Pipe`'s own `Connect(2000)` (see comment at clearbot.ps1:125 and the resolved OPEN-ISSUES entry of 2026-07-31); do not "fix" it back.
 
 **Files:**
 - Modify: `watcher/clearbot.ps1` (the `Send-Keys` function — all call sites stay untouched; also the inline `sendconsole.ps1` escalation call near line 225 if it bypasses `Send-Keys`)
@@ -415,7 +413,7 @@ git commit -m "feat: Acc.PtyHost - ConPTY spawn, output pump, TEXT/SUBMIT/ESC pi
 - Consumes: Task 2's pipe protocol (`TEXT <payload>` / `SUBMIT` / `ESC`, reply `OK`/`FAIL ...`), and window records `runner/state/<sid>.window` which Task 4 extends with `transport:"pty"` and `pipe:"acc-term-<suffix>"`.
 - Produces: `Get-TermPipe([int]$ConsolePid)` → pipe name or `$null` (scans `$Root\runner\state\*.window` for `transport -eq 'pty' -and consolePid -eq $ConsolePid`, and verifies liveness with `Test-Path "\\.\pipe\<name>"`); `Send-Pipe([string]$PipeName, [string[]]$Ops)` → `@{ ok; out }`.
 
-- [ ] **Step 1: Write the failing tests** (append to `hooks/clearbot.test.mjs`, reusing its `sandbox()` / `startStub()` / `writeWindow()` helpers)
+- [x] **Step 1: Write the failing tests** (append to `hooks/clearbot.test.mjs`, reusing its `sandbox()` / `startStub()` / `writeWindow()` helpers)
 
 ```js
 // --- pty transport (spec 2026-07-31): when the window record says
@@ -479,11 +477,11 @@ test("pty transport: dead pipe falls back to keystroke injection", async () => {
 
 Adapt helper names (`writeClearRequest`, `runClearbotOnce`) to the file's actual existing helpers — read the current tests first and follow their exact request-file shape. Do not invent a parallel harness.
 
-- [ ] **Step 2: Run — expect the two new tests FAIL** (`pipe.lines` empty / keystrokes typed)
+- [x] **Step 2: Run — expect the two new tests FAIL** (`pipe.lines` empty / keystrokes typed)
 
 Run: `node --test hooks/clearbot.test.mjs`
 
-- [ ] **Step 3: Implement in `watcher/clearbot.ps1`**
+- [x] **Step 3: Implement in `watcher/clearbot.ps1`**
 
 Add near `Send-Keys`:
 
@@ -545,17 +543,12 @@ function Send-Keys([int]$TargetPid, [string]$Text, [switch]$ClearLineFirst, [swi
 
 If the escalation path near clearbot.ps1:225 shells `sendconsole.ps1` directly instead of calling `Send-Keys`, route it through `Send-Keys -Esc` so pty sessions get a pipe ESC.
 
-- [ ] **Step 4: Run the full fast tier — all green**
+- [x] **Step 4: Run the full fast tier — all green** (re-verified 2026-07-31: `hooks/clearbot.test.mjs` 10/10)
 
 Run: `node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs`
 Expected: previous count (79) + new tests, 0 fail.
 
-- [ ] **Step 5: Commit**
-
-```powershell
-git add watcher/clearbot.ps1 hooks/clearbot.test.mjs
-git commit -m "feat: clearbot pty transport - pipe writes for ACC-hosted sessions, keystroke fallback"
-```
+- [x] **Step 5: Commit** — `ebcbebe` (includes `watcher/stubpipe.ps1` and the OPEN-ISSUES Resolved entry for the pipe-enumeration liveness bug)
 
 ---
 
@@ -806,6 +799,48 @@ if ($script:TermOk -and $script:wv -and $script:wv.CoreWebView2) {
 }
 ```
 
+- [ ] **Step 3b: Binding watchdog — verify the spawn actually bound** (completion-gate requirement). The `.window` record is written by `hooks/budget.mjs` when claude's SessionStart hook fires — *not* by the GUI. If the hook never fires (claude died at startup, wrong cwd, hook error) or binds a different process, clearbot's pipe writes go nowhere and the goal loop silently stalls. After every pty spawn, watch for the record and verify it belongs to this spawn.
+
+  **Caveat — the pid is NOT `ChildPid`:** the ConPTY child is `cmd.exe /c claude.cmd` (a shim), so `PtyHost.ChildPid` is cmd's pid, while the record's `consolePid` is the *claude node process* — a **descendant** of `ChildPid` (it is the hook's `process.ppid`, the process that survives `/clear`). Assert descent, not equality.
+
+  Add after `$script:pty.ServePipe($pipeName)` in Step 3 (inside the `try`):
+
+```powershell
+# Binding watchdog (gate item 1f): budget.mjs must write a transport:"pty"
+# window record for THIS spawn within 120s. consolePid is the claude node
+# process - a DESCENDANT of the cmd shim ChildPid, never assumed equal.
+$script:bindPipe = $pipeName
+$script:bindDeadline = [DateTime]::UtcNow.AddSeconds(120)
+$script:bindTimer = New-Object System.Windows.Forms.Timer
+$script:bindTimer.Interval = 3000
+$script:bindTimer.add_Tick({
+    $hit = $null
+    foreach ($f in (Get-ChildItem -Path (Join-Path $PSScriptRoot 'runner\state') -Filter '*.window' -ErrorAction SilentlyContinue)) {
+        try { $w = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+        if ($w.transport -eq 'pty' -and $w.pipe -eq $script:bindPipe) { $hit = $w; break }
+    }
+    if ($hit) {
+        $script:bindTimer.Stop()
+        $p = [int]$hit.consolePid; $anchor = if ($script:pty) { [int]$script:pty.ChildPid } else { -1 }
+        $bound = $false
+        for ($i = 0; $i -lt 8 -and $p -gt 0; $i++) {
+            if ($p -eq $anchor) { $bound = $true; break }
+            $row = Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue
+            if (-not $row) { break }
+            $p = [int]$row.ParentProcessId
+        }
+        if ($bound) { Write-Host ("pty binding OK: consolePid {0} descends from child {1}" -f $hit.consolePid, $anchor) }
+        else { Write-Host ("WARN pty binding MISMATCH: record consolePid {0} does not descend from pty child {1} - clearbot writes may target the wrong session" -f $hit.consolePid, $anchor) }
+    } elseif ([DateTime]::UtcNow -gt $script:bindDeadline) {
+        $script:bindTimer.Stop()
+        Write-Host ("WARN pty binding TIMEOUT: no transport:pty window record for pipe {0} within 120s - SessionStart hook likely never fired" -f $script:bindPipe)
+    }
+})
+$script:bindTimer.Start()
+```
+
+  If the GUI has a log textbox/status area, route these three messages there instead of `Write-Host` — match the file's existing logging idiom. Objective check: covered end-to-end by E2E scenario 5 step 3 (record appears with the pipe name) and exercised live in Step 6's manual pass (expect the `pty binding OK` line).
+
 - [ ] **Step 4: Form close** — extend the existing close-confirm handler (pattern at ~line 829): if `$script:pty`, ask `'A Claude session is running in the Terminal tab and will be killed. Close anyway?'`; on Yes, `$script:pty.Dispose()`.
 
 - [ ] **Step 5: Smoke + screenshot**
@@ -873,6 +908,34 @@ git commit -m "test: e2e scenario 5 - embedded pty launch, kick submits with zer
 - [ ] **Step 5: Ledger** — anything surfaced-not-fixed goes to `OPEN-ISSUES.md` (repo root).
 - [ ] **Step 6: Full verification sweep** — fast tier (six suites), `gui/ptyhost.test.ps1`, `-SmokeTest`, screenshot, e2e 1–5. Paste actual outputs into the final report.
 - [ ] **Step 7: Commit docs + mark the goal condition met** (`goal.mjs log <id> --text "CONDITION MET: ..."`), then `goal.mjs done <id>` only after everything above is green.
+
+---
+
+## Completion Gate (added 2026-07-31 — blocks `goal.mjs done`)
+
+Kyle's exit criterion, verbatim intent: *"Do not mark the goal complete until every item is objectively verified... Report file:line evidence per item."* Every item below names its command and its pass condition. The final report to Kyle lists, per item, the command run, the actual output (pasted, not paraphrased), and file:line evidence. `node C:/code/guards/hooks/goal.mjs done <goal-id>` runs only after all six show their evidence. Kyle has pre-approved runbox `/approve` scripts for this goal (2026-07-31): when a script lands in `runbox/`, tell him it's there and that he already approved it — he still has to type `/approve` himself.
+
+- [ ] **Gate 1 — deliverables exist and are wired.** Report file:line for each:
+  - (a) `gui/term.html` exists with the xterm bridge (`{type:'out'|'exit'}` in, `{type:'in'|'resize'|'ready'}` out) and a resize path (`fit.fit()` on `window.resize` + `ResizeObserver`).
+  - (b) `guards-gui.ps1` builds a Terminal tab hosting a WebView2 control (Task 6 Step 2).
+  - (c) WebView2-runtime-absent fallback: `$script:TermOk = $false` path reaches the legacy launch byte-for-byte (Task 6 Steps 1 and 3's `else`). Objective check: `-SmokeTest` passes even after temporarily renaming `gui\vendor\webview2` (restore after; state in the report that this was actually done, with output).
+  - (d) The `cmd /k claude` ProcessStartInfo block (was guards-gui.ps1:977) is replaced by the pty spawn with `ACC_GOAL`/`ACC_PROFILE`/`ACC_PTY` env (Task 6 Step 3).
+  - (e) Window record: `hooks/budget.mjs` writes `transport:"pty"` + `pipe` when `ACC_PTY` is set (Task 4), proven by its unit test.
+  - (f) Binding verified after every spawn: Task 6 Step 3b watchdog present; descent-not-equality assertion as specified.
+  - (g) Close-with-live-session confirm disposes the pty (Task 6 Step 4), and `Dispose` → `Kill` terminates the child tree (PtyHost.cs:209–223).
+- [ ] **Gate 2 — unit + integration tiers green.** Commands and pass conditions:
+  - `node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs` → 0 fail (this is the sendconsole/dead-pipe regression evidence for external sessions: "sendconsole itself refuses multi-line text", "pty transport: a dead pipe falls back to keystroke injection" must be in the pass list).
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File gui/ptyhost.test.ps1` → exit 0, all PASS.
+  - `powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest` → pass, plus `watcher/screenshot-gui.ps1` screenshot showing the Terminal tab.
+- [ ] **Gate 3 — E2E, the reason this feature exists.** `node e2e/loop.e2e.mjs --only 5` → PASS: kick submitted via pipe, transcript gains the exact user message `Continue the active ACC goal.` **and** a following assistant turn, with zero human input and zero keystroke injection (clearbot.log shows a `pty` send; no injection lines for that sid). Then `node e2e/loop.e2e.mjs` → scenarios 1–4 also PASS (injection path unregressed). Paste the scenario summary lines.
+- [ ] **Gate 4 — manual visual pass with Kyle. STOP AND ASK — do not self-certify rendering.** Launch the GUI, start a session, then tell Kyle it is ready and ask him to check: TUI colors, spinner animation, slash-command menu, typing echo, and resize reflow. Record his verdict verbatim (`goal.mjs log <id> --text "VISUAL PASS: <his words>"`). This gate is satisfied only by his reply, never by a screenshot self-check.
+- [ ] **Gate 5 — reviews over the full branch diff** (`git diff main...acc-embedded-terminal` plus working tree): run `/simplify` (the lean diff review) and `/security-review`; apply fixes or ledger findings explicitly. Rerun Gate 2's commands after any fix.
+- [ ] **Gate 6 — ledger, log not build.** Append to `C:\code\guards\OPEN-ISSUES.md` under `## Open`, following the existing entry format (`- opened / - where / - what / - why open / - done when`), next free IDs:
+  - **OI-009 GUI process is a single point of failure for hosted sessions** — where: guards-gui.ps1 / gui/PtyHost.cs; what: an ACC-hosted claude lives inside the GUI process, so a GUI crash kills every hosted session with no heartbeat or restart; done when: a heartbeat/reattach-or-restart story exists.
+  - **OI-010 Pipe TEXT protocol is single-line; multi-line replay still falls back** (OI-004 successor) — where: gui/PtyHost.cs ServePipe + watcher/clearbot.ps1 Send-Pipe; what: `TEXT` carries one line (control chars < 0x20 refused), so multi-line replay payloads cannot use the pty path and fall back; done when: a framed multi-line op exists with the same content policy.
+  - **OI-011 Re-verify guards self-protection coverage of guards/ paths** (relates OI-005) — where: hooks/engine.mjs guard config; what: this branch added gui/PtyHost.cs, gui/term.html, gui/vendor/, watcher/stubpipe.ps1 — confirm the self-protection path list still covers what it claims after these additions; done when: coverage re-verified or the gap ledgered precisely.
+  - Router misroute goes in **`C:\code\OPEN-ISSUES.md`** (it is about `C:\code\ROUTING.md`, not this repo — create the file from the template in guards' if absent): **guards-GUI vocabulary collides with lifeos-ui in routing signals** — what: a guards-GUI task routed to lifeos-ui on a "tie: lifeos-ui + guards" because signals like gui/window/terminal appear in both lists (observed 2026-07-31 on the ACC embedded-terminal completion-gate prompt); done when: signal lists disambiguate (e.g. guards-gui, conpty, xterm → guards) and the same prompt routes to guards.
+- [ ] **Gate 7 — mark done.** All six above show evidence in the final report → `goal.mjs log <id> --text "CONDITION MET: completion gate 1-6 verified"` then `goal.mjs done <id>`.
 
 ---
 
