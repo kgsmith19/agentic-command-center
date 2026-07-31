@@ -1,79 +1,85 @@
-# ACC goal g-20260731-134525-09wb — checkpoint (cycle 2, 2026-07-31)
+# ACC goal g-20260731-134525-09wb — checkpoint (cycle 3, 2026-07-31)
 
-**Task:** Finish the ACC. Plan is APPROVED and saved at
-`C:\Users\kyleg\.claude\plans\squishy-juggling-pnueli.md` — single source of
-truth (11 tasks, TDD steps, commit series). Execute top to bottom, inline,
-main thread.
+**Task:** Finish the ACC. The original 11-task plan is DONE and committed. Work
+is now the **autonomy-hardening** spec+plan Kyle approved this cycle:
 
-## Board
+- Spec: `docs/superpowers/specs/2026-07-31-acc-autonomy-hardening-design.md`
+- Plan: `docs/superpowers/plans/2026-07-31-acc-autonomy-hardening.md` (11 tasks)
+
+**Kyle's standing condition (via /goal):** "Yes, continue until 100% completed."
+The DONE gate is at the bottom of this file. Do not close the goal before it.
+
+## Board — autonomy hardening
 
 | # | Task | Status |
 |---|------|--------|
-| 0 | Log policy-drift finding to C:\code\OPEN-ISSUES.md | DONE — logged as OI-013 |
-| 1 | OI-011a budget.mjs latch precedence + budget.test.mjs | DONE — fix + 4 tests, 48/48 green |
-| 2 | OI-011b clearbot Esc escalation | CODE DONE — E2E partial: cycle-1 death was plain `CLEARED 9eacc37c ctx=166878` (no goal-gate block, so ESCALATE unexercised; throwaway E2E still owed) |
-| 2b | NEW: log start-clearbot.cmd self-match bug to guards ledger (found cycle 2, not fixed) | DONE — guards OI-001 |
-| 2c | NEW (Kyle, cycle 3): ACC dials didn't govern ACC-launched sessions (profile context shadowed them; statusline showed base) | DONE — single source of truth: profiles lost context blocks, applyProfile shared via usage.mjs, statusline==enforcement, GUI note reads dials; 53/53 green; stall + /cd findings logged as guards OI-002/OI-003 |
-| 3 | OI-011c /goal shadow skill (~\.claude\skills\goal\) + AGENTS.md section | CODE DONE — precedence check owed at next session start (RESUME 5) |
-| 4 | OI-009 route.test.mjs ACC_ROOT sandbox + stray purge | DONE — sandboxed (ROUTING.md stays repo-anchored), live-state diff clean, 87 strays purged (138→51) |
-| 5 | OI-012 delete runbox/acc-v1 (approved) | DONE — deleted; grep: only historical refs remain; AGENTS.md regression block updated to the 53-test gate |
-| 6 | OI-003 route.mjs doctor + tests + ROUTING.md line | DONE — 3 tests (route 24/24), live run clean (3 repos, exit 0) |
-| 7 | OI-007 retire Careful profile (policy.json + GUI picker) — Kyle approved | DONE — policy + picker cleaned, SmokeTest OK, screenshot verified |
-| 8 | OI-006 disable security-guidance plugin hook — Kyle approved | DONE — auto-approve ran the runbox script (approvals.log); enabledPlugins flag now false, backup settings.json.bak-sec-guidance-20260731; fresh-session latency verify owed |
-| 9 | OI-008 close: shadow verified evidence | DEFERRED to next session start — this session's prompt lacks the full skill listing; compare /security-review listing text vs SKILL.md description there |
-| 10 | OI-005 annotate ledger, re-check 2026-08-06 | DONE — check-on date added |
-| 11 | Housekeeping: delete 10 *.bak*, .gitignore, ledger flips, commit series + gates | DONE — 12 baks deleted, .gitignore extended, ledgers flipped (OI-003/007/009/012/013 resolved), acc-architecture memory written; committed as 75af2cd (code) + fb72a5d (docs). DEVIATION: one code commit instead of baseline+per-task series — fixes landed on never-committed files, so intermediate states would be fiction. Security review ran (user skill shadow CONFIRMED loading — OI-008 evidence): findings logged as guards OI-004/OI-005, none blocking. |
+| 1 | goal.mjs recordTurnEnd + hybrid pendingKicks + policy dials | DONE — 20/20 |
+| 2 | budget.mjs reports under-budget turn ends (human/machine) | DONE — 12/12 |
+| 3 | stop-clearbot self-match fix (OI-001) | DONE — verified live |
+| 4 | clearbot heartbeat | DONE — verified live |
+| 5 | statusline `bot DEAD` + SessionStart warning | DONE — 6/6 |
+| 6 | typing-channel hardening (OI-004) | DONE — binding check, sendconsole self-defense, policy hardK |
+| 7 | fast-tier clearbot suite + stub console | DONE — 8/8, found the Log/Write-Output bug |
+| 8 | watcher supervision | DONE (adapted, see OI-007) — turn-boundary revive + logon launcher |
+| 9 | E2E scenarios 1-2 | HARNESS DONE, verdicts owed |
+| 10 | E2E scenarios 3-4 | WRITTEN, never run |
+| 11 | docs / ledger / DONE gate | AGENTS.md done; ledger flips + gate owed |
+
+**Fast tier: 79/79 green.** Gate command (six files, from `C:\code\guards`;
+never `node --test hooks/`):
+`node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs`
 
 ## RESUME (cold-start sufficient)
 
-1. **Test gate command (Node v24.18):** `node --test hooks/` AND `node --test
-   hooks` BOTH fail bogusly (runner treats the dir as one failing test). Use the
-   explicit list, from C:\code\guards:
-   `node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs`
-   → currently 53/53 green (48 after Task 1 + 5 from the cycle-3 dials fix).
-2. **Task 1 landed (uncommitted):** `hooks/budget.mjs` onStop — early
-   `stop_hook_active` allow() deleted; waiting-guard if gained
-   `&& !p.stop_hook_active`; latched path now runs on EVERY over-budget Stop
-   and re-writes the clear request; appendCycle one-shot via
-   `statePath(sid,"cycled")`. Tests: `hooks/budget.test.mjs` (4 cases, sandbox
-   via ACC_ROOT + ACC_POLICY envs — usage.mjs:15 honours ACC_POLICY).
-3. **Task 2 landed (uncommitted):** `watcher/sendconsole.ps1` gained `-Esc`
-   (one VK_ESCAPE down/up, forces Text=''/NoEnter; -Text no longer Mandatory,
-   guarded). SMOKE-TESTED live: `OK wrote=2 records` into a hidden cmd console.
-   `watcher/clearbot.ps1`: invariant 1e in header, Send-Esc helper, $escalated
-   map, escalation branch in Step (fires when a clear request is re-written
-   while 60s-throttled AND Get-Context ≥ 0.8×hardK; once per sid per 10 min;
-   Esc → sleep 1200ms → Invoke-Clear). DEVIATION from plan: 1200ms not 500ms,
-   so the interrupt Esc and ClearLineFirst Esc cannot read as a double-press
-   (double-Esc opens the TUI rewind picker — typing into it is the hazard).
-   Both files parse-clean. Clearbot RESTARTED with new code (pid 77628,
-   started 10:25:18 in watcher/clearbot.log).
-   **E2E still owed (plan says do not skip):** THIS session (cycle 2) dies over
-   budget right after this checkpoint — check `watcher/clearbot.log` around
-   that time for CLEARED (or ESCALATE→CLEARED) for the cycle-2 session id, and
-   paste the excerpt into the goal log. If only CLEARED appears (no goal-gate
-   block happened), the ESCALATE path still needs the throwaway-session E2E
-   from plan Task 2 before OI-011 can be closed.
-4. **start-clearbot.cmd bug (Task 2b, unfixed):** its already-running probe
-   matches ANY powershell whose command line mentions clearbot.ps1 — including
-   a status probe — so it said "already running (1)" while 0 were running.
-   Same self-match bug clearbot-status guards against (budget.mjs ~line 677).
-   Log to the guards-repo ledger (create C:\code\guards\OPEN-ISSUES.md from the
-   C:\code template if absent), or fix inline if trivial (exclude own pid tree
-   / require -File token exactly like the status probe does).
-5. **Task 3 code landed cycle 3** — `~\.claude\skills\goal\SKILL.md` written
-   (log CONDITION via goal.mjs, no Stop hook ever) + AGENTS.md Goals section
-   extended. **FIRST ACTION next session:** check this session's skill listing
-   for `/goal` — if the user skill shows, mark Task 3 DONE; if the built-in
-   wins, rename the dir to `acc-goal`, update the AGENTS.md sentence + add a
-   ledger line (OI-008 evidence pattern).
-6. Then Tasks 4..11 per plan. Kyle decisions locked: OI-011 full option, retire
-   Careful, disable security-guidance hook. Deletions pre-approved: 10 *.bak*
-   + runbox/acc-v1. Commit gates per batch: test list above green →
-   /diff-review → /security-review → commit (branch master, Task 11 order:
-   baseline acc-v2 commit first, then per-task fix commits).
-7. User emphasis (Kyle, cycle 2 prompt): ACC must be able to PRESS keys live
-   (Enter/Esc), not just buffer text — VERIFIED REAL this cycle: sendconsole
-   injects true KEY_EVENT records via WriteConsoleInputW (Enter = VK_RETURN
-   lines, Esc smoke-tested); it needs no window focus. Carry this assurance
-   into the E2E evidence when closing OI-011.
+1. **What is already proven, live, not just in tests:**
+   - The stall regression is FIXED: a real sandboxed claude session's
+     under-budget turn end recorded `turnEndedAt` and armed the kick
+     (observed 17:38:45Z, session e4ca62bb). That is guards OI-002, the thing
+     that stalled this goal twice today.
+   - Watcher self-healing works: killed the watcher without the kill switch,
+     waited past the 30s staleness window, one Stop hook → 0 running became 1.
+   - stop-clearbot now reports "1 killed" (it used to be able to kill its own
+     probe); start-clearbot was ALREADY correct (OI-001 was re-scoped).
+   - A real `/clear` reaches a real console: the fast-tier stub-console test
+     asserts the keystrokes land, not just that a log line was written.
+
+2. **NEXT ACTION — run the proof tier and get verdicts:**
+   `node e2e/loop.e2e.mjs --only 2` first (the regression), then 1, then 3, 4.
+   It spawns REAL claude consoles and spends tokens; each scenario prints its
+   evidence. Run them one at a time in the background and poll the sandbox
+   (`$env:TEMP\acc-e2e-*\acc\runner\goals\*.json`) rather than blocking.
+   Known-good shape: session binds within ~30s, `.window` records the console
+   pid, the turn runs because the prompt is passed as a claude ARGUMENT.
+
+3. **Harness gotchas already paid for (do not re-learn):**
+   - Never type the FIRST prompt — SessionStart precedes TUI readiness.
+   - Never match processes by command-line substring; the matcher matches
+     itself. Kill by the console pid from `<sid>.window`.
+   - The sandbox must contain `hooks/goal.mjs`, `hooks/usage.mjs` (clearbot
+     shells to them under `$Root`) and a parent-level `ROUTING.md`. Missing
+     files fail SILENTLY — kicks and escalation just never happen.
+   - Scenario 3 needs a RESIDENT clearbot (`startResidentClearbot`), not
+     `-Once`: escalation keys off `$lastFire`, which is in-process state.
+
+4. **Then Task 11:** flip guards OI-001/002/004 (and OI-003 only if scenario 4
+   passes twice) to Resolved with the evidence; resolve OI-011 in
+   `C:\code\OPEN-ISSUES.md` with the scenario-3 excerpt; run both tiers.
+
+5. **Open, logged, NOT fixed:** guards OI-003 (/cd not taking), OI-005
+   (repo unprotected while AGENTS.md says otherwise — Kyle's call, after this
+   goal closes), OI-006 (hand-run SessionStart hijacks the goal binding),
+   OI-007 (Scheduled Task needs elevation; non-elevated equivalent shipped),
+   OI-008 (runbox undo-script ordering hazard).
+
+6. **DO NOT run a hook by hand against live state.** `ACC_ROOT=<throwaway>`
+   always. Hand-running SessionStart rebinds the live goal to the fake session
+   id and silently breaks this loop (OI-006 — it happened this cycle; recovery
+   is re-run SessionStart with the true id, then `goal.mjs kicked <id>`).
+
+## DONE gate for this goal
+
+Both must be green, and the evidence pasted into the goal log:
+- fast tier: the six-file command above, 0 failures
+- proof tier: `node e2e/loop.e2e.mjs` — scenarios 1, 2 and 3 PASS
+
+Only then: `node C:/code/guards/hooks/goal.mjs done g-20260731-134525-09wb`
