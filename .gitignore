@@ -8,6 +8,7 @@ runner/queued/
 runner/stop/
 runner/alerts/
 runner/jobs/
+runner/prompts/
 watcher/*.log
 watcher/*.png
 watcher/clearbot.stop

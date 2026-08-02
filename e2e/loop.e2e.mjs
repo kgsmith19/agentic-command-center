@@ -29,6 +29,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { withLaunchSlot } from "../hooks/lane.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
@@ -424,9 +425,93 @@ async function scenario4() {
   } finally { cleanup(consoles); }
 }
 
+// ---------------------------------------------------------------- scenario 5
+// EMBEDDED LAUNCH (spec 2026-07-31). ACC hosts claude on a ConPTY
+// (gui/ptyhost.e2e.ps1 = the GUI's transport without the GUI) and clearbot
+// drives it over the pty pipe - zero keystroke injection. The reported bug
+// this locks against: the kick text "populates the prompt but never submits".
+// Only a transcript entry proves a submit: text sitting unsubmitted in the
+// TUI never reaches the transcript.
+async function scenario5() {
+  const sb = sandbox(400); // high ceiling: the kick, not a clear, is under test
+  const goal = newGoal(sb, "Reply with exactly: PTY. Then stop.");
+  const pipeName = `acc-term-e2e-${process.pid}`;
+  const pidFile = path.join(sb.root, "pty.pid");
+  // ATTACHED on purpose: agent-harness sandboxes kill detached grandchildren
+  // (observed 2026-07-31 - the host never ran), and the scenario owns the
+  // host's lifetime anyway. Its output lands in ptyhost.log for post-mortems.
+  const hostLog = fs.openSync(path.join(sb.root, "ptyhost.log"), "w");
+  const host = spawn(
+    "powershell",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(REPO, "gui", "ptyhost.e2e.ps1"),
+     "-PipeName", pipeName, "-GoalId", goal.id, "-Cwd", REPO, "-PidFile", pidFile,
+     "-TimeoutSeconds", "600", "-Model", MODEL],
+    { env: { ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "" },
+      stdio: ["ignore", hostLog, hostLog], windowsHide: true }
+  );
+  host.unref();
+  const consoles = [];
+  try {
+    const childPid = waitFor("pty child pid file", 90000, () =>
+      fs.existsSync(pidFile) ? Number(String(fs.readFileSync(pidFile, "utf8")).trim()) : null);
+    if (childPid) consoles.push(childPid);
+
+    const sid = childPid && waitFor("session binds to the goal", 180000, () => goalJson(sb, goal.id)?.sessionId);
+    // Task 4 end-to-end: the record must say pty + THIS pipe. consolePid is
+    // the claude node process (the SessionStart hook's parent), which is a
+    // descendant of the cmd-shim child - never assumed equal to it.
+    const win = sid && waitFor("pty window record with the pipe name", 90000, () => {
+      const w = windowOf(sb, sid);
+      return w && w.transport === "pty" && w.pipe === pipeName ? w : null;
+    });
+    if (win) consoles.push(win.consolePid);
+
+    const kicked = win && waitFor("clearbot kicks over the pipe", 180000, () => {
+      clearbotOnce(sb);
+      return /via pty OK/.test(clearbotLog(sb));
+    });
+
+    // THE assertion - the reported failure: the kick must have SUBMITTED. The
+    // transcript gains the kick as a user message AND an assistant turn after
+    // it. An unsubmitted kick produces neither.
+    const transcript = kicked && waitFor("transcript exists", 120000, () => findTranscript(sid));
+    const submitted = transcript && waitFor("kick in the transcript, then an assistant turn", 240000, () => {
+      const lines = fs.readFileSync(transcript, "utf8").split("\n");
+      let kickAt = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        if (!l || l.charCodeAt(0) !== 123) continue;
+        try {
+          const o = JSON.parse(l);
+          if (kickAt < 0 && o.type === "user" &&
+              JSON.stringify(o.message?.content ?? "").includes("Continue the active ACC goal.")) kickAt = i;
+          else if (kickAt >= 0 && o.type === "assistant") return true;
+        } catch {}
+      }
+      return false;
+    });
+
+    const log = clearbotLog(sb);
+    const injected = /OK wrote=/.test(log); // sendconsole's success marker - must be absent
+    report(5, "embedded pty launch: the kick submits with zero human input", !!submitted && !injected,
+      `pty child   : ${childPid}\nsession     : ${sid}\nwindow      : ${JSON.stringify(windowOf(sb, sid))}\n` +
+      `keystroke injection used: ${injected ? "YES - FAIL" : "none, pipe only"}\n\n${log.trim()}`);
+  } finally {
+    cleanup(consoles);
+    try { host.kill(); } catch {}
+  }
+}
+
 const only = process.argv.includes("--only") ? Number(process.argv[process.argv.indexOf("--only") + 1]) : 0;
-const all = { 1: scenario1, 2: scenario2, 3: scenario3, 4: scenario4 };
-for (const [n, fn] of Object.entries(all)) if (!only || only === Number(n)) await fn();
+const all = { 1: scenario1, 2: scenario2, 3: scenario3, 4: scenario4, 5: scenario5 };
+// Each scenario holds a machine-wide lane slot for its whole life (session +
+// clearbot cycles + cleanup). Scenarios were already sequential WITH EACH
+// OTHER; the slot is what stops a proof run from overlapping the slice-runner
+// or any other automated launch — the concurrent-stream jam behind the
+// econnreset bursts. The NOTE the lane logs while waiting says who holds it.
+for (const [n, fn] of Object.entries(all))
+  if (!only || only === Number(n))
+    await withLaunchSlot(`e2e:scenario${n}`, fn, { ttlMs: 25 * 60 * 1000, onLog: (l) => console.log(`    ${l}`) });
 
 console.log(`\n${results.filter((r) => r.pass).length}/${results.length} scenarios passed`);
 process.exit(results.some((r) => !r.pass) ? 1 : 0);

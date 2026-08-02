@@ -9,6 +9,7 @@
 
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { withLaunchSlot, retryTransport } from "../hooks/lane.mjs";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync,
   renameSync, statSync, unlinkSync, writeFileSync,
@@ -16,10 +17,15 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = dirname(fileURLToPath(import.meta.url));
+const HERE = dirname(fileURLToPath(import.meta.url));
+// ACC_RUNNER_ROOT redirects logs/alerts/stop/jobs at a throwaway tree, same
+// discipline as ACC_ROOT elsewhere (route.test.mjs, lane.test.mjs): so
+// runner.test.mjs can drive real runLoop decisions without writing into the
+// live runner/logs a real board depends on.
+const ROOT = process.env.ACC_RUNNER_ROOT ? resolve(process.env.ACC_RUNNER_ROOT) : HERE;
 const LOG_CAP = 1024 * 1024;
 
-function loadJob(name) {
+export function loadJob(name) {
   const path = name.endsWith(".json") ? resolve(name) : join(ROOT, "jobs", name + ".json");
   const job = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
   for (const key of ["name", "workdir", "bootstrap", "statusFile", "doneMarker"]) {
@@ -28,7 +34,7 @@ function loadJob(name) {
   return { maxStuck: 3, maxRuns: 100, runTimeoutMin: 180, ...job };
 }
 
-function log(job, line) {
+export function log(job, line) {
   mkdirSync(join(ROOT, "logs"), { recursive: true });
   const file = join(ROOT, "logs", job.name + ".log");
   if (existsSync(file) && statSync(file).size >= LOG_CAP) renameSync(file, file + ".1");
@@ -37,14 +43,14 @@ function log(job, line) {
   console.log(stamped);
 }
 
-function alert(job, reason) {
+export function alert(job, reason) {
   mkdirSync(join(ROOT, "alerts"), { recursive: true });
   const file = join(ROOT, "alerts", `${job.name}-${Date.now()}.txt`);
   writeFileSync(file, reason + "\n");
   log(job, `ALERT: ${reason} (${file})`);
 }
 
-function boardState(job) {
+export function boardState(job) {
   const file = join(job.workdir, job.statusFile);
   const text = existsSync(file) ? readFileSync(file, "utf8") : "";
   return {
@@ -53,7 +59,38 @@ function boardState(job) {
   };
 }
 
-function runClaudeOnce(job) {
+// shell:true interposes /bin/sh (POSIX) or cmd.exe (Windows) between us and
+// the real claude process. A plain child.kill() only signals that WRAPPER —
+// a documented Node child_process gotcha — and the real claude process is
+// left ORPHANED, still running, still holding its API stream. Found
+// 2026-08-01 proving the timeout path in runner.test.mjs: a "killed" run's
+// close event fired only after the full hang duration, not the timeout,
+// because the orphan kept the stdio pipes open. This is not cosmetic: an
+// orphan that outlives the lane slot that was supposed to gate it (see
+// hooks/lane.mjs) is exactly the kind of invisible extra stream that
+// contributes to the account-wide concurrency jam this whole change exists
+// to close. `detached: true` on POSIX makes the spawned shell the leader of
+// its OWN process group (verified: signaling -pid kills the group in ~10ms
+// with zero orphan, vs 8s+ orphaned with a plain child.kill()); Windows has
+// no process-group equivalent here, so `taskkill /t` walks the PID tree
+// instead. Split into two named, independently callable functions (rather
+// than one function with an internal platform if/else) so a suite running on
+// EITHER platform can exercise both branches directly — a single real OS can
+// only prove one of these by actually killing something; the other is proven
+// by asserting the command it would issue. `platform`/`exec` are injected for
+// exactly that reason; the real call site always uses the live OS default.
+export function killTreeWin32(child, exec = execFileSync) {
+  try { exec("taskkill", ["/pid", String(child.pid), "/t", "/f"]); } catch {}
+}
+export function killTreePosix(child) {
+  try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill(); } catch {} }
+}
+export function killTree(child, platform = process.platform) {
+  if (platform === "win32") killTreeWin32(child);
+  else killTreePosix(child);
+}
+
+export function runClaudeOnce(job) {
   return new Promise((resolveRun) => {
     // Deliberately NOT --bare: each session must keep the user's hook stack —
     // guard.mjs is the safety layer that makes bypassPermissions acceptable.
@@ -68,20 +105,29 @@ function runClaudeOnce(job) {
     ];
     const child = spawn("claude", args, {
       cwd: job.workdir, shell: true, stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32", // see killTree
       // runTimeoutMin owns the clock; never let the 600s print-mode
       // background-wait ceiling kill a session mid-task (lost run 2).
       // ACC_PTY must not leak: a runner child that inherited it would
       // masquerade as the embedded session and route clearbot's pipe writes
-      // into the wrong terminal.
-      env: { ...process.env, ACC_PTY: "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1" },
+      // into the wrong terminal. NODE_V8_COVERAGE must not leak either: this
+      // spawn is a hard `killTree` target on timeout (taskkill /t /f on
+      // Windows, SIGTERM on the process group on POSIX), and a coverage-
+      // instrumented child killed mid-write leaves a truncated raw-profile
+      // JSON fragment that corrupts an ancestor's coverage report generation
+      // (found 2026-08-02 via runner.test.mjs's own "hang" fixture — a real
+      // node process under `node hooks/covgate.mjs` — not that claude itself
+      // is ever coverage-instrumented, but the fake stub runner.test.mjs
+      // spawns through this exact path is).
+      env: { ...process.env, ACC_PTY: "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined },
     });
     child.stdin.write(job.bootstrap);
     child.stdin.end();
     let out = "";
     let err = "";
     const timer = setTimeout(() => {
-      log(job, `run timed out after ${job.runTimeoutMin} min — killing`);
-      child.kill();
+      log(job, `run timed out after ${job.runTimeoutMin} min — killing (tree)`);
+      killTree(child);
     }, job.runTimeoutMin * 60 * 1000);
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
@@ -98,9 +144,22 @@ function runClaudeOnce(job) {
   });
 }
 
-async function runLoop(job, once) {
+// The laned, retried real launch. Split out from runLoop so a test can inject
+// a different `run` (below) without touching the lane wiring itself — that
+// wiring has its own coverage in hooks/lane.test.mjs; here it only needs
+// proving that runner.mjs actually calls it correctly (runner.test.mjs's
+// "integration" group, against a fake claude binary).
+export function runOnce(job) {
+  return withLaunchSlot(
+    `runner:${job.name}`,
+    () => retryTransport(`runner:${job.name}`, () => runClaudeOnce(job), { onLog: (l) => log(job, l) }),
+    { ttlMs: (job.runTimeoutMin + 10) * 60 * 1000, onLog: (l) => log(job, l) }
+  );
+}
+
+export async function runLoop(job, once, { run = runOnce } = {}) {
   let stuck = 0;
-  for (let run = 1; run <= job.maxRuns; run++) {
+  for (let n = 1; n <= job.maxRuns; n++) {
     const stopFile = join(ROOT, "stop", job.name + ".stop");
     if (existsSync(stopFile)) {
       unlinkSync(stopFile);
@@ -112,9 +171,13 @@ async function runLoop(job, once) {
       log(job, `done marker "${job.doneMarker}" present — queue complete`);
       return 0;
     }
-    log(job, `run ${run}/${job.maxRuns} starting (stuck ${stuck}/${job.maxStuck})`);
-    const { code, result, err } = await runClaudeOnce(job);
-    log(job, `run ${run} exited ${code}; tail: ${result.slice(-400).replaceAll("\n", " | ")}`);
+    log(job, `run ${n}/${job.maxRuns} starting (stuck ${stuck}/${job.maxStuck})`);
+    // Every run goes through the machine-wide launch lane (hooks/lane.mjs):
+    // one automated session at a time across runner + e2e, paced starts, and
+    // transport-only retries — the econnreset class dies here, and a session
+    // that fails for a REAL reason still fails exactly as before.
+    const { code, result, err } = await run(job);
+    log(job, `run ${n} exited ${code}; tail: ${result.slice(-400).replaceAll("\n", " | ")}`);
     if (err) log(job, `stderr tail: ${err.replaceAll("\n", " | ")}`);
     const after = boardState(job);
     if (after.done) {
@@ -132,13 +195,17 @@ async function runLoop(job, once) {
   return 3;
 }
 
-function install(job) {
+// `exec` is injectable so runner.test.mjs can assert the schtasks command
+// this builds without schtasks needing to exist (it does not, on the
+// sandbox this suite also runs in) — the real CLI path always uses the
+// default, unchanged from before.
+export function install(job, exec = execFileSync) {
   const s = job.schedule;
   if (!s || s.type !== "daily" || !s.time) {
     throw new Error('install needs job.schedule = {"type":"daily","time":"HH:MM"}');
   }
   const tr = `node ${join(ROOT, "runner.mjs")} ${job.name}`;
-  execFileSync(
+  exec(
     "schtasks",
     ["/Create", "/F", "/TN", `guards-runner-${job.name}`, "/TR", tr, "/SC", "DAILY", "/ST", s.time],
     { stdio: "inherit" },
@@ -146,7 +213,7 @@ function install(job) {
   console.log(`installed daily task guards-runner-${job.name} at ${s.time}`);
 }
 
-function status(job) {
+export function status(job) {
   const file = join(ROOT, "logs", job.name + ".log");
   console.log(
     existsSync(file) ? readFileSync(file, "utf8").split("\n").slice(-15).join("\n") : "no log yet",
@@ -158,12 +225,22 @@ function status(job) {
   }
 }
 
-const [name, flag] = process.argv.slice(2);
-if (!name) {
-  console.error("usage: node runner.mjs <job> [--once|--install|--status]");
-  process.exit(1);
+// Returns an exit code rather than calling process.exit itself, so it is
+// safe to call in-process from a test (a real process.exit would kill the
+// test runner) — the ONLY process.exit call is the single guarded line
+// below, which subprocess CLI tests still exercise for real.
+export async function cli(argv = process.argv.slice(2)) {
+  const [name, flag] = argv;
+  if (!name) {
+    console.error("usage: node runner.mjs <job> [--once|--install|--status]");
+    return 1;
+  }
+  const job = loadJob(name);
+  if (flag === "--install") { install(job); return 0; }
+  if (flag === "--status") { status(job); return 0; }
+  return await runLoop(job, flag === "--once");
 }
-const job = loadJob(name);
-if (flag === "--install") install(job);
-else if (flag === "--status") status(job);
-else process.exit(await runLoop(job, flag === "--once"));
+// Guarded so the file is importable by runner.test.mjs without running the
+// CLI on import — the same shape hooks/testplan.mjs and hooks/covgate.mjs
+// already use.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(await cli());

@@ -232,7 +232,114 @@ line under `## Resolved`.
   console windows; if one appears, its parent chain names the spawner and
   this entry gets the real fix.
 
+## OI-014 killTree's Windows branch (taskkill /t) is unverified
+- opened: 2026-08-01
+- where: runner/runner.mjs killTreeWin32
+- what: runClaudeOnce's timeout used to orphan the real claude process on a
+  hang — `child.kill()` under `shell:true` only signals the intermediate
+  shell, not the process it wraps (verified: an 8s+ orphan on POSIX with the
+  old code, ~10ms clean kill with the fix). The POSIX fix (process-group
+  SIGTERM) is proven for real by runner.test.mjs on this sandbox. The
+  Windows fix (`taskkill /pid <pid> /t /f`) is proven only structurally — an
+  injected-exec test confirms runner.mjs ISSUES that exact command, but no
+  POSIX sandbox can confirm taskkill actually kills the tree the way the
+  POSIX test confirms process-group SIGTERM does.
+- why open: needs a real Windows run to close, which this environment cannot
+  produce.
+- done when: Kyle (or a Windows CI run) reproduces the same proof the POSIX
+  test already gives — spawn a real hung `claude -p` (or a stand-in), let
+  runner.mjs's timeout fire, and confirm no orphaned claude.exe survives it.
+
+## OI-015 guards-gui.ps1 interactive-lane wiring is unverified — this sandbox has no PowerShell at all
+- opened: 2026-08-01
+- where: guards-gui.ps1 (Invoke-LaneCli/Enter-InteractiveLane/Complete-
+  InteractiveLaneHandoff/Exit-InteractiveLane, Start-PtySession, the legacy
+  cmd /k branch of btnStartWork.Add_Click, Stop-PtySession)
+- what: Kyle hit an API error INSIDE an interactive session even after the
+  2026-08-01 lane.mjs hardening, because that first pass only ever wrapped
+  AUTOMATED headless launches (runner.mjs, e2e) — guards-gui.ps1's Go button
+  and Terminal-tab launches spawned `claude` with zero coordination, so an
+  interactive launch could still stack concurrently with automation or
+  another manual terminal. Fix: a second, isolated "interactive" lane
+  category (hooks/lane.mjs, tested — 44/44 lane.test.mjs, including category
+  isolation, full-jitter backoff, 529-specific base delay, and circuit-
+  breaker trip/warn/reset, all green) plus a two-step reserve/reown/release
+  handshake wired into guards-gui.ps1 around every claude spawn path.
+  lane.mjs's own logic is proven; the PowerShell side is not — this sandbox
+  has no `powershell`/`pwsh` binary at all (confirmed: pre-existing fast-tier
+  tests that shell out to powershell fail with `spawnSync powershell ENOENT`,
+  unrelated to this change), so nothing here could exercise Enter-
+  InteractiveLane/Complete-InteractiveLaneHandoff/Exit-InteractiveLane, the
+  busy-refusal MessageBox, or the Process.Exited release path against a real
+  interpreter. Brace/paren/bracket counts were checked as a crude sanity
+  pass only (braces and brackets balanced exactly; the file's pre-existing
+  2-paren "imbalance" is unchanged from HEAD, i.e. literal parens inside
+  comments/strings, not a real defect) — that is not a substitute for
+  running it.
+- why open: needs Kyle's own machine to run PowerShell at all.
+- done when: a real smoke run on Windows — press Go once with automation
+  idle (normal launch, no MessageBox), press Go a second time while the
+  first is still running (must show the busy MessageBox and refuse, not
+  stack a second claude), and confirm the interactive slot directory
+  (`%TEMP%\acc-lane\interactive\slot-0`) is gone within a few seconds of
+  closing the session either way (Stop button and natural exit both). Per
+  this repo's own doctrine (ACC-HANDOFF.md "-SmokeTest cannot see layout" —
+  same principle applies to any GUI behavior change): screenshot or narrate
+  what actually happened, don't just eyeball the diff.
+- partial evidence (2026-08-02): `powershell -File guards-gui.ps1 -SmokeTest`
+  now runs clean end to end (`SMOKE OK ...`, exit 0) on real Windows for the
+  first time — the form builds, every tab evaluates, nothing throws. That
+  only proves the code loads; it does NOT exercise Enter-InteractiveLane/
+  Complete-InteractiveLaneHandoff/Exit-InteractiveLane, the busy-refusal
+  MessageBox, or the Process.Exited release path, all of which need the GUI
+  actually visible and a real double-Go-press. Still open — needs Kyle.
+
 ## Resolved
+
+## OI-016 [RESOLVED 2026-08-02] Kyle's own manual terminals (outside the GUI) remain completely unlaned
+- opened: 2026-08-01, resolved: 2026-08-02
+- decision: not shimming `claude` on PATH right now. A machine-wide shim is
+  materially bigger and riskier than the interactive-lane wiring it would
+  sit next to (real risk of breaking Kyle's own everyday `claude` calls if
+  buggy) and deserves its own design pass, not a bolt-on. Revisit if manual-
+  terminal/automation overlap is ever observed to cause a real incident.
+
+## OI-017 [RESOLVED 2026-08-02] node's own coverage merge under-reports hooks/lane.mjs branches when the full fast tier runs together
+- opened: 2026-08-02, resolved: 2026-08-02
+- resolution: confirmed a genuine node.js v24.18.0 `--experimental-test-
+  coverage` limitation (full bisection trail: not a race — reproduced
+  identically under `--test-concurrency=1`; not PID-reuse collisions —
+  checked, zero across 72 raw files; not env leakage — reproduced with a
+  file that spawns zero subprocesses; IS tied to total file/process count
+  per invocation, 4 of 10 files measures correctly, 5+ degrades hooks/
+  lane.mjs specifically). An attempted from-scratch fix (batch the ten files,
+  merge the lcov ourselves) made it WORSE — node's own per-process branch
+  numbering isn't stable across separately compiled processes, so a key-based
+  merge inflated lane.mjs's true 141 branches to 203 — and was reverted. True
+  isolated coverage is 91.87%, comfortably clearing the 90% floor's own
+  design intent. Per Kyle's decision, `policy.json tests.branchFloorOverrides`
+  now carries a documented `"hooks/lane.mjs": 85` override (covgate.mjs's
+  `floors(file)` reads it), citing this entry. `node hooks/covgate.mjs`
+  passes clean.
+
+## OI-013 [RESOLVED 2026-08-01] runner.mjs had no fast-tier suite; covgate held it at 0%
+- opened: 2026-08-01, resolved: 2026-08-01
+- where: runner/runner.mjs, hooks/covgate.mjs
+- what: the coverage gate holds every CHANGED lib file to the policy floors
+  (lines/funcs 100, branches 90), and the lane wiring touched runner.mjs —
+  which predated the doctrine and had no unit suite, so covgate read 0%.
+- resolution: runner/runner.test.mjs (39 tests) covers loadJob, boardState,
+  runLoop's full decision table via an injected `run`, install/status, and a
+  real spawn+stdin+lane+retry+kill integration path against a fake `claude`
+  binary on PATH (POSIX shebang + Windows .cmd shim, one shared impl).
+  `node hooks/covgate.mjs` now genuinely PASSES on all four files this slice
+  changed (lane.mjs, testplan.mjs, covgate.mjs, runner.mjs — lines 100%,
+  funcs 100%, branches 90.2-100%), verified 3x for flakiness. Building the
+  suite surfaced two real bugs the coverage floor forced fixes for, not just
+  tests: the orphan-on-timeout bug above (OI-014), and two structurally dead
+  branches in retryTransport (a trailing `return` and a loop condition that
+  could never evaluate false) — both removed rather than tested around,
+  since a passing test for unreachable code proves nothing.
 
 - 2026-07-31 pty-transport liveness must never be `\\.\pipe\` enumeration:
   `Get-TermPipe` (watcher/clearbot.ps1) gated transport choice on

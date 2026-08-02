@@ -19,6 +19,14 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STATUSLINE = path.join(HERE, "statusline.mjs");
 
+// See budget.test.mjs's matching comment: this file spawns statusline.mjs as
+// a child process per test with an env spread that would otherwise carry a
+// live NODE_V8_COVERAGE straight through, and statusline.mjs is not itself
+// gated this session, so none of that incidental coverage is wanted — its
+// volume measurably degrades an unrelated gated file's merged branch
+// coverage when many such spawns share one coverage run (found 2026-08-02).
+delete process.env.NODE_V8_COVERAGE;
+
 const BASE_POLICY = {
   context: { softK: 40, hardK: 50 },
   week: { amberTokens: 0, redTokens: 0, effectiveFrom: "" },

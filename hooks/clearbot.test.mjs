@@ -21,6 +21,18 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 
+// Every powershell/cmd child this suite spawns below inherits process.env
+// unmodified (none pass an explicit `env:`), and clearbot.ps1 itself shells
+// out to `node hooks/goal.mjs` / `usage.mjs` / `engine.mjs` repeatedly per
+// -Once pass — so under `node hooks/covgate.mjs` (coverage-instrumented),
+// every one of those nested node invocations would inherit and dump into
+// the real run's live NODE_V8_COVERAGE directory WHILE it is still being
+// read/merged, corrupting its report generation (found 2026-08-02: "Warning:
+// Could not report code coverage. SyntaxError: Unexpected end of JSON
+// input" on an otherwise fully green fast tier — see covgate.mjs's own
+// matching fix for the mechanism). Cleared once here, not at each spawn.
+delete process.env.NODE_V8_COVERAGE;
+
 // clearbot resolves its tree from its own location ($Root = parent of the
 // script), so the sandbox gets a COPY of the watcher scripts and the only state
 // it can reach is the throwaway one.

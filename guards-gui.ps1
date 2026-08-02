@@ -71,6 +71,73 @@ function ConvertFrom-JsonArray([string]$Json) { # PS 5.1: '[]' parses to $null, 
     return @($parsed)
 }
 
+# ---------- interactive lane (hooks/lane.mjs, hardened 2026-08-01) ----------
+# guards-gui.ps1's Go button and Terminal-tab launches used to spawn `claude`
+# with zero coordination — the OTHER lane (hooks/lane.mjs) only ever wrapped
+# runner.mjs/e2e's automated launches. That gap is exactly what let an
+# interactive session stack concurrently with automation (or another manual
+# terminal) and die in transport. This wraps every GUI-initiated claude spawn
+# in its own "interactive" lane category — isolated from automation's, so
+# pressing Go never queues behind a long runner job — capped against ITSELF
+# (a second GUI-launched session waits, same as the existing "already
+# running?" prompt already implies), and visible to the shared circuit
+# breaker (warns, never blocks — a human who clicked Go should not queue).
+#
+# Two-step handshake because the real child pid isn't known until AFTER
+# spawn: reserve under our own $PID first (Enter-InteractiveLane), then hand
+# the slot to the real claude/PtyHost pid once we have it
+# (Complete-InteractiveLaneHandoff) — the slot then frees itself if that
+# process dies even if Exit-InteractiveLane is never reached (e.g. a crash).
+# Every call is best-effort and fails OPEN: if node or lane.mjs itself is
+# broken, that must never be why Kyle can't launch a session — it only means
+# this one layer of protection didn't apply for that launch.
+$script:LaneCli = Join-Path $Root 'hooks\lane.mjs'
+$script:LaneSlot = $null
+
+function Invoke-LaneCli {
+    param([string[]]$LaneArgs)
+    try {
+        $quoted = @('"' + $script:LaneCli + '"') + ($LaneArgs | ForEach-Object { '"' + ($_ -replace '"', '') + '"' })
+        $r = Invoke-Proc -FileName 'node' -Arguments ($quoted -join ' ')
+        if (-not $r.Out) { return $null }
+        return $r.Out.Trim() | ConvertFrom-Json
+    } catch {
+        Write-Host "lane: CLI call failed ($($_.Exception.Message)) - proceeding without lane coordination for this launch."
+        return $null
+    }
+}
+
+# Reserves the interactive slot under our own process id (a placeholder — the
+# GUI host outlives any one session) and returns the slot index, or $null if
+# the tooling errored (fail-open) or the slot is genuinely busy (returns
+# $null too, but with a status message set for the caller to show).
+function Enter-InteractiveLane {
+    param([ref]$BusyMessage)
+    $r = Invoke-LaneCli -LaneArgs @('try-acquire', 'interactive', 'gui-go', "$PID", '3600000')
+    if ($null -eq $r) { return $null } # tooling unavailable - fail open, no coordination this launch
+    if (-not $r.ok) {
+        $held = @($r.held) | ForEach-Object { "$($_.label) (pid $($_.pid))" }
+        $BusyMessage.Value = "Another interactive claude launch is already using the lane: $($held -join ', '). Close it first, or wait for it to finish."
+        return $null
+    }
+    return $r.slot
+}
+
+# Hands the reserved slot to the real child pid so it frees itself when THAT
+# process exits, not when the GUI does. Silently no-ops if slot is $null
+# (lane bypassed for this launch) — never throws into the spawn path.
+function Complete-InteractiveLaneHandoff {
+    param([int]$Slot, [int]$ChildPid)
+    if ($null -eq $Slot) { return }
+    Invoke-LaneCli -LaneArgs @('reown', 'interactive', "$Slot", "$ChildPid") | Out-Null
+}
+
+function Exit-InteractiveLane {
+    param([int]$Slot)
+    if ($null -eq $Slot) { return }
+    Invoke-LaneCli -LaneArgs @('release', 'interactive', "$Slot") | Out-Null
+}
+
 # ---------- form ----------
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Agentic Command Center'
@@ -1000,48 +1067,25 @@ $btnStartWork.Add_Click({
             # Embedded launch: ACC owns the terminal (ConPTY + xterm.js), so
             # clearbot drives the session over the pty pipe - guaranteed Enter,
             # no keystroke injection.
-            if ($script:pty) {
-                $a = [System.Windows.Forms.MessageBox]::Show(
-                    'A session is already running in the Terminal tab. Stop it and start the new one?',
-                    'Guards', [System.Windows.Forms.MessageBoxButtons]::YesNo)
-                if ($a -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-                $script:pty.Dispose(); $script:pty = $null
-            }
-            $pipeName = 'acc-term-' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
-            $claude = (Get-Command claude -ErrorAction Stop).Source
-            $cmdline = if ($claude -match '\.(cmd|bat)$') { 'cmd.exe /c "' + $claude + '"' } else { '"' + $claude + '"' }
-            # Acc.PtyHost spawns via CreateProcessW, which inherits OUR env:
-            # set, spawn, restore. SessionStart reads ACC_GOAL to bind the goal
-            # and ACC_PTY to record transport:"pty" + the pipe name.
-            $env:ACC_GOAL = $goal.id; $env:ACC_PROFILE = $name; $env:ACC_PTY = $pipeName
-            try {
-                $script:pty = New-Object Acc.PtyHost
-                $script:pty.Start($cmdline, $dir, [int16]$script:termCols, [int16]$script:termRows, $form,
-                    [Action[string]]{ param($b64)
-                        if ($script:wv.CoreWebView2) {
-                            $script:wv.CoreWebView2.PostWebMessageAsJson('{"type":"out","data":"' + $b64 + '"}')
-                        }
-                    },
-                    [Action]{
-                        if ($script:wv.CoreWebView2) { $script:wv.CoreWebView2.PostWebMessageAsJson('{"type":"exit"}') }
-                        $script:pty = $null
-                    })
-                $script:pty.ServePipe($pipeName)
-                # Watchdog: confirm SessionStart actually bound this spawn.
-                $script:bindPipe = $pipeName
-                $script:bindDeadline = [DateTime]::UtcNow.AddSeconds(120)
-                $script:bindTimer.Start()
-                # The terminal lives on the advanced tab strip; make it visible.
-                if (-not $chkAdv.Checked) { $chkAdv.Checked = $true }
-                $tabControl.SelectedTab = $tabTerm
-            } finally {
-                Remove-Item Env:ACC_GOAL, Env:ACC_PROFILE, Env:ACC_PTY -ErrorAction SilentlyContinue
-            }
+            if (-not (Start-PtySession -GoalId $goal.id -ProfileName $name -Dir $dir)) { return }
         } else {
             # Legacy launch (no WebView2 runtime / embedded terminal unavailable).
             # UseShellExecute=$false is REQUIRED to pass ACC_PROFILE to the child.
             # cmd /k keeps the window open if 'claude' is not on PATH, so a failure
             # is visible to the user instead of a window that blinks and vanishes.
+            #
+            # Same interactive-lane reservation as Start-PtySession (2026-08-01
+            # hardening): reserve under our own $PID, spawn, reown to the real
+            # cmd.exe pid, release when it exits. This path has no ConPTY exit
+            # callback to hook, so the release is wired to Process.Exited instead
+            # — $script:LegacyLaneProc keeps the Process object (and its event
+            # registration) alive past this click handler's own scope.
+            $busyMsg = [ref]''
+            $script:LegacyLaneSlot = Enter-InteractiveLane -BusyMessage $busyMsg
+            if ($null -eq $script:LegacyLaneSlot -and $busyMsg.Value) {
+                [System.Windows.Forms.MessageBox]::Show($busyMsg.Value, 'Guards') | Out-Null
+                return
+            }
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = 'cmd.exe'
             $psi.Arguments = '/k claude'
@@ -1052,7 +1096,17 @@ $btnStartWork.Add_Click({
             # SessionStart reads this, binds the goal to that console, and injects the
             # text. It is the reason the work survives every later /clear.
             $psi.EnvironmentVariables['ACC_GOAL'] = $goal.id
-            [void][System.Diagnostics.Process]::Start($psi)
+            try {
+                $p = [System.Diagnostics.Process]::Start($psi)
+                Complete-InteractiveLaneHandoff -Slot $script:LegacyLaneSlot -ChildPid $p.Id
+                $slotToFree = $script:LegacyLaneSlot
+                $p.EnableRaisingEvents = $true
+                $p.add_Exited({ Exit-InteractiveLane $slotToFree }.GetNewClosure())
+                $script:LegacyLaneProc = $p
+            } catch {
+                if ($null -ne $script:LegacyLaneSlot) { Exit-InteractiveLane $script:LegacyLaneSlot }
+                throw
+            }
         }
         $script:GoalId = $goal.id
         $lblStartOut.ForeColor = [System.Drawing.Color]::FromArgb(20, 90, 40)
@@ -1072,10 +1126,119 @@ $tabTerm = New-Object System.Windows.Forms.TabPage
 $tabTerm.Text = 'Terminal'
 $script:wv = $null
 $script:termCols = 120; $script:termRows = 30
+$script:lastStart = $null
+$script:bindState = 'waiting'
 if ($script:TermOk) {
+    # ---- control deck (spec 2026-07-31: control-deck design) ----
+    # Docked Top, above the WebView2 terminal. Three rows, added in reverse
+    # dock order (WinForms lays out the LAST-added Top control FIRST, i.e.
+    # nearest the top edge): strip added first ends up lowest, banner middle,
+    # status label highest - so the visual order top->bottom is status,
+    # banner, strip.
+    $deck = New-Object System.Windows.Forms.Panel
+    $deck.Dock = 'Top'; $deck.Height = 112
+
+    $lblTermStatus = New-Object System.Windows.Forms.Label
+    $lblTermStatus.Dock = 'Top'; $lblTermStatus.Height = 34
+    $lblTermStatus.Padding = New-Object System.Windows.Forms.Padding(8, 4, 8, 0)
+    $lblTermStatus.Text = 'No session - press Start.'
+
+    # The takeover control. Its text/color IS the automation state - no
+    # separate indicator to fall out of sync with.
+    $btnBanner = New-Object System.Windows.Forms.Button
+    $btnBanner.Dock = 'Top'; $btnBanner.Height = 42
+    $btnBanner.FlatStyle = 'Flat'
+    $btnBanner.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+
+    $strip = New-Object System.Windows.Forms.FlowLayoutPanel
+    $strip.Dock = 'Top'; $strip.Height = 36
+    $strip.Padding = New-Object System.Windows.Forms.Padding(4, 2, 4, 2)
+
+    function New-DeckButton([string]$Text, [scriptblock]$OnClick) {
+        $b = New-Object System.Windows.Forms.Button
+        $b.Text = $Text; $b.AutoSize = $true; $b.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)
+        $b.Add_Click($OnClick)
+        $strip.Controls.Add($b)
+        return $b
+    }
+
+    # Buttons write straight into the pty - same process, no pipe round trip.
+    function Send-TermBytes([string]$s) {
+        try { if ($script:pty) { $script:pty.WriteText($s) } }
+        catch { $lblTermStatus.Text = 'write failed: ' + $_.Exception.Message }
+    }
+    # Slash commands use the transport's proven shape: Esc, text, a beat, then
+    # a lone CR - a CR glued to the text reads as a paste and the Enter is
+    # absorbed (the bug the pty transport exists to avoid).
+    function Send-TermSlash([string]$cmd) {
+        try {
+            if (-not $script:pty) { return }
+            $script:pty.WriteText([string][char]27); Start-Sleep -Milliseconds 80
+            $script:pty.WriteText($cmd);            Start-Sleep -Milliseconds 80
+            $script:pty.WriteText("`r")
+        } catch { $lblTermStatus.Text = 'write failed: ' + $_.Exception.Message }
+    }
+
+    $btnTermEsc   = New-DeckButton 'Esc'      { Send-TermBytes ([string][char]27) }
+    $btnTermCtlC  = New-DeckButton 'Ctrl+C'   { Send-TermBytes ([string][char]3) }
+    $btnTermEnter = New-DeckButton 'Enter'    { Send-TermBytes "`r" }
+    $btnTermClear = New-DeckButton '/clear'   { Send-TermSlash '/clear' }
+    $btnTermCpct  = New-DeckButton '/compact' { Send-TermSlash '/compact' }
+    $btnTermStart = New-DeckButton 'Start'    {
+        if ($script:lastStart) {
+            [void](Start-PtySession -GoalId $script:lastStart.goal -ProfileName $script:lastStart.profile -Dir $script:lastStart.dir)
+        }
+    }
+    $btnTermStop  = New-DeckButton 'Stop'     {
+        $a = [System.Windows.Forms.MessageBox]::Show('Stop the running Claude session?', 'Guards',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo)
+        if ($a -eq [System.Windows.Forms.DialogResult]::Yes) { Stop-PtySession }
+    }
+
+    function Get-PausePath {
+        if ($script:bindPipe) { return Join-Path $PSScriptRoot ("runner\state\" + $script:bindPipe + ".pause") }
+        return $null
+    }
+    function Update-Deck {
+        $running = [bool]$script:pty
+        foreach ($b in @($btnTermEsc, $btnTermCtlC, $btnTermEnter, $btnTermClear, $btnTermCpct, $btnTermStop)) { $b.Enabled = $running }
+        $btnTermStart.Enabled = (-not $running) -and [bool]$script:lastStart
+        if (-not $running) {
+            $btnBanner.Enabled = $false
+            $btnBanner.Text = 'No session - press Start.'
+            $btnBanner.BackColor = [System.Drawing.Color]::Gainsboro
+            $btnBanner.ForeColor = [System.Drawing.Color]::DimGray
+            return
+        }
+        $btnBanner.Enabled = $true
+        $pp = Get-PausePath
+        if ($pp -and (Test-Path $pp)) {
+            $btnBanner.Text = 'PAUSED - you have control. Click to resume automation.'
+            $btnBanner.BackColor = [System.Drawing.Color]::FromArgb(255, 193, 7)
+            $btnBanner.ForeColor = [System.Drawing.Color]::Black
+        } else {
+            $btnBanner.Text = 'AUTO - ACC is driving. Click to take over.'
+            $btnBanner.BackColor = [System.Drawing.Color]::FromArgb(40, 140, 70)
+            $btnBanner.ForeColor = [System.Drawing.Color]::White
+        }
+    }
+    # State shown = state on disk, always: the toggle never flips optimistically.
+    $btnBanner.Add_Click({
+        $pp = Get-PausePath
+        if (-not $pp) { return }
+        try {
+            if (Test-Path $pp) { Remove-Item $pp -Force } else { New-Item -ItemType File -Path $pp -Force | Out-Null }
+        } catch { $lblTermStatus.Text = 'pause toggle failed: ' + $_.Exception.Message }
+        Update-Deck
+    })
+
+    $deck.Controls.Add($strip); $deck.Controls.Add($btnBanner); $deck.Controls.Add($lblTermStatus)
+    $tabTerm.Controls.Add($deck)
+
     $script:wv = New-Object Microsoft.Web.WebView2.WinForms.WebView2
     $script:wv.Dock = [System.Windows.Forms.DockStyle]::Fill
     $tabTerm.Controls.Add($script:wv)
+    $script:wv.BringToFront()
     $script:wv.add_CoreWebView2InitializationCompleted({
         if ($script:wv.CoreWebView2) {
             $script:wv.CoreWebView2.Navigate('file:///' + ((Join-Path $PSScriptRoot 'gui\term.html') -replace '\\', '/'))
@@ -1115,6 +1278,14 @@ if ($script:TermOk) {
         $script:wvEnvTask = [Microsoft.Web.WebView2.Core.CoreWebView2Environment]::CreateAsync($null, $udf, $null)
         $script:wvInitTimer.Start()
     })
+} else {
+    # No WebView2 runtime / embedded terminal unavailable: the deck has no pty
+    # to control, so it does not exist. Go still works via the legacy launch.
+    $lblNoTerm = New-Object System.Windows.Forms.Label
+    $lblNoTerm.Dock = 'Top'; $lblNoTerm.Height = 40
+    $lblNoTerm.Padding = New-Object System.Windows.Forms.Padding(8, 10, 8, 0)
+    $lblNoTerm.Text = 'Embedded terminal unavailable - using external console.'
+    $tabTerm.Controls.Add($lblNoTerm)
 }
 
 # Binding watchdog (completion gate): budget.mjs must write a transport:"pty"
@@ -1140,15 +1311,132 @@ $script:bindTimer.Add_Tick({
             $p = [int]$row.ParentProcessId
         }
         if ($bound) {
+            $script:bindState = 'OK'
             Write-Host ("pty binding OK: consolePid {0} descends from child {1}" -f $hit.consolePid, $anchor)
         } else {
+            $script:bindState = 'MISMATCH'
             Write-Host ("WARN pty binding MISMATCH: record consolePid {0} does not descend from pty child {1} - clearbot writes may target the wrong session" -f $hit.consolePid, $anchor)
         }
     } elseif ([DateTime]::UtcNow -gt $script:bindDeadline) {
         $script:bindTimer.Stop()
+        $script:bindState = 'TIMEOUT'
         Write-Host ("WARN pty binding TIMEOUT: no transport:pty window record for pipe {0} within 120s - SessionStart hook likely never fired" -f $script:bindPipe)
     }
 })
+
+# One spawn path for the Go button and the deck's Start button.
+function Start-PtySession([string]$GoalId, [string]$ProfileName, [string]$Dir) {
+    if ($script:pty) {
+        $a = [System.Windows.Forms.MessageBox]::Show(
+            'A session is already running in the Terminal tab. Stop it and start the new one?',
+            'Guards', [System.Windows.Forms.MessageBoxButtons]::YesNo)
+        if ($a -ne [System.Windows.Forms.DialogResult]::Yes) { return $false }
+        Stop-PtySession
+    }
+    # Reserve the interactive lane slot BEFORE spawning (2026-08-01 hardening
+    # — see the "interactive lane" section above). Busy means another
+    # GUI-launched session already holds it; refuse rather than stack a
+    # second concurrent claude API stream on top of it.
+    $busyMsg = [ref]''
+    $script:LaneSlot = Enter-InteractiveLane -BusyMessage $busyMsg
+    if ($null -eq $script:LaneSlot -and $busyMsg.Value) {
+        [System.Windows.Forms.MessageBox]::Show($busyMsg.Value, 'Guards') | Out-Null
+        return $false
+    }
+    $pipeName = 'acc-term-' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
+    $claude = (Get-Command claude -ErrorAction Stop).Source
+    $cmdline = if ($claude -match '\.(cmd|bat)$') { 'cmd.exe /c "' + $claude + '"' } else { '"' + $claude + '"' }
+    # Acc.PtyHost spawns via CreateProcessW, which inherits OUR env: set, spawn,
+    # restore. SessionStart reads ACC_GOAL to bind the goal and ACC_PTY to
+    # record transport:"pty" + the pipe name.
+    $env:ACC_GOAL = $GoalId; $env:ACC_PROFILE = $ProfileName; $env:ACC_PTY = $pipeName
+    try {
+        $script:pty = New-Object Acc.PtyHost
+        $script:pty.Start($cmdline, $Dir, [int16]$script:termCols, [int16]$script:termRows, $form,
+            [Action[string]]{ param($b64)
+                if ($script:wv.CoreWebView2) {
+                    $script:wv.CoreWebView2.PostWebMessageAsJson('{"type":"out","data":"' + $b64 + '"}')
+                }
+            },
+            [Action]{
+                if ($script:wv.CoreWebView2) { $script:wv.CoreWebView2.PostWebMessageAsJson('{"type":"exit"}') }
+                $doneBindPipe = $script:bindPipe
+                $script:pty = $null
+                # Free the interactive lane slot the moment the real claude
+                # process exits — null-guarded so Stop-PtySession's own
+                # release (if it runs first) never double-frees a slot some
+                # OTHER session has since taken.
+                if ($null -ne $script:LaneSlot) { Exit-InteractiveLane $script:LaneSlot; $script:LaneSlot = $null }
+                if ($doneBindPipe) {
+                    Remove-Item (Join-Path $PSScriptRoot ("runner\state\" + $doneBindPipe + ".pause")) -ErrorAction SilentlyContinue
+                }
+                if (Get-Command Update-Deck -ErrorAction SilentlyContinue) { Update-Deck }
+            })
+        # Now that PtyHost has actually spawned claude, hand the reserved
+        # slot to ITS pid — it now frees itself if that process dies even if
+        # neither exit path above ever runs.
+        Complete-InteractiveLaneHandoff -Slot $script:LaneSlot -ChildPid $script:pty.ChildPid
+        $script:pty.ServePipe($pipeName)
+        # Watchdog: confirm SessionStart actually bound this spawn.
+        $script:bindPipe = $pipeName
+        $script:bindState = 'waiting'
+        $script:bindDeadline = [DateTime]::UtcNow.AddSeconds(120)
+        $script:bindTimer.Start()
+        # The terminal lives on the advanced tab strip; make it visible.
+        if (-not $chkAdv.Checked) { $chkAdv.Checked = $true }
+        $tabControl.SelectedTab = $tabTerm
+    } catch {
+        # Spawn itself failed before any child pid existed to reown to — the
+        # slot is still held under our own placeholder pid; free it rather
+        # than leaking it for up to an hour (the placeholder ttl).
+        if ($null -ne $script:LaneSlot) { Exit-InteractiveLane $script:LaneSlot; $script:LaneSlot = $null }
+        throw
+    } finally {
+        Remove-Item Env:ACC_GOAL, Env:ACC_PROFILE, Env:ACC_PTY -ErrorAction SilentlyContinue
+    }
+    $script:lastStart = @{ goal = $GoalId; profile = $ProfileName; dir = $Dir }
+    if (Get-Command Update-Deck -ErrorAction SilentlyContinue) { Update-Deck }
+    return $true
+}
+
+# Dispose + pause-marker cleanup in one place: the Stop button, a restart
+# from Start-PtySession, and form close all funnel through here.
+function Stop-PtySession {
+    $p = $script:bindPipe
+    if ($script:pty) { $script:pty.Dispose(); $script:pty = $null }
+    if ($null -ne $script:LaneSlot) { Exit-InteractiveLane $script:LaneSlot; $script:LaneSlot = $null }
+    if ($p) { Remove-Item (Join-Path $PSScriptRoot ("runner\state\" + $p + ".pause")) -ErrorAction SilentlyContinue }
+    if (Get-Command Update-Deck -ErrorAction SilentlyContinue) { Update-Deck }
+}
+
+# Status strip refresh: goal id, transport/pipe/binding state, child pid,
+# running/exited, context band - read-only, no new writers.
+$script:deckTimer = New-Object System.Windows.Forms.Timer
+$script:deckTimer.Interval = 2000
+$script:deckTimer.Add_Tick({
+    if (-not (Get-Variable -Name lblTermStatus -Scope Script -ErrorAction SilentlyContinue)) { return }
+    if ($tabControl.SelectedTab -ne $tabTerm) { return }
+    $parts = @()
+    if ($script:GoalId) { $parts += ('goal ' + $script:GoalId) }
+    if ($script:pty) {
+        $parts += ('pty ' + $script:bindPipe + ' (' + $script:bindState + ')')
+        $parts += ('pid ' + $script:pty.ChildPid)
+        $parts += 'claude running'
+        foreach ($f in (Get-ChildItem -Path (Join-Path $PSScriptRoot 'runner\state') -Filter '*.window' -ErrorAction SilentlyContinue)) {
+            try { $w = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+            if ($w.pipe -eq $script:bindPipe) {
+                $band = Join-Path $PSScriptRoot ('runner\state\' + $f.BaseName + '.band')
+                if (Test-Path $band) {
+                    try { $parts += ('ctx band ' + ((Get-Content -Raw $band | ConvertFrom-Json).band)) } catch {}
+                }
+                break
+            }
+        }
+    } else { $parts += 'no session' }
+    $lblTermStatus.Text = ($parts -join '  |  ')
+    Update-Deck
+})
+$script:deckTimer.Start()
 
 # ---------- readability pass ----------
 # Section headers carry weight so the eye lands on structure first; only
@@ -1218,7 +1506,7 @@ $form.Add_FormClosing({
             'A Claude session is running in the Terminal tab and will be killed. Close anyway?',
             'Guards', [System.Windows.Forms.MessageBoxButtons]::YesNo)
         if ($a -ne [System.Windows.Forms.DialogResult]::Yes) { $e.Cancel = $true; return }
-        $script:pty.Dispose(); $script:pty = $null
+        Stop-PtySession
     }
 })
 

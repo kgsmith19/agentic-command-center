@@ -60,6 +60,7 @@ namespace Acc
         static extern uint WaitForSingleObject(IntPtr h, uint ms);
 
         const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+        const int STARTF_USESTDHANDLES = 0x00000100;
         static readonly IntPtr ATTR_PSEUDOCONSOLE = (IntPtr)0x20016;
 
         IntPtr _hPC = IntPtr.Zero, _hProcess = IntPtr.Zero, _attrList = IntPtr.Zero;
@@ -82,6 +83,14 @@ namespace Acc
 
             STARTUPINFOEX siex = new STARTUPINFOEX();
             siex.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+            // NULL std handles + USESTDHANDLES, deliberately: without this the
+            // child copies the HOST's std handle values (pipes, when the GUI or
+            // a test runner has redirected stdio), which are invalid in the
+            // child and make node/claude see a non-TTY stdin and refuse to run
+            // interactively ("--print requires input"). Forcing null makes a
+            // console-subsystem child open fresh handles from its attached
+            // console - the pseudoconsole.
+            siex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
             IntPtr lsize = IntPtr.Zero;
             InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref lsize);
             _attrList = Marshal.AllocHGlobal(lsize);

@@ -12,6 +12,13 @@ import os from "node:os";
 // every write lands in a throwaway tree. Live runner/state must never see
 // test files (OI-009: ~60 strays were mixed in with real session state).
 process.env.ACC_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "acc-route-test-"));
+// See budget.test.mjs's matching comment: fire()'s child processes below
+// inherit process.env, which would otherwise carry a live NODE_V8_COVERAGE
+// straight through, and route.mjs is not itself gated this session — that
+// incidental volume measurably degrades an unrelated gated file's merged
+// branch coverage when many such spawns share one coverage run (found
+// 2026-08-02).
+delete process.env.NODE_V8_COVERAGE;
 const { route, replayable, doctor } = await import("./route.mjs");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

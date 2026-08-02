@@ -563,7 +563,7 @@ Expected: previous count (79) + new tests, 0 fail.
 - Consumes: env var `ACC_PTY=<full pipe name>` set by the GUI (Task 6) on the spawned claude process.
 - Produces: `.window` record shape `{ ok:true, hwnd:0, consolePid:<claude pid>, transport:"pty", pipe:"<ACC_PTY value>", title:"acc-pty" }` — consumed by Task 3's `Get-TermPipe` and by goal binding (consolePid semantics unchanged: it is the persistent claude process, which survives `/clear`).
 
-- [ ] **Step 1: Write the failing test** (in `hooks/budget.test.mjs`, using its existing sandbox + SessionStart fixture pattern — read the neighboring tests and mirror them):
+- [x] **Step 1: Write the failing test** (in `hooks/budget.test.mjs`, using its existing sandbox + SessionStart fixture pattern — read the neighboring tests and mirror them):
 
 ```js
 test("SessionStart with ACC_PTY records a pty window bound to the parent pid", () => {
@@ -578,9 +578,9 @@ test("SessionStart with ACC_PTY records a pty window bound to the parent pid", (
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (`transport` undefined). Run: `node --test hooks/budget.test.mjs`
+- [x] **Step 2: Run — expect FAIL** (`transport` undefined). Run: `node --test hooks/budget.test.mjs`
 
-- [ ] **Step 3: Implement in `hooks/budget.mjs`** — where the window capture currently shells `winfind.ps1`, short-circuit first:
+- [x] **Step 3: Implement in `hooks/budget.mjs`** — where the window capture currently shells `winfind.ps1`, short-circuit first:
 
 ```js
 // An ACC-hosted pty session has no HWND to find: the GUI is the terminal.
@@ -596,11 +596,11 @@ if (process.env.ACC_PTY) {
 
 Keep every downstream consumer (goal binding by consolePid, queued prompts keyed by consolePid) untouched — the record shape is a superset.
 
-- [ ] **Step 4: Scrub inheritance in `runner/runner.mjs`** — wherever it builds the child env for spawned claude runs, add `delete env.ACC_PTY;` next to any existing ACC_* scrubbing. A runner child that inherited `ACC_PTY` would masquerade as the embedded session and route clearbot writes into the wrong terminal.
+- [x] **Step 4: Scrub inheritance in `runner/runner.mjs`** — wherever it builds the child env for spawned claude runs, add `delete env.ACC_PTY;` next to any existing ACC_* scrubbing. A runner child that inherited `ACC_PTY` would masquerade as the embedded session and route clearbot writes into the wrong terminal.
 
-- [ ] **Step 5: Run fast tier — all green** (same six-suite command). Also `node --test hooks/goal.test.mjs` alone to confirm goal binding is untouched.
+- [x] **Step 5: Run fast tier — all green** (same six-suite command). Also `node --test hooks/goal.test.mjs` alone to confirm goal binding is untouched.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add hooks/budget.mjs hooks/budget.test.mjs runner/runner.mjs
@@ -618,7 +618,7 @@ git commit -m "feat: pty sessions record transport+pipe in the window record; ru
 - Consumes: `gui/vendor/xterm/*` (Task 1); host messages via `window.chrome.webview` — receives `{type:"out", data:<b64>}` and `{type:"exit"}`.
 - Produces: posts `{type:"in", data:<b64 of UTF-8 keystrokes>}`, `{type:"resize", cols, rows}`, `{type:"ready"}` to the host (Task 6 handles them).
 
-- [ ] **Step 1: Write `gui/term.html`**
+- [x] **Step 1: Write `gui/term.html`**
 
 ```html
 <!doctype html>
@@ -686,14 +686,9 @@ git commit -m "feat: pty sessions record transport+pipe in the window record; ru
 </html>
 ```
 
-- [ ] **Step 2: Sanity-check standalone** — open in a plain browser where `chrome.webview` is undefined; it will throw on the first postMessage, so just verify the terminal *renders* (black page, blinking cursor) by temporarily guarding: this check is manual and quick — do not add permanent guards; inside WebView2 the bridge always exists.
+- [x] **Step 2: Sanity-check standalone** (deviated: browser extension refuses file:// — rendering is instead proven by Task 6 Step 5's WebView2 screenshot and Gate 4) — open in a plain browser where `chrome.webview` is undefined; it will throw on the first postMessage, so just verify the terminal *renders* (black page, blinking cursor) by temporarily guarding: this check is manual and quick — do not add permanent guards; inside WebView2 the bridge always exists.
 
-- [ ] **Step 3: Commit**
-
-```powershell
-git add gui/term.html
-git commit -m "feat: xterm.js terminal page for the ACC embedded terminal"
-```
+- [x] **Step 3: Commit** — `0d37245`
 
 ---
 
@@ -706,7 +701,7 @@ git commit -m "feat: xterm.js terminal page for the ACC embedded terminal"
 - Consumes: `Acc.PtyHost` (Task 2), `gui/term.html` (Task 5), vendored dlls (Task 1).
 - Produces: env `ACC_PTY=<pipe name>` + `ACC_GOAL`/`ACC_PROFILE` on the claude process (consumed by Task 4); a served pipe `acc-term-<12-hex>` (consumed by Task 3).
 
-- [ ] **Step 1: Startup loads (top of `guards-gui.ps1`, near existing Add-Types)**
+- [x] **Step 1: Startup loads (top of `guards-gui.ps1`, near existing Add-Types)**
 
 ```powershell
 # Embedded terminal (spec 2026-07-31). $script:TermOk gates the whole feature:
@@ -726,7 +721,7 @@ try {
 }
 ```
 
-- [ ] **Step 2: Terminal tab** — follow the file's existing tab-construction idiom (find how the 4 tabs are made and append a 5th):
+- [x] **Step 2: Terminal tab** — follow the file's existing tab-construction idiom (find how the 4 tabs are made and append a 5th):
 
 ```powershell
 $tabTerm = New-Object System.Windows.Forms.TabPage
@@ -761,7 +756,7 @@ $tabs.TabPages.Add($tabTerm)   # match the real container variable name in the f
 
 Match real variable names (`$tabs`, `$form`) to the file — read the surrounding code first.
 
-- [ ] **Step 3: Rewire Go** — replace the body of the `cmd /k claude` block (keep the goal-creation code above it intact):
+- [x] **Step 3: Rewire Go** — replace the body of the `cmd /k claude` block (keep the goal-creation code above it intact):
 
 ```powershell
 if ($script:TermOk -and $script:wv -and $script:wv.CoreWebView2) {
@@ -799,7 +794,7 @@ if ($script:TermOk -and $script:wv -and $script:wv.CoreWebView2) {
 }
 ```
 
-- [ ] **Step 3b: Binding watchdog — verify the spawn actually bound** (completion-gate requirement). The `.window` record is written by `hooks/budget.mjs` when claude's SessionStart hook fires — *not* by the GUI. If the hook never fires (claude died at startup, wrong cwd, hook error) or binds a different process, clearbot's pipe writes go nowhere and the goal loop silently stalls. After every pty spawn, watch for the record and verify it belongs to this spawn.
+- [x] **Step 3b: Binding watchdog — verify the spawn actually bound** (completion-gate requirement). The `.window` record is written by `hooks/budget.mjs` when claude's SessionStart hook fires — *not* by the GUI. If the hook never fires (claude died at startup, wrong cwd, hook error) or binds a different process, clearbot's pipe writes go nowhere and the goal loop silently stalls. After every pty spawn, watch for the record and verify it belongs to this spawn.
 
   **Caveat — the pid is NOT `ChildPid`:** the ConPTY child is `cmd.exe /c claude.cmd` (a shim), so `PtyHost.ChildPid` is cmd's pid, while the record's `consolePid` is the *claude node process* — a **descendant** of `ChildPid` (it is the hook's `process.ppid`, the process that survives `/clear`). Assert descent, not equality.
 
@@ -841,9 +836,9 @@ $script:bindTimer.Start()
 
   If the GUI has a log textbox/status area, route these three messages there instead of `Write-Host` — match the file's existing logging idiom. Objective check: covered end-to-end by E2E scenario 5 step 3 (record appears with the pipe name) and exercised live in Step 6's manual pass (expect the `pty binding OK` line).
 
-- [ ] **Step 4: Form close** — extend the existing close-confirm handler (pattern at ~line 829): if `$script:pty`, ask `'A Claude session is running in the Terminal tab and will be killed. Close anyway?'`; on Yes, `$script:pty.Dispose()`.
+- [x] **Step 4: Form close** — extend the existing close-confirm handler (pattern at ~line 829): if `$script:pty`, ask `'A Claude session is running in the Terminal tab and will be killed. Close anyway?'`; on Yes, `$script:pty.Dispose()`.
 
-- [ ] **Step 5: Smoke + screenshot**
+- [x] **Step 5: Smoke + screenshot**
 
 ```powershell
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
@@ -852,14 +847,9 @@ powershell -File C:/code/guards/watcher/screenshot-gui.ps1
 
 Expected: SmokeTest passes (form builds with the new tab); screenshot shows the Terminal tab. `-SmokeTest` cannot see layout — actually look at the screenshot.
 
-- [ ] **Step 6: Manual live pass (the visual bar: "still visually great")** — launch the GUI, press Go with a trivial goal in a scratch folder; verify in the Terminal tab: claude TUI renders (colors, spinner, slash-menu), typing works, resize reflows, and the kick submits *on its own* within ~2 minutes (watch `watcher/clearbot.log` for a `pty` send). Screenshot for the record.
+- [ ] (deferred to Completion Gate 4, after E2E) **Step 6: Manual live pass (the visual bar: "still visually great")** — launch the GUI, press Go with a trivial goal in a scratch folder; verify in the Terminal tab: claude TUI renders (colors, spinner, slash-menu), typing works, resize reflows, and the kick submits *on its own* within ~2 minutes (watch `watcher/clearbot.log` for a `pty` send). Screenshot for the record.
 
-- [ ] **Step 7: Commit**
-
-```powershell
-git add guards-gui.ps1
-git commit -m "feat: Terminal tab - ACC hosts claude on a ConPTY behind xterm.js/WebView2, legacy launch as fallback"
-```
+- [x] **Step 7: Commit** — `8e3f1e5`
 
 ---
 
@@ -872,11 +862,11 @@ git commit -m "feat: Terminal tab - ACC hosts claude on a ConPTY behind xterm.js
 **Interfaces:**
 - Consumes: `Acc.PtyHost` (Task 2), clearbot pty transport (Task 3), budget.mjs pty record (Task 4). No GUI, no WebView2 — the pty and pipe server alone.
 
-- [ ] **Step 1: Read `e2e/loop.e2e.mjs` end to end** — scenarios 1–4 already sandbox an ACC root, launch real claude consoles, drive clearbot, and assert from transcripts. Scenario 5 must reuse its helpers and assertion style, not invent parallel ones. (Note its hard-won lesson in the 6ad5d44 commit message: a first prompt cannot be typed before the TUI accepts input — scenario 5 exists precisely to prove the pty transport doesn't have that failure.)
+- [x] **Step 1: Read `e2e/loop.e2e.mjs` end to end** — scenarios 1–4 already sandbox an ACC root, launch real claude consoles, drive clearbot, and assert from transcripts. Scenario 5 must reuse its helpers and assertion style, not invent parallel ones. (Note its hard-won lesson in the 6ad5d44 commit message: a first prompt cannot be typed before the TUI accepts input — scenario 5 exists precisely to prove the pty transport doesn't have that failure.)
 
-- [ ] **Step 2: Write `gui/ptyhost.e2e.ps1`** — headless host: parameters `-Root <sandboxAccRoot> -PipeName <name> -GoalId <id> -Cwd <dir> -PidFile <path> -TimeoutSeconds <n>`; sets `ACC_GOAL`/`ACC_PTY` (+ `ACC_ROOT`/`ACC_POLICY` passthrough from its own env), `Add-Type`s `PtyHost.cs`, starts real `claude` (same `Get-Command` resolution as Task 6), `ServePipe`, writes `ChildPid` to `-PidFile`, then sleeps until timeout or child exit, disposing on the way out. Null ui/callbacks; the scenario observes via transcripts and `clearbot.log`, not via `Snapshot()`.
+- [x] **Step 2: Write `gui/ptyhost.e2e.ps1`** (deviation: no `-Root` param — ACC_ROOT/ACC_POLICY pass through the environment, which the scenario sets) — headless host: parameters `-Root <sandboxAccRoot> -PipeName <name> -GoalId <id> -Cwd <dir> -PidFile <path> -TimeoutSeconds <n>`; sets `ACC_GOAL`/`ACC_PTY` (+ `ACC_ROOT`/`ACC_POLICY` passthrough from its own env), `Add-Type`s `PtyHost.cs`, starts real `claude` (same `Get-Command` resolution as Task 6), `ServePipe`, writes `ChildPid` to `-PidFile`, then sleeps until timeout or child exit, disposing on the way out. Null ui/callbacks; the scenario observes via transcripts and `clearbot.log`, not via `Snapshot()`.
 
-- [ ] **Step 3: Add scenario 5 to `e2e/loop.e2e.mjs`** — "embedded launch: the kick submits with zero human input":
+- [x] **Step 3: Add scenario 5 to `e2e/loop.e2e.mjs`** — "embedded launch: the kick submits with zero human input":
   1. Sandbox ACC root (existing helper); create a goal via `goal.mjs new` whose text says to reply one word and run `goal.mjs done <id>`.
   2. Spawn `gui/ptyhost.e2e.ps1` with a fresh pipe name; wait for the pid file.
   3. Wait for the session's `.window` record to appear with `transport:"pty"` and the pipe name (proves Task 4 end-to-end).

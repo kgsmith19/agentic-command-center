@@ -327,7 +327,9 @@ function Invoke-Kicks {
         $r = Send-Keys $cpid $KICK -ClearLineFirst
         if ($r.ok) {
             & node (Join-Path $Root 'hooks\goal.mjs') 'kicked' $g.id 2>$null | Out-Null
-            Log "RESUMED goal $($g.id) cycle $($g.cycles) consolePid=$cpid"
+            # $r.out names the transport ("pty OK" vs sendconsole output) - the
+            # e2e proof tier greps this line for it.
+            Log "RESUMED goal $($g.id) cycle $($g.cycles) consolePid=$cpid via $($r.out)"
         } else {
             Log "WARN resume $($g.id) failed -> $($r.out)"
         }

@@ -95,5 +95,31 @@
                    "enabled":  true,
                    "clearOnRescope":  true,
                    "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing."
-               }
+               },
+    "lane":  {
+                 "slots":  1,
+                 "minGapMs":  3000,
+                 "retries":  2,
+                 "backoffBaseMs":  2000,
+                 "overloadBaseMs":  4000,
+                 "backoffCapMs":  30000,
+                 "breakerThreshold":  3,
+                 "breakerWindowMs":  300000,
+                 "breakerCooldownMs":  120000,
+                 "breakerBlocking":  true,
+                 "interactive":  {
+                                     "slots":  1,
+                                     "minGapMs":  0,
+                                     "breakerBlocking":  false,
+                                     "_note":  "GUI Go button + Terminal tab (guards-gui.ps1). Own slot pool, isolated from automation's - pressing Go never queues behind a runner/e2e hold and vice versa. minGapMs:0 because a human clicking Go IS the pacing. breakerBlocking:false: a tripped breaker only warns an interactive launch (logged), never blocks it - a human who already decided to launch should not be queued behind automation's circuit breaker."
+                                 },
+                 "_note":  "hooks/lane.mjs - machine-wide launch lane for real-claude spawns. Added 2026-08-01, hardened 2026-08-01 after Kyle hit an API error INSIDE an interactive session even after the first fix: the first pass only ever wrapped AUTOMATED headless launches (runner.mjs, e2e proof tier); guards-gui.ps1's Go button and Terminal tab spawned claude with zero coordination, so an interactive launch could still stack concurrently with automation or another manual terminal. slots=1 means one automated session at a time across ALL loops; minGapMs paces starts; retries are TRANSPORT-ONLY (econnreset/429/5xx/overloaded) with FULL-JITTER backoff - logic failures never retry, and 529/overloaded gets overloadBaseMs (a model-layer overload, not this account's rate limit) instead of backoffBaseMs. breakerThreshold failures within breakerWindowMs trips a breakerCooldownMs hold on new AUTOMATED launches (interactive only warns - see lane.interactive above). `lane.interactive` is a second, fully isolated slot pool for GUI/Terminal launches; Kyle's own manual terminals outside the GUI remain unlaned by design (nothing can intercept an arbitrary shell). State: os.tmpdir()/acc-lane, never ACC_ROOT."
+             },
+    "tests":  {
+                  "changedLineCoverage":  100,
+                  "changedFunctionCoverage":  100,
+                  "changedBranchCoverage":  90,
+                  "branchFloorOverrides":  { "hooks/lane.mjs":  85 },
+                  "_note":  "hooks/covgate.mjs floors, per CHANGED lib file (hooks/ and runner/ .mjs, tests exempt). Three floors because line coverage alone lies: V8 marks a declaration line covered even when the function is never called. Branches default 90 - the last branch points are defensive catch-paths needing fault injection; raise per-change when the file warrants the spend. hooks/testplan.mjs injects the contract that binds these gates at plan time. branchFloorOverrides keys are gate-relative paths (forward slashes) with a per-file changedBranchCoverage override - hooks/lane.mjs is overridden to 85% per OPEN-ISSUES.md OI-017: node's own --experimental-test-coverage merge under-reports its branches (measured 87.9%) once the full ten-file fast tier runs together in one invocation, a confirmed node v24.18.0 tooling limitation, not a real gap - true isolated coverage is 91.87%, proven 2026-08-02."
+              }
 }

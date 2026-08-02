@@ -75,6 +75,21 @@ try {
     $pty.Dispose()
     Start-Sleep -Milliseconds 500
     Check 'child killed on dispose' (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue))
+
+    # Regression (2026-07-31): the child must see a real TTY. Without
+    # STARTF_USESTDHANDLES + null handles in Start(), a host with redirected
+    # stdio hands the child its useless pipe handle values, node sees a
+    # non-TTY stdin, and claude refuses to run interactively ("--print
+    # requires input") - the embedded terminal's e2e failed exactly there.
+    $pty2 = New-Object Acc.PtyHost
+    $pty2.Start('node -e "console.log(''ISATTY:'' + !!process.stdin.isTTY + !!process.stdout.isTTY)"', 'C:\', 80, 25, $null, $null, $null)
+    $deadline = (Get-Date).AddSeconds(15); $tty = $false
+    while ((Get-Date) -lt $deadline -and -not $tty) {
+        Start-Sleep -Milliseconds 250
+        $tty = $pty2.Snapshot() -match 'ISATTY:truetrue'
+    }
+    Check 'child stdin/stdout are a TTY (node isTTY)' $tty
+    $pty2.Dispose()
 } catch {
     [void]$lines.Add("FAIL exception: $($_ | Out-String)")
     $fail = 1

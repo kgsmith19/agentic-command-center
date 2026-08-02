@@ -24,6 +24,20 @@ import { ptyAnchorPid } from "./usage.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, "budget.mjs");
 
+// Every execFileSync("node", [HOOK], ...) below spawns a SEPARATE budget.mjs
+// process per test (dozens of them) with an env spread that would otherwise
+// carry a live NODE_V8_COVERAGE straight through: --experimental-test-
+// coverage auto-sets it on whichever process enables it first, and under
+// `node hooks/covgate.mjs` that's the real, shared coverage run this file is
+// part of. budget.mjs is not itself a gated file this session, so none of
+// these dozens of incidental coverage dumps are wanted — left unfixed, their
+// sheer volume in the shared directory measurably degraded an UNRELATED
+// gated file's (hooks/lane.mjs) own merged branch coverage (found
+// 2026-08-02: lane.mjs measured 91%+ branches in isolation, 87.9% once this
+// file's subprocess spawns joined the same run — deterministic, reproduced
+// with --test-concurrency=1, so not a race).
+delete process.env.NODE_V8_COVERAGE;
+
 // Small dials keep the fixture transcripts tiny; autoClear stays on because the
 // clear-request file IS the assertion. Shape mirrors the live policy.json.
 const POLICY = {

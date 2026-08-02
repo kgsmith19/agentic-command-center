@@ -96,14 +96,24 @@ fire, so edits apply with no restart. It also writes/removes
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs
-    -> 79 pass  FAST TIER, hermetic. Run from C:\code\guards; never
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs runner/runner.test.mjs
+    -> 172 pass  FAST TIER, hermetic. Run from C:\code\guards; never
        `node --test hooks/` (the runner grades the directory as one bogus
        failing test).
+node hooks/covgate.mjs
+    -> COVERAGE GATE. Runs the fast tier under node's built-in coverage and
+       fails any CHANGED lib file under the policy floors (lines/funcs 100,
+       branches 90). Changed = git diff vs HEAD + untracked.
 node e2e/loop.e2e.mjs [--only N]
     -> PROOF TIER. Spawns a REAL claude and spends tokens, so run it
        deliberately. 1 happy loop, 2 under-budget re-prompt, 3 Esc
-       escalation, 4 /cd.
+       escalation, 4 /cd, 5 embedded pty launch (kick submits over the
+       pipe, zero injection). Each scenario holds a launch-lane slot for
+       its whole life (below), so a proof run queues behind — and is queued
+       behind by — every other automated launch on the machine.
+powershell -File gui/ptyhost.test.ps1
+    -> INTEGRATION. Acc.PtyHost against a real cmd.exe on a ConPTY - pipe
+       protocol accepts/refuses, dispose kills the child. No claude, no GUI.
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
 powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
 ```
@@ -119,6 +129,54 @@ The suites that touch runner state (`budget`, `route`) sandbox themselves via
 would delete the `.window` files running sessions depend on. `-SmokeTest`
 builds the form without showing it and cannot see layout, so screenshot the
 window whenever the GUI changes.
+
+## The launch lane — why automated claude spawns never race
+
+`hooks/lane.mjs`. One account, many loops: the slice-runner (`claude -p` per
+board task), the proof tier, and the goal loop all open real API streams, and
+concurrent bursts died in transport as `econnreset` (2026-07-31, during test
+firing). Every AUTOMATED spawn now goes through `withLaunchSlot`: a
+machine-wide slot semaphore (`policy.json lane.slots`, default 1 — strict
+serial), a paced start (`minGapMs`), and `retryTransport` — exponential
+backoff with full jitter on TRANSPORT failures only (econnreset/429/5xx);
+a logic failure returns untouched on the first try, because retrying a real
+bug only spends tokens hiding it. Slot state lives in `os.tmpdir()/acc-lane`
+(never `ACC_ROOT` — a sandboxed lane could not exclude the live runner, which
+is the whole point). A slot records owner pid + ttl, so a crashed holder is
+reclaimed, never wedged. **Interactive launches (GO button, Kyle's terminals)
+bypass the lane on purpose** — a human must never queue behind a 3-hour
+runner hold. Never spawn a real claude from automation without the lane.
+Tests: `node --test hooks/lane.test.mjs` (14).
+
+## Testing doctrine — the contract every implementation carries
+
+`hooks/testplan.mjs` (UserPromptSubmit, advisory like route.mjs — blocking
+would stall the goal loop, which has no replay for it) injects the contract
+once per session when a prompt starts implementation planning. The contract,
+which is also simply the house rule: every acceptance criterion maps 1:1 to
+tests — unit (pure logic) and integration (process/filesystem boundary) in
+the fast tier, hermetic, sandboxed via `ACC_ROOT`/`ACC_POLICY`/`ACC_LANE_DIR`;
+e2e only for cross-process promises, in the proof tier, always through the
+lane. Tests are written RED FIRST and the red run is recorded in the slice
+log — a test born green proves nothing. Done means: fast tier green,
+`node hooks/covgate.mjs` green, and the relevant proof scenario green when
+loop behavior changed. covgate holds every CHANGED lib file to the policy
+floors — lines 100 / functions 100 / branches 90 — three floors because line
+coverage alone lies (a never-called function still shows covered declaration
+lines). Coverage is a floor, not the goal: assert observable behavior, one
+behavior per test, no sleeps outside the lane's own pacing.
+Tests: `node --test hooks/testplan.test.mjs` (11), `hooks/covgate.test.mjs` (14),
+`runner/runner.test.mjs` (39, closes OI-013 — the first hermetic suite for
+runner.mjs, built via an in-process spawn seam and a fake `claude` binary on
+PATH so the real spawn/stdin/lane/retry/kill path is proven without a real
+API call). Building this suite surfaced and fixed two real bugs beyond
+coverage: `runClaudeOnce`'s timeout used to orphan the real claude process on
+a hang (`child.kill()` under `shell:true` only signals the shell wrapper —
+`killTree` now signals the whole process group on POSIX / the PID tree via
+`taskkill /t` on Windows), and `retryTransport` had two structurally dead
+branches (a trailing `return` and a bounded loop condition that could never
+be false) which covgate's own branch floor caught and forced a real fix
+rather than a manufactured test.
 
 ## Goals — how a session survives its own context limit
 
@@ -138,6 +196,16 @@ Two decisions carry the whole design:
    the clear. Queued prompts (above) are keyed the same way for the same reason.
 2. **Goal text never becomes keystrokes.** It reaches the model through
    SessionStart context; the only thing ever typed is a constant.
+
+**ACC-hosted sessions run on a ConPTY inside the GUI** (spec
+`docs/superpowers/specs/2026-07-31-acc-embedded-terminal-design.md`): the Go
+button spawns claude via `Acc.PtyHost` (gui/PtyHost.cs), renders it in an
+xterm.js/WebView2 Terminal tab, and records a `transport:"pty"` window with a
+pipe name (`hooks/budget.mjs`, env `ACC_PTY`). clearbot then drives the session
+with pipe writes (`TEXT`/`SUBMIT`/`ESC` — guaranteed Enter) instead of
+keystroke injection; `sendconsole.ps1` remains the transport for external
+sessions and the fallback when the pipe is dead. Without the WebView2 runtime
+the Go button falls back to the legacy `cmd /k claude` console launch.
 
 State: `runner\goals\<id>.json` plus a running `<id>.log.md`, archived to
 `runner\goals\done\` on completion. **The loop only ends because the model ends
