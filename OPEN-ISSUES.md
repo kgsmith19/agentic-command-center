@@ -258,6 +258,84 @@ line under `## Resolved`.
   MessageBox, or the Process.Exited release path, all of which need the GUI
   actually visible and a real double-Go-press. Still open — needs Kyle.
 
+## OI-019 Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
+- opened: 2026-08-03
+- where: kernel/*.test.mjs (all suites through Task 16; applies to every
+  remaining kernel task, T17-T22)
+- what: covgate's 100/100/90 floors prove every line/branch of a CHANGED file
+  executes at least once — they do not prove the suite covers the scenario
+  space a reliability kernel needs. Non-standard inputs, rare/bizarre timing,
+  overlapping/concurrent runs, performance under load, and combinations of
+  failures across the launch -> guard -> verify -> ledger chain are largely
+  untested today; only the failure modes each task's plan text happened to
+  enumerate are covered. Kyle, verbatim intent: "so many individual units...
+  so many connective parts... the flow can change or be unpredictable... we
+  must lock it and harden it as much as possible... we don't want to trick
+  the tests, we truly want to be objective."
+- why open: raised as a standing concern for the rest of the kernel effort
+  (T17-T22), not a defect in any one file today; needs a deliberate scenario-
+  enumeration pass (or a new task inserted into the plan) rather than being
+  folded piecemeal into whichever task happens to touch a given module.
+- done when: for each kernel module, a documented pass has enumerated
+  standard / non-standard / edge / rare / error / fault-tolerance scenarios
+  (beyond AC-ID traceability) and either added a real test or recorded an
+  explicit, ledgered reason none is needed. No test may be added or loosened
+  just to turn red green — every test must be able to fail against a genuine
+  regression, never tuned to the current implementation's behavior.
+
+## OI-020 No Playwright-driven remote e2e verifies the actual kernel GUI (screen, flow, layout)
+- opened: 2026-08-03
+- where: guards-gui.ps1 kernel settings tab (T21, not yet built); relates
+  OI-015 (interactive-lane wiring is PowerShell-only smoke-tested)
+- what: every GUI proof in this repo today is either a PowerShell
+  `-SmokeTest` (proves the form constructs, not what renders) or a human
+  screenshot/narration — ACC-HANDOFF.md's own stated limit is "-SmokeTest
+  cannot see layout." Kyle wants a real Playwright e2e, run in a remote
+  environment, that drives the kernel GUI and asserts on what is genuinely
+  on screen: the settings tab's fields, a live policy edit's visible effect,
+  the flow of starting/stopping a run.
+- why open: T21 (GUI kernel settings tab) has not been built yet, so this is
+  a requirement for that task's test plan, not a fix against existing code.
+  Also needs a design decision this codebase hasn't made: what "remote
+  environment" means for a WinForms desktop app — Playwright normally
+  targets browser/web UIs, so driving a WinForms PTY-hosted GUI needs its
+  own bridge (headless Windows CI? a screenshot/pixel harness?) that does
+  not exist yet.
+- done when: T21 (or a follow-up task) ships a Playwright-based e2e that
+  runs against a real rendered kernel settings tab in a remote/CI
+  environment and asserts on visible field state plus at least one
+  live-edit-applies-without-restart flow, replacing screenshot-only proof.
+
+## OI-021 Kernel has no explicit handling for upstream API-overload errors, including failures in the harness's own error reporting
+- opened: 2026-08-03
+- where: kernel/adapters/claude-code.mjs (identity/startTask), hooks/lane.mjs
+  (529-specific backoff exists per OI-017 but is proven only for automated
+  runner.mjs launches, not yet against kernel/run.mjs's own launch path),
+  kernel/run.mjs failClosed paths
+- what: Kyle, verbatim: "the API itself can be overloaded and Claude Code
+  does not see those as [errors] — that would turn his connection off from
+  reading the error... we must even handle those ULTRA META errors." I.e. a
+  529/rate-limit/overload condition from Anthropic's API may not surface as
+  a clean, catchable error from the `claude` CLI subprocess at all — the
+  harness's OWN error-reporting path can itself fail silently, a level
+  beyond "startTask threw" (already covered by Task 16's failed-to-start
+  test). Nothing in the kernel today distinguishes "the harness process
+  exited/errored cleanly" from "the harness process is hung or silently
+  degraded because the upstream API is overloaded and the CLI never told
+  anyone."
+- why open: needs research into what a real API-overload/degraded-CLI
+  failure looks like from the outside (stdout/stderr shape, hang vs clean
+  exit, exit code) before a test can be written against it — currently
+  unknown and not yet reproducible on demand. Intersects T17/T18 (ceilings)
+  and the proof tier (T19), which spends real tokens and is the one place
+  concurrent real launches are most likely to hit this for real.
+- done when: either a real or faithfully-simulated overload scenario is
+  captured (e.g. a fake adapter mimicking a hung/silently-failed CLI) with a
+  kernel-level test proving the run still fails closed within its
+  wall-clock ceiling rather than hanging forever, or the mitigating design
+  (e.g. `ttlMs` already bounds this — confirm and document) is written down
+  and cited here.
+
 ## Resolved
 
 ## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process

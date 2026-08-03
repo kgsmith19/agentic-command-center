@@ -27,6 +27,7 @@ Every task's requirements implicitly include this section.
 - **Do not build anything in the spec's §15 out-of-scope list**: no multi-agent orchestration or concurrency, no per-action human approval queue, no ledger dashboard, no memory/vector store, no workflow engine. If a task seems to require one, stop and flag it.
 - **Stop mid-execution only** if proceeding would require guessing at a security boundary or taking an irreversible action. Everything else: proceed without asking.
 - **Windows.** Paths compare case-insensitively with forward-slash normalization (`path.resolve(p).replaceAll("\\","/").toLowerCase()`) — copy the `norm()` idiom from `hooks/guard.mjs:57`.
+- **Before planning any of T17-T22, read `OI-019`, `OI-020`, `OI-021` in `OPEN-ISSUES.md`** (opened 2026-08-03, end of T16). They raise, respectively: test *scenario breadth* beyond AC-ID/coverage-floor traceability (non-standard/edge/rare/fault-tolerance cases, not just the failure modes each task's text happens to enumerate); the lack of any Playwright-driven remote e2e for the kernel GUI T21 is about to build (today's GUI proof is PowerShell `-SmokeTest` or human screenshot only); and the kernel's total lack of handling for upstream API-overload / silently-degraded-harness scenarios (relevant to T17/T18's ceilings and T19's real-token proof tier). These are standing requirements for the rest of this plan, not one-off notes — fold them into each remaining task's test contract rather than treating them as separately deferred work.
 
 ## Slice map ↔ spec
 
