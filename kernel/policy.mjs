@@ -61,3 +61,52 @@ export function loadKernelPolicy() {
 export function alwaysDenyWriteRoots() {
   return [REPO, path.join(os.homedir(), ".claude"), ...loadKernelPolicy().extraDenyWriteRoots].map(norm);
 }
+
+// The GUI's write path (gui/server.mjs). Validation and the atomic write live
+// HERE, with the other policy IO — the server carries no business logic.
+function req(cond, msg) { if (!cond) throw new Error(`kernel policy: ${msg}`); }
+const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+const strList = (v) => Array.isArray(v) && v.every((s) => typeof s === "string" && s.trim());
+
+export function validateKernelBlock(k) {
+  req(k && typeof k === "object", "block must be an object");
+  req(typeof k.harness === "string" && k.harness.trim(), "harness must be a non-empty string");
+  req(isNum(k.budget?.wallClockMin) && k.budget.wallClockMin > 0, "budget.wallClockMin must be > 0");
+  req(Number.isInteger(k.budget?.toolCalls) && k.budget.toolCalls >= 1, "budget.toolCalls must be an integer >= 1");
+  req(Number.isInteger(k.budget?.tokens) && k.budget.tokens >= 1, "budget.tokens must be an integer >= 1");
+  req(isNum(k.hardCaps?.wallClockMin) && k.hardCaps.wallClockMin > 0, "hardCaps.wallClockMin must be > 0");
+  req(isNum(k.checkpointMin) && k.checkpointMin > 0, "checkpointMin must be > 0");
+  req(Number.isInteger(k.autonomy?.window) && k.autonomy.window >= 1, "autonomy.window must be an integer >= 1");
+  req(isNum(k.autonomy?.rejectRate) && k.autonomy.rejectRate > 0 && k.autonomy.rejectRate <= 1, "autonomy.rejectRate must be in (0, 1]");
+  req(isNum(k.autonomy?.factor) && k.autonomy.factor > 0 && k.autonomy.factor <= 1, "autonomy.factor must be in (0, 1]");
+  req(Number.isInteger(k.autonomy?.runs) && k.autonomy.runs >= 1, "autonomy.runs must be an integer >= 1");
+  req(strList(k.alwaysAllowTools), "alwaysAllowTools must be a list of non-empty strings");
+  req(strList(k.extraDenyWriteRoots), "extraDenyWriteRoots must be a list of non-empty strings");
+}
+
+export function saveKernelPolicy(block) {
+  validateKernelBlock(block);
+  const file = policyPath();
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    throw new Error(`kernel policy: cannot edit ${file} (${e.message})`);
+  }
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const pol = JSON.parse(text);
+  pol.kernel = {
+    ...(pol.kernel || {}), // _note and any future keys survive
+    harness: block.harness.trim(),
+    budget: { wallClockMin: block.budget.wallClockMin, toolCalls: block.budget.toolCalls, tokens: block.budget.tokens },
+    hardCaps: { ...((pol.kernel || {}).hardCaps || {}), wallClockMin: block.hardCaps.wallClockMin },
+    autonomy: { window: block.autonomy.window, rejectRate: block.autonomy.rejectRate, factor: block.autonomy.factor, runs: block.autonomy.runs },
+    checkpointMin: block.checkpointMin,
+    alwaysAllowTools: block.alwaysAllowTools.map((s) => s.trim()),
+    extraDenyWriteRoots: block.extraDenyWriteRoots.map((s) => s.trim()),
+  };
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(pol, null, 2));
+  fs.renameSync(tmp, file); // atomic on the same volume; no torn policy.json
+  return loadKernelPolicy();
+}

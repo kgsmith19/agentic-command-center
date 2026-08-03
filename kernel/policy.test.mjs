@@ -10,7 +10,7 @@ const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-kernel-policy-"));
 process.env.ACC_POLICY = path.join(BASE, "policy.json");
 process.env.ACC_ROOT = path.join(BASE, "root");
 
-const { loadKernelPolicy, KERNEL_DEFAULTS, kernelRoot, alwaysDenyWriteRoots } =
+const { loadKernelPolicy, KERNEL_DEFAULTS, kernelRoot, alwaysDenyWriteRoots, saveKernelPolicy } =
   await import("./policy.mjs");
 
 const writePolicy = (kernel) =>
@@ -78,4 +78,57 @@ test("loadKernelPolicy falls back to the repo policy.json when ACC_POLICY is uns
 test("a policy file with a leading UTF-8 BOM still parses", () => {
   fs.writeFileSync(process.env.ACC_POLICY, "﻿" + JSON.stringify({ kernel: { budget: { toolCalls: 3 } } }));
   assert.equal(loadKernelPolicy().budget.toolCalls, 3);
+});
+
+const goodBlock = () => {
+  const k = loadKernelPolicy();
+  return {
+    harness: "claude-code",
+    budget: { wallClockMin: k.budget.wallClockMin, toolCalls: 150, tokens: k.budget.tokens },
+    hardCaps: { wallClockMin: k.hardCaps.wallClockMin },
+    autonomy: { ...k.autonomy },
+    checkpointMin: k.checkpointMin,
+    alwaysAllowTools: ["TodoWrite"],
+    extraDenyWriteRoots: [],
+  };
+};
+
+test("saveKernelPolicy round-trips through the file and preserves everything it does not own", () => {
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({
+    context: { softK: 400 },
+    kernel: { ...goodBlock(), _note: "keep me" },
+  }, null, 2));
+  const saved = saveKernelPolicy({
+    ...goodBlock(), budget: { ...goodBlock().budget, toolCalls: 99 },
+    extraDenyWriteRoots: ["  C:/some/root  "],
+  });
+  assert.equal(saved.budget.toolCalls, 99);
+  assert.deepEqual(saved.extraDenyWriteRoots, ["C:/some/root"], "list entries are trimmed");
+  const onDisk = JSON.parse(fs.readFileSync(process.env.ACC_POLICY, "utf8"));
+  assert.equal(onDisk.kernel.budget.toolCalls, 99);
+  assert.equal(onDisk.kernel._note, "keep me", "unknown kernel keys survive");
+  assert.equal(onDisk.context.softK, 400, "other policy blocks survive");
+});
+
+test("an invalid block is rejected atom-for-atom: throws, file byte-identical", () => {
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ kernel: goodBlock() }, null, 2));
+  const before = fs.readFileSync(process.env.ACC_POLICY, "utf8");
+  for (const evil of [
+    { ...goodBlock(), harness: "" },
+    { ...goodBlock(), budget: { ...goodBlock().budget, toolCalls: 0 } },
+    { ...goodBlock(), budget: { ...goodBlock().budget, tokens: 1.5 } },
+    { ...goodBlock(), autonomy: { ...goodBlock().autonomy, rejectRate: 5 } },
+    { ...goodBlock(), autonomy: { ...goodBlock().autonomy, factor: 0 } },
+    { ...goodBlock(), checkpointMin: -1 },
+    { ...goodBlock(), alwaysAllowTools: ["", "x"] },
+    { ...goodBlock(), alwaysAllowTools: "TodoWrite" },
+  ]) {
+    assert.throws(() => saveKernelPolicy(evil), /kernel policy:/);
+    assert.equal(fs.readFileSync(process.env.ACC_POLICY, "utf8"), before, "rejected save must not touch the file");
+  }
+});
+
+test("saveKernelPolicy with no policy file fails closed instead of inventing one", () => {
+  fs.rmSync(process.env.ACC_POLICY, { force: true });
+  assert.throws(() => saveKernelPolicy(goodBlock()), /cannot edit/);
 });
