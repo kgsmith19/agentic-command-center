@@ -96,10 +96,14 @@ fire, so edits apply with no restart. It also writes/removes
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs runner/runner.test.mjs
-    -> 172 pass  FAST TIER, hermetic. Run from C:\code\guards; never
-       `node --test hooks/` (the runner grades the directory as one bogus
-       failing test).
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs runner/runner.test.mjs
+    -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
+       never `node --test hooks/` (the runner grades the directory as one
+       bogus failing test). `npm test` runs the portable subset of this same
+       list (everything except hooks/clearbot.test.mjs, which spawns real
+       cmd.exe/powershell consoles and only runs on Windows) — that's what
+       CI runs on Linux; `package.json` is the single source of truth for
+       both lists so this block and CI cannot drift apart silently again.
 node hooks/covgate.mjs
     -> COVERAGE GATE. Runs the fast tier under node's built-in coverage and
        fails any CHANGED lib file under the policy floors (lines/funcs 100,

@@ -13,10 +13,7 @@
 ## Global Constraints
 
 - Run every command from the repo root `C:\code\guards`.
-- **Test gate command** (never `node --test hooks/` — the runner grades the directory as one bogus failing test):
-  `node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs`
-  Currently 56 pass / 0 fail. Add new hook test files to this list as they are created.
-- Tests that touch runner state MUST sandbox via `ACC_ROOT` (redirects `runner/`) and `ACC_POLICY` (policy file path). A test that writes to live `runner/state` deletes `.window` files running sessions depend on.
+- **Test gate command and the `ACC_ROOT`/`ACC_POLICY` sandboxing rule**: see `AGENTS.md` § "The regression, exactly" — do not re-copy the file list here as it grows; that duplication is exactly what let this doc drift stale before (never `node --test hooks/` — the runner grades the directory as one bogus failing test).
 - Hooks and helpers **fail open**: a broken goal store costs auto-resume and nothing else. Never add a Stop-hook gate — the budget gate is the only Stop authority (OI-011).
 - Never introduce a code path that types caller-chosen free text. `watcher/clearbot.ps1` invariant 1 (lines 14–40) is the authority on what may ever be typed; read it before editing that file.
 - Do not test typing against a real working session. Use a throwaway console.
@@ -1483,7 +1480,11 @@ git commit -m "test: proof-tier scenarios for Esc escalation (OI-011) and /cd re
 **Files:**
 - Modify: `AGENTS.md` (the "The regression, exactly" block and the "Goals" section)
 - Modify: `OPEN-ISSUES.md` (guards)
-- Modify: `SLICE-RUNNER.md`
+- Note: the repo-root `SLICE-RUNNER.md` this step originally referenced was
+  archived 2026-08-03 to
+  `notes/2026-07-31-goal-g-20260731-134525-09wb-checkpoint.md` (it was a stale
+  goal-checkpoint note under the wrong filename, not slice-runner docs — those
+  are `runner/README.md`). Nothing in this task should modify it further.
 
 - [ ] **Step 1: Update the regression block in AGENTS.md**
 
@@ -1543,7 +1544,7 @@ node C:/code/guards/hooks/goal.mjs done g-20260731-134525-09wb
 - [ ] **Step 5: Commit**
 
 ```bash
-git add AGENTS.md OPEN-ISSUES.md SLICE-RUNNER.md ../OPEN-ISSUES.md
+git add AGENTS.md OPEN-ISSUES.md ../OPEN-ISSUES.md
 git commit -m "docs: liveness, watchdog and the two test tiers; ledger flips for the autonomy work"
 ```
 
