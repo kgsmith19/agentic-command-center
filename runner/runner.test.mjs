@@ -19,11 +19,11 @@
 //     on either platform Kyle might run this suite from.
 import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-runner-test-"));
 process.env.ACC_RUNNER_ROOT = path.join(BASE, "runnerroot");
@@ -367,6 +367,23 @@ test("integration: bootstrap travels over stdin, never argv; args match the docu
   const argv = JSON.parse(fs.readFileSync(path.join(dir, "argv.json"), "utf8"));
   assert.deepEqual(argv, ["-p", "--permission-mode", "bypassPermissions", "--output-format", "json", "--max-turns", "200"]);
   assert.ok(!argv.join(" ").includes("multi word"), "bootstrap must never appear in argv");
+});
+
+test("integration: the spawn path is DEP0190-clean (--throw-deprecation stays exit 0)", async () => {
+  const dir = fakeClaudeDir("dep0190");
+  process.env.FAKE_CLAUDE_MODE = "ok";
+  const j = job({ bootstrap: "dep check" });
+  const driver = `
+    const m = await import(${JSON.stringify(pathToFileURL(path.join(HERE, "runner.mjs")).href)});
+    const j = ${JSON.stringify(j)};
+    const r = await m.runClaudeOnce(j);
+    process.exit(r.code === 0 ? 0 : 1);
+  `;
+  const r = spawnSync(process.execPath, ["--throw-deprecation", "--input-type=module", "-e", driver], {
+    encoding: "utf8", env: { ...process.env },
+  });
+  assert.ok(!/DEP0190/.test(r.stderr), `spawn still triggers DEP0190:\n${r.stderr}`);
+  assert.equal(r.status, 0, r.stderr);
 });
 
 test("integration: non-JSON stdout falls back to the raw text as result", async () => {

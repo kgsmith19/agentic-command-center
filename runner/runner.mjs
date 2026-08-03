@@ -10,6 +10,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { withLaunchSlot, retryTransport } from "../hooks/lane.mjs";
+import { spawnSpec } from "../hooks/cmdline.mjs";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync,
   renameSync, statSync, unlinkSync, writeFileSync,
@@ -94,17 +95,18 @@ export function runClaudeOnce(job) {
   return new Promise((resolveRun) => {
     // Deliberately NOT --bare: each session must keep the user's hook stack —
     // guard.mjs is the safety layer that makes bypassPermissions acceptable.
-    // The bootstrap goes over STDIN, never argv: shell:true concatenates argv
-    // unescaped on Windows, and a multi-word prompt arrives mangled (proven by
-    // the first smoke test — the session never saw the exact marker string).
+    // The bootstrap goes over STDIN, never argv — argv is now quoted/shell-
+    // free per platform via hooks/cmdline.mjs (see OI-023); a multi-word
+    // prompt in argv still would not survive the shell boundary intact.
     const args = [
       "-p",
       "--permission-mode", "bypassPermissions",
       "--output-format", "json",
       "--max-turns", "200",
     ];
-    const child = spawn("claude", args, {
-      cwd: job.workdir, shell: true, stdio: ["pipe", "pipe", "pipe"],
+    const sp = spawnSpec("claude", args);
+    const opts = {
+      cwd: job.workdir, shell: sp.shell, stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32", // see killTree
       // runTimeoutMin owns the clock; never let the 600s print-mode
       // background-wait ceiling kill a session mid-task (lost run 2).
@@ -120,7 +122,8 @@ export function runClaudeOnce(job) {
       // is ever coverage-instrumented, but the fake stub runner.test.mjs
       // spawns through this exact path is).
       env: { ...process.env, ACC_PTY: "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined },
-    });
+    };
+    const child = sp.args ? spawn(sp.file, sp.args, opts) : spawn(sp.file, opts);
     child.stdin.write(job.bootstrap);
     child.stdin.end();
     let out = "";
