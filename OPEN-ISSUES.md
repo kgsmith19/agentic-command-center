@@ -147,13 +147,19 @@ line under `## Resolved`.
 - where: hooks/engine.mjs guard config (relates OI-005: self-protection off,
   docs claim otherwise)
 - what: this branch added gui/PtyHost.cs, gui/term.html, gui/vendor/,
-  gui/ptyhost.e2e.ps1 and watcher/stubpipe.ps1 — whether the self-protection
-  path list still covers what the docs claim it covers has not been re-checked
-  since.
+  gui/ptyhost.e2e.ps1 and watcher/stubpipe.ps1 plus many watcher/ system
+  scripts (clearbot.ps1, launchers, watchdog/ integration). The full post-branch
+  file list is: `gui/PtyHost.cs`, `gui/term.html`, `gui/vendor/`, `gui/*.ps1`
+  (test/e2e), `watcher/clearbot.ps1`, `watcher/*.ps1` (screenshot, sendconsole,
+  stubs), `watcher/*.cmd` (start/stop launchers), `watcher/watchdog/*.ps1`
+  (system integration). All are strategic infrastructure and should be protected.
 - why open: verification task surfaced by the embedded-terminal completion
-  gate; OI-005 already tracks the underlying off-state.
-- done when: the protected-path list is re-verified against the post-branch
-  tree and either covers gui/ + watcher/ or the gap is ledgered precisely.
+  gate; OI-005 already tracks the underlying off-state (self-protection is
+  currently disabled while ACC build-out continues).
+- done when: `protected` list in config.json gains `C:/code/guards/gui/` and
+  `C:/code/guards/watcher/` (or the full `C:/code/guards/` prefix), verified
+  safe to re-enable once OI-005 re-protection happens, documented in AGENTS.md
+  (done 2026-08-03).
 
 ## OI-012 Stray console window at embedded launch not reproduced
 - opened: 2026-07-31

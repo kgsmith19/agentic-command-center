@@ -12,9 +12,12 @@ Control.cmd`) is the user's GUI on top; the `/approve` skill
 1. **Secrets** — files whose basename matches a `secrets` glob in `config.json`
    (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `vault.json`) can be neither
    read nor written by agent tools, so keys never enter a conversation.
-2. **Self-protection** — writes to this repo and `~/.claude/settings.json` are
-   blocked: an agent may not edit the rules that constrain it. Exception:
-   runboxes (below).
+2. **Self-protection** — currently **OFF**: `C:/code/guards` is not in the
+   `protected` list (removed deliberately during the ACC build-out phase). Once
+   the ACC goal closes, it should be re-added (`C:/code/guards/` in full, or
+   specifically `C:/code/guards/gui/` and `C:/code/guards/watcher/`) to block
+   agent edits of the harness itself. When re-protected, only `~/.claude/settings.json`
+   will remain guarded. Exception when re-enabled: runboxes (below).
 3. **Cell ownership** — repos listed under `repos` in `config.json` have path
    prefixes owned by cells. Matching is by the **target file's path**, never
    the session folder, so a session launched from a parent directory is
@@ -59,6 +62,11 @@ Rules for scripts:
 - Minimal, idempotent, side-effect-obvious. Never print secret values.
 - Standing scripts (re-run buttons like `lifeos-mcp-setup.ps1`) put
   `# guards: keep` in the first 10 lines; everything else is one-shot.
+- **Never leave undo/uninstall scripts in the runbox** (guards OI-008). Undo
+  scripts live tracked in their own directory (e.g. `watcher/watchdog/`) and
+  are run deliberately. Auto-approve's directory order guarantee can cancel
+  conflicting scripts (`install` + `uninstall` in the same folder), making
+  the net effect undefined.
 
 Lifecycle (engine-owned):
 - `run <name | label:name>` executes a script with the project folder as cwd.
