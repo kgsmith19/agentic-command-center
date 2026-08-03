@@ -13,15 +13,18 @@
 import { execFileSync, spawn } from "node:child_process";
 import { acquireSlot } from "../../hooks/lane.mjs";
 import { killTree } from "../../runner/runner.mjs";
+import { spawnSpec } from "../../hooks/cmdline.mjs";
 
 export const id = "claude-code";
 
-// shell:true because `claude` on Windows is a .cmd shim that spawn cannot
-// execute directly — the same reason runner/runner.mjs uses it.
+// Spawn shapes come from hooks/cmdline.mjs: POSIX = argv + no shell; Windows
+// = one pre-quoted string + shell (the .cmd shim needs it). See OI-023.
 export function identity({ exec = execFileSync } = {}) {
   let out;
   try {
-    out = String(exec("claude", ["--version"], { encoding: "utf8", timeout: 15000, windowsHide: true, shell: true }));
+    const sp = spawnSpec("claude", ["--version"]);
+    const opts = { encoding: "utf8", timeout: 15000, windowsHide: true, shell: sp.shell };
+    out = String(sp.args ? exec(sp.file, sp.args, opts) : exec(sp.file, opts));
   } catch (e) {
     throw new Error(`kernel: harness "${id}" failed to start — \`claude --version\` (${e.message})`);
   }
@@ -30,13 +33,13 @@ export function identity({ exec = execFileSync } = {}) {
   return { name: id, version: m[0] };
 }
 
-// The prompt is deliberately absent: it goes over stdin. shell:true
-// concatenates argv unescaped on Windows and a multi-word prompt arrives
-// mangled (runner/runner.mjs:96-99 learned this the hard way).
+// The prompt is deliberately absent: it goes over stdin, never argv. Args
+// here are raw — quoting for the platform's spawn boundary is spawnSpec's
+// job (hooks/cmdline.mjs), not this function's.
 export function buildArgs({ settingsPath, sessionId, tools, resume = false }) {
   const args = [
     "-p", "--output-format", "stream-json", "--verbose",
-    "--settings", `"${settingsPath}"`,
+    "--settings", settingsPath,
     "--tools", tools.join(","),
   ];
   args.push(...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]));
@@ -59,8 +62,9 @@ export async function startTask({
   const slot = await acquireSlot(`kernel:${runId}`, { ttlMs, onLog });
   let child;
   try {
-    child = spawnFn("claude", buildArgs({ settingsPath, sessionId, tools, resume }), {
-      cwd, shell: true, stdio: ["pipe", "pipe", "pipe"],
+    const sp = spawnSpec("claude", buildArgs({ settingsPath, sessionId, tools, resume }));
+    const opts = {
+      cwd, shell: sp.shell, stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32", // see killTree
       env: {
         ...process.env, ...env,
@@ -70,7 +74,8 @@ export async function startTask({
         ACC_PTY: "", NODE_V8_COVERAGE: undefined,
         CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0",
       },
-    });
+    };
+    child = sp.args ? spawnFn(sp.file, sp.args, opts) : spawnFn(sp.file, opts);
   } catch (e) {
     slot.release();
     throw new Error(`kernel: harness "${id}" failed to start (${e.message})`);

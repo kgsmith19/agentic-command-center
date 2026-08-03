@@ -7,12 +7,20 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 
 const A = await import("./claude-code.mjs");
+const { spawnSpec } = await import("../../hooks/cmdline.mjs");
 
-test("identity reports the harness name and version (AC-A2)", () => {
+test("identity probes via spawnSpec — no args array ever rides shell:true", () => {
   const calls = [];
-  const exec = (cmd, args) => { calls.push([cmd, args]); return "2.1.220 (Claude Code)\n"; };
+  const exec = (...c) => { calls.push(c); return "2.1.220 (Claude Code)\n"; };
   assert.deepEqual(A.identity({ exec }), { name: "claude-code", version: "2.1.220" });
-  assert.deepEqual(calls[0][1], ["--version"]);
+  const sp = spawnSpec("claude", ["--version"]);
+  assert.equal(calls[0][0], sp.file);
+  if (sp.args) {
+    assert.deepEqual(calls[0][1], sp.args);
+    assert.equal(calls[0][2].shell, false);
+  } else {
+    assert.equal(calls[0][1].shell, true);
+  }
 });
 
 test("a harness that cannot be probed fails closed, with no fallback (AC-A3)", () => {
@@ -31,7 +39,7 @@ test("buildArgs pins settings, session id and the tool allowlist; prompt never i
   });
   assert.deepEqual(args, [
     "-p", "--output-format", "stream-json", "--verbose",
-    "--settings", '"C:/tmp/s.json"',
+    "--settings", "C:/tmp/s.json",
     "--tools", "Read,Bash",
     "--session-id", "11111111-2222-3333-4444-555555555555",
   ]);
@@ -78,6 +86,23 @@ test("every launch holds a lane slot for the life of the run and frees it after 
   child.emit("close", 0);
   await handle.done;
   assert.equal(fs.existsSync(path.join(laneDir, "slot-0")), false, "slot must be released after the run");
+});
+
+test("startTask spawns exactly what spawnSpec builds for this platform", async () => {
+  const seen = [];
+  const child = fakeChild();
+  const handle = await A.startTask({
+    runId: "r-spec", prompt: "p", settingsPath: "C:/tmp dir/s.json",
+    sessionId: "11111111-2222-3333-4444-555555555555", tools: ["Read"],
+    cwd: BASE, spawnFn: (...a) => { seen.push(a); return child; },
+  });
+  const sp = spawnSpec("claude", A.buildArgs({ settingsPath: "C:/tmp dir/s.json", sessionId: "11111111-2222-3333-4444-555555555555", tools: ["Read"] }));
+  assert.equal(seen[0][0], sp.file);
+  const opts = sp.args ? seen[0][2] : seen[0][1];
+  if (sp.args) assert.deepEqual(seen[0][1], sp.args);
+  assert.equal(opts.shell, sp.shell);
+  child.emit("close", 0);
+  await handle.done;
 });
 
 test("a harness that fails to spawn releases the slot and fails closed (AC-A3)", async () => {
@@ -226,15 +251,16 @@ test("readState ignores an assistant message with no usage at all", () => {
 
 test("sendStep continues an existing session over --resume (AC-A7)", async () => {
   const child = fakeChild();
-  let sawArgs = null;
+  let seen = null;
   const p = A.sendStep(
     { sessionId: "11111111-2222-3333-4444-555555555555", settingsPath: "C:/tmp/s.json", tools: ["Read"], cwd: BASE, runId: "r-step" },
     "next instruction",
-    { spawnFn: (_cmd, args) => { sawArgs = args; return child; } }
+    { spawnFn: (...a) => { seen = a; return child; } }
   );
   await new Promise((r) => setTimeout(r, 20));
   child.emit("close", 0);
   await p;
-  assert.ok(sawArgs.includes("--resume"));
+  const parts = Array.isArray(seen[1]) ? seen[1] : [seen[0]];
+  assert.ok(parts.some((p) => String(p).includes("--resume")), "must resume the session");
   assert.equal(child.stdin.written, "next instruction");
 });
