@@ -9,6 +9,21 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUN = path.join(HERE, "run.mjs");
+
+// Platform-skip pattern already used by hooks/route.test.mjs: this one test
+// below resolves the REAL claude-code adapter (no fake injected) and calls
+// its real identity() probe, which shells out to an actual installed `claude`
+// binary. CI runners (and any hermetic sandbox) do not have that binary on
+// PATH, so the probe fails with a spawn error rather than proving anything
+// about adapter resolution — skip cleanly rather than fail for the wrong
+// reason, exactly as route.test.mjs skips its four fixture-path tests off Windows.
+let claudeCliOnPath = true;
+try {
+  execFileSync("claude", ["--version"], { encoding: "utf8", timeout: 15000, windowsHide: true, shell: true });
+} catch {
+  claudeCliOnPath = false;
+}
+
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-kernel-run-"));
 process.env.ACC_ROOT = path.join(BASE, "root");
 process.env.ACC_POLICY = path.join(BASE, "policy.json");
@@ -76,7 +91,7 @@ test("the contract is stored verbatim in the started line (AC-C3)", async () => 
   assert.deepEqual(L.readRuns().find((x) => x.event === "run_started").contract, c);
 });
 
-test("runTask resolves a real adapter when none is injected", async () => {
+test("runTask resolves a real adapter when none is injected", { skip: !claudeCliOnPath }, async () => {
   // A vault key the (empty) test vault doesn't have makes envForKeys throw
   // and fail closed AFTER identity() but BEFORE startTask() — proving real
   // adapter resolution without ever spawning a live `claude -p` process.
