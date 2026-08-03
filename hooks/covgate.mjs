@@ -61,12 +61,15 @@ export function floors(file) {
 export const normPath = (p) => path.resolve(String(p)).replaceAll("\\", "/").toLowerCase();
 
 // Lib files only: .mjs directly under hooks/, runner/, kernel/, or gui/
-// (kernel/ allows one level of nesting for kernel/adapters/<harness>.mjs),
-// minus tests and harnesses. The GATE'S OWN SUBJECT, exported for its suite.
+// (kernel/ allows one level of nesting for kernel/adapters/<harness>.mjs, gui/
+// for gui/e2e/<spec>.mjs), minus tests and harnesses — .test.mjs (node:test),
+// .e2e.mjs (kernel/loop proof runs), and .spec.mjs (Playwright, gui/e2e/) are
+// all the instrument, never the gated subject. The GATE'S OWN SUBJECT,
+// exported for its suite.
 export function changedLibFiles(names) {
   return [...new Set(names)]
     .map((n) => String(n).replaceAll("\\", "/"))
-    .filter((n) => /^(hooks|runner|kernel|gui)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e)\.mjs$/.test(n));
+    .filter((n) => /^(hooks|runner|kernel|gui)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e|spec)\.mjs$/.test(n));
 }
 
 // lcov per file: DA:<line>,<hits> (lines), FNDA:<hits>,<name> (functions),

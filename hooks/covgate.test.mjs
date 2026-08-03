@@ -95,6 +95,13 @@ test("changedLibFiles keeps lib .mjs under hooks/ and runner/, drops tests, harn
 // Kernel modules must be gated exactly like hooks/ and runner/ — the gate is
 // what makes the kernel's 100/100/90 floors real. One level of nesting is
 // allowed so kernel/adapters/<harness>.mjs is gated too.
+test("changedLibFiles drops Playwright specs — a .spec.mjs is the harness, not a gated lib file", () => {
+  assert.deepEqual(
+    changedLibFiles(["gui/server.mjs", "gui/e2e/kernel-settings.spec.mjs"]),
+    ["gui/server.mjs"]
+  );
+});
+
 test("changedLibFiles gates kernel modules, including one level of nesting", () => {
   assert.deepEqual(
     changedLibFiles([
