@@ -18,8 +18,13 @@ export const policyPath = () => process.env.ACC_POLICY || path.join(REPO, "polic
 export const kernelRoot = () => path.resolve(process.env.ACC_ROOT || REPO);
 export const norm = (p) => path.resolve(p).replaceAll("\\", "/").toLowerCase();
 
+// harness has no in-code default (null): naming one here would be a
+// harness-specific reference living outside kernel/adapters/, which AC-A8
+// forbids. The shipped policy.json carries the real default; this null only
+// surfaces for a policy file that omits the key entirely, and fails closed
+// via kernel/adapter.mjs's name validation.
 export const KERNEL_DEFAULTS = Object.freeze({
-  harness: "claude-code",
+  harness: null,
   budget: { wallClockMin: 60, toolCalls: 200, tokens: 500000 },
   hardCaps: { wallClockMin: 240 },
   autonomy: { window: 10, rejectRate: 0.3, factor: 0.5, runs: 5 },
