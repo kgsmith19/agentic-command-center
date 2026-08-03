@@ -121,5 +121,15 @@
                   "changedBranchCoverage":  90,
                   "branchFloorOverrides":  { "hooks/lane.mjs":  85 },
                   "_note":  "hooks/covgate.mjs floors, per CHANGED lib file (hooks/ and runner/ .mjs, tests exempt). Three floors because line coverage alone lies: V8 marks a declaration line covered even when the function is never called. Branches default 90 - the last branch points are defensive catch-paths needing fault injection; raise per-change when the file warrants the spend. hooks/testplan.mjs injects the contract that binds these gates at plan time. branchFloorOverrides keys are gate-relative paths (forward slashes) with a per-file changedBranchCoverage override - hooks/lane.mjs is overridden to 85% per OPEN-ISSUES.md OI-017: node's own --experimental-test-coverage merge under-reports its branches (measured 87.9%) once the full ten-file fast tier runs together in one invocation, a confirmed node v24.18.0 tooling limitation, not a real gap - true isolated coverage is 91.87%, proven 2026-08-02."
-              }
+              },
+    "kernel":  {
+                   "harness":  "claude-code",
+                   "budget":  { "wallClockMin":  60, "toolCalls":  200, "tokens":  500000 },
+                   "hardCaps":  { "wallClockMin":  240 },
+                   "autonomy":  { "window":  10, "rejectRate":  0.3, "factor":  0.5, "runs":  5 },
+                   "checkpointMin":  20,
+                   "alwaysAllowTools":  [ "TodoWrite" ],
+                   "extraDenyWriteRoots":  [],
+                   "_note":  "kernel/ dials (spec docs/superpowers/specs/2026-08-03-acc-kernel-design.md). Re-read on EVERY guardhook fire, so an edit here applies to the next tool call with no restart. budget = per-run default ceilings; hardCaps.wallClockMin also bounds the task credential TTL; autonomy = rolling window of finalized runs, reject-rate trigger, tightening factor and how many runs it lasts; checkpointMin = automated re-evaluation interval, a run with zero tool calls in an interval is stopped as stalled. alwaysAllowTools are permitted regardless of contract (harmless bookkeeping tools). extraDenyWriteRoots adds to the built-in always-deny set (this repo + ~/.claude), never replaces it."
+               }
 }
