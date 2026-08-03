@@ -157,10 +157,13 @@ plan.
 - Binds **127.0.0.1 only**. Port: `--port N`, default ephemeral (`0`); prints
   one line `LISTENING <port>` to stdout that consumers parse
   (`guards-gui.ps1`, the Playwright setup, a human opening a browser).
-- **No business logic.** Handlers read/validate/write through
-  `kernel/settings.mjs` — exactly one module for this tab; future tabs bring
-  their own module calls — preserving the invariant that the engine layer
-  owns every state change.
+- **No business logic.** Handlers read via `loadKernelPolicy()` and write via
+  a new `saveKernelPolicy(block)` — both in `kernel/policy.mjs`, the module
+  that already owns kernel-policy IO (correction at plan time: the earlier
+  draft said `settings.mjs`, which generates harness settings, not policy).
+  Validation and the atomic temp-file-rename write live in `policy.mjs`;
+  future tabs bring their own module calls. The engine layer keeps owning
+  every state change.
 - Security model, answering OI-022's recorded tension: a same-user local
   attacker is out of scope — they can already edit `policy.json` directly, so
   the server creates no new privilege. The genuinely new risk is web-borne
@@ -200,7 +203,10 @@ done-when verbatim:
 
 Fast tier: `gui/server.mjs` also gets hermetic unit/integration tests
 (in-process server + plain `fetch`) — covgate's 100/100/90 floors apply to it,
-`hooks/cmdline.mjs`, and `kernel/guardhook.mjs` as changed lib files.
+`hooks/cmdline.mjs`, and `kernel/guardhook.mjs` as changed lib files. Found at
+plan time: covgate's lib scan covers only `hooks/`, `runner/`, `kernel/` — the
+plan extends it to `gui/` (regex + test discovery + a covgate test case) so
+the server cannot silently escape the floors.
 
 CI: new ubuntu job `gui-e2e` (`npx playwright install --with-deps chromium`,
 browser cache, `npm run e2e:gui`) — server and engine are portable Node, so
