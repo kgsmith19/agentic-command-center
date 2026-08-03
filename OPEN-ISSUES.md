@@ -461,6 +461,29 @@ line under `## Resolved`.
   after merge) and scenarios 1-5 confirmed PASS, or a diff-only argument
   (nothing touched that this suite covers) is accepted as sufficient instead.
 
+## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
+- opened: 2026-08-03
+- where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart
+  injection, AGENTS.md "Goals" section, this repo's docs/specs generally
+- what: ACC's "goal" is a persistent working-condition store that survives
+  `/clear` and drives the goal loop (bind a condition to a session, resurrect
+  it across clears/resumes). There is a separately popular, differently-
+  scoped Claude Code plugin also called "Goal" (or similarly named). Same
+  word, different mechanism, different owner — raised while running the
+  `/goal` skill on a session that turned out to have no ACC goal bound to it,
+  which surfaced the naming ambiguity directly (see chat: 2026-08-03,
+  "concurrent claude.exe cap" brainstorming session).
+- why open: needs a real naming/process design pass (what ACC's concept
+  should be called instead, whether to rename the skill/hook/CLI verbs/
+  policy keys, migration cost for the existing goal store on disk) — Kyle
+  asked to document now and dig into the actual rename later, not decide it
+  inline mid-unrelated-task.
+- done when: a decision is made and recorded (rename ACC's concept to a
+  distinct term, or some other disambiguation) and, if renamed, `hooks/
+  goal.mjs`, the `/goal` skill, the SessionStart injection format, and
+  AGENTS.md are updated consistently with no stale references to the old
+  name left in code or docs.
+
 ## Resolved
 
 ## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process
@@ -497,13 +520,28 @@ line under `## Resolved`.
   cross-console mistargeting this entry described is fixed, the class it's
   drawn from is not.
 
-## OI-016 [RESOLVED 2026-08-02] Kyle's own manual terminals (outside the GUI) remain completely unlaned
-- opened: 2026-08-01, resolved: 2026-08-02
-- decision: not shimming `claude` on PATH right now. A machine-wide shim is
-  materially bigger and riskier than the interactive-lane wiring it would
-  sit next to (real risk of breaking Kyle's own everyday `claude` calls if
-  buggy) and deserves its own design pass, not a bolt-on. Revisit if manual-
-  terminal/automation overlap is ever observed to cause a real incident.
+## OI-016 [SUPERSEDED 2026-08-03] Kyle's own manual terminals (outside the GUI) remain completely unlaned
+- opened: 2026-08-01, resolved: 2026-08-02, superseded: 2026-08-03
+- original decision: not shimming `claude` on PATH right now. A machine-wide
+  shim is materially bigger and riskier than the interactive-lane wiring it
+  would sit next to (real risk of breaking Kyle's own everyday `claude` calls
+  if buggy) and deserves its own design pass, not a bolt-on. Revisit if
+  manual-terminal/automation overlap is ever observed to cause a real
+  incident.
+- what changed: the revisit trigger fired. `node e2e/loop.e2e.mjs` (real
+  tokens) failed 4/5 scenarios on timeouts while `tasklist` showed 9
+  concurrent `claude.exe` processes at once — unrelated manual/automation
+  sessions overlapping exactly as this entry warned. Ran the deferred design
+  pass via the brainstorming skill; landed on a machine-wide `lane.total`
+  cap (default 3) enforced by a fail-open PATH shim (`shim/claude.cmd` ->
+  `hooks/lane.mjs gate`, falls through to the real exe on any gate error,
+  only an explicit exit 42 refuses) plus a standalone alert-only watcher
+  (`watcher/claude-cap-watch.ps1`) that flags both over-cap breaches and a
+  silently-dropped shim. Full design:
+  `docs/superpowers/specs/2026-08-03-claude-launch-cap-design.md`.
+- status: design approved 2026-08-03; implementation tracked via that spec's
+  plan, not this entry. Re-open a fresh OI if the shipped gate itself proves
+  insufficient (e.g. a launch vector it doesn't cover is found).
 
 ## OI-017 [RESOLVED 2026-08-02] node's own coverage merge under-reports hooks/lane.mjs branches when the full fast tier runs together
 - opened: 2026-08-02, resolved: 2026-08-02
