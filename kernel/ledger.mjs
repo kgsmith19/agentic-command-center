@@ -12,6 +12,7 @@
 // child process env, never into an argument that could reach this file.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { kernelRoot } from "./policy.mjs";
 
 export const ledgerDir = () => path.join(kernelRoot(), "runner", "ledger");
@@ -63,4 +64,61 @@ export function decisionCounts(runId) {
   const rows = readLines(decisionsFile(runId));
   const allow = rows.filter((r) => r.allow === true).length;
   return { allow, deny: rows.length - allow, total: rows.length };
+}
+
+// Queryable by status, harness identity, and date range (AC-L3). No dashboard:
+// the spec's out-of-scope list rules presentation out, and JSONL + this filter
+// is the whole "queryable" requirement.
+export function query({ status, harness, since, until } = {}) {
+  const rows = readRuns();
+  const finals = new Map();
+  for (const r of rows) if (r.event === "run_finalized") finals.set(r.runId, r);
+  const from = since ? Date.parse(since) : null;
+  const to = until ? Date.parse(until) : null;
+  const out = [];
+  for (const s of rows) {
+    if (s.event !== "run_started") continue;
+    const f = finals.get(s.runId);
+    const at = Date.parse(s.startedAt);
+    if (from !== null && at < from) continue;
+    if (to !== null && at > to) continue;
+    const row = {
+      runId: s.runId,
+      status: f ? f.outcome : "interrupted",
+      harness: f ? f.harness : null,
+      startedAt: s.startedAt,
+      finishedAt: f ? f.finishedAt : null,
+      criteria: f ? f.criteria : null,
+    };
+    if (status && row.status !== status) continue;
+    if (harness && (!row.harness || row.harness.name !== harness)) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+export function runCli(argv) {
+  const [cmd, ...args] = argv;
+  if (cmd !== "query") {
+    throw new Error("usage: ledger.mjs query [--status <s>] [--harness <h>] [--since <date>] [--until <date>]");
+  }
+  const flag = (name) => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  return query({
+    status: flag("--status"), harness: flag("--harness"),
+    since: flag("--since"), until: flag("--until"),
+  });
+}
+
+// Guarded so the module stays importable by its own suite without running the
+// CLI on import — the same shape hooks/covgate.mjs and runner/runner.mjs use.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    for (const row of runCli(process.argv.slice(2))) console.log(JSON.stringify(row));
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
 }

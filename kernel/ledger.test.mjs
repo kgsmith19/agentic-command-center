@@ -1,10 +1,14 @@
 // node --test kernel/ledger.test.mjs  (run from C:\code\guards)
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const LEDGER = path.join(HERE, "ledger.mjs");
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-kernel-ledger-"));
 process.env.ACC_ROOT = path.join(BASE, "root");
 process.env.ACC_POLICY = path.join(BASE, "policy.json");
@@ -83,4 +87,56 @@ test("a truncated trailing line does not lose the records before it", () => {
   L.appendStarted(started("r7"));
   fs.appendFileSync(L.runsFile(), '{"event":"run_fina');
   assert.equal(L.readRuns().length, 1);
+});
+
+function seed() {
+  L.appendStarted({ runId: "q1", startedAt: "2026-08-01T00:00:00.000Z", contract: {}, settingsSha256: "a" });
+  L.appendFinalized({ runId: "q1", finishedAt: "2026-08-01T01:00:00.000Z", outcome: "accepted",
+    harness: { name: "claude-code", version: "1" }, criteria: [], decisions: {}, tokens: 1, wallClockMs: 1 });
+  L.appendStarted({ runId: "q2", startedAt: "2026-08-05T00:00:00.000Z", contract: {}, settingsSha256: "a" });
+  L.appendFinalized({ runId: "q2", finishedAt: "2026-08-05T01:00:00.000Z", outcome: "rejected",
+    harness: { name: "codex", version: "2" }, criteria: [], decisions: {}, tokens: 1, wallClockMs: 1 });
+  L.appendStarted({ runId: "q3", startedAt: "2026-08-06T00:00:00.000Z", contract: {}, settingsSha256: "a" });
+}
+
+test("query filters by status, harness, and date range (AC-L3)", () => {
+  seed();
+  assert.deepEqual(L.query({ status: "rejected" }).map((r) => r.runId), ["q2"]);
+  assert.deepEqual(L.query({ harness: "claude-code" }).map((r) => r.runId), ["q1"]);
+  assert.deepEqual(L.query({ since: "2026-08-04" }).map((r) => r.runId), ["q2", "q3"]);
+  assert.deepEqual(L.query({ since: "2026-08-04", until: "2026-08-05T23:59:59Z" }).map((r) => r.runId), ["q2"]);
+});
+
+test("a started run with no finalized line reads as interrupted (AC-L2)", () => {
+  seed();
+  assert.equal(L.query({}).find((r) => r.runId === "q3").status, "interrupted");
+  assert.deepEqual(L.query({ status: "interrupted" }).map((r) => r.runId), ["q3"]);
+});
+
+test("the CLI returns the same rows the API does", () => {
+  seed();
+  assert.deepEqual(
+    L.runCli(["query", "--status", "accepted"]).map((r) => r.runId),
+    L.query({ status: "accepted" }).map((r) => r.runId)
+  );
+  assert.throws(() => L.runCli(["bogus"]), /usage: ledger\.mjs query/);
+});
+
+// The isMain guard only runs via a real process invocation, never via
+// `node --test` import — proven here as an actual subprocess (inherits
+// process.env, including a live NODE_V8_COVERAGE, so it counts toward this
+// file's own coverage the same way hooks/covgate.mjs proves itself).
+test("end-to-end: the CLI prints JSON lines and exits 0 for a real query", () => {
+  seed();
+  const out = execFileSync("node", [LEDGER, "query", "--status", "accepted"], {
+    encoding: "utf8", env: process.env,
+  });
+  assert.deepEqual(out.trim().split("\n").map((l) => JSON.parse(l).runId), ["q1"]);
+});
+
+test("end-to-end: an unknown CLI command prints usage to stderr and exits 1", () => {
+  assert.throws(
+    () => execFileSync("node", [LEDGER, "bogus"], { encoding: "utf8", env: process.env }),
+    /usage: ledger\.mjs query/
+  );
 });
