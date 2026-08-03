@@ -101,10 +101,21 @@ fire, so edits apply with no restart. It also writes/removes
 `hooks/budget.mjs unstop`, which also flushes the tier cache) and can grant a
 30-minute fan-out window (`hooks/budget.mjs fanout 30`).
 
+## Kernel (headless task runner)
+
+`kernel/run.mjs <contract.json>` runs one AI coding harness at a time under a
+deny-by-default boundary the harness cannot widen, verifies the real
+end-state independently of what the harness claims, records every run in one
+structured ledger (`node kernel/ledger.mjs query ...`), and tightens its own
+ceilings after a run of failures — all separate from, and untouched by, the
+interactive ConPTY/goal-loop path above. See `kernel/README.md` for the
+contract shape, the harness-swap procedure (one config value plus one new
+file under `kernel/adapters/`), and the honest guard ceilings.
+
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs runner/runner.test.mjs
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs
     -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
@@ -123,6 +134,13 @@ node e2e/loop.e2e.mjs [--only N]
        pipe, zero injection). Each scenario holds a launch-lane slot for
        its whole life (below), so a proof run queues behind — and is queued
        behind by — every other automated launch on the machine.
+node kernel/kernel.e2e.mjs
+    -> PROOF TIER. Spawns a REAL claude twice via kernel/run.mjs and spends
+       tokens, so run it deliberately. 1 an in-scope edit is allowed, made,
+       and independently verified; 2 the same contract with writeRoots
+       elsewhere is denied, the file stays untouched, and the run is
+       rejected; a third check confirms no ACC goal-loop state leaks from a
+       kernel run into the live repo.
 powershell -File gui/ptyhost.test.ps1
     -> INTEGRATION. Acc.PtyHost against a real cmd.exe on a ConPTY - pipe
        protocol accepts/refuses, dispose kills the child. No claude, no GUI.
