@@ -336,6 +336,45 @@ line under `## Resolved`.
   (e.g. `ttlMs` already bounds this — confirm and document) is written down
   and cited here.
 
+## OI-022 GUI frontend for T21: WinForms vs web is an open architecture decision, not yet made
+- opened: 2026-08-03
+- where: guards-gui.ps1, gui/PtyHost.cs, gui/term.html, gui/vendor (T21, not
+  yet built); relates OI-009 (GUI process is a SPOF for hosted sessions),
+  OI-020 (no Playwright e2e for the kernel GUI)
+- what: discussed switching T21's kernel settings tab (and possibly the
+  whole GUI) from WinForms to a web frontend, dev time not a factor. Upsides
+  identified: (1) decouples session hosting from the viewer, which would
+  structurally fix OI-009 — a persistent backend owns the ConPTY, a browser
+  tab is disposable/reconnectable, unlike today where closing the GUI process
+  kills every hosted session; (2) remote/multi-device access to the ledger,
+  decision log, and autonomy tightening, matching the kernel's already-
+  headless (`claude -p`) operating model; (3) much cheaper live/searchable
+  views (WebSocket/SSE push) than WinForms' manual redraw model.
+  Code-reuse question answered by direct inspection (2026-08-03): the split is
+  NOT even close to 50/50. `gui/PtyHost.cs` already serves a plain named-pipe
+  protocol (TEXT/SUBMIT/ESC in, OK/FAIL + output out) with zero UI-class
+  dependency — any client, web or WinForms, can drive it as-is over the same
+  pipe (or a thin WebSocket bridge in front of it). `gui/term.html` already
+  renders via xterm.js and talks to PtyHost only through structured JSON
+  messages over `window.chrome.webview.postMessage` (WebView2) — swapping that
+  transport for a plain WebSocket/fetch call is a small, contained change; the
+  terminal UI itself is already web technology. `guards-gui.ps1`'s own logic
+  is ~80% backend glue (hooks/kernel module calls, lane management, policy/
+  ledger reads) with no WinForms dependency at all, and only ~15-20% actual
+  WinForms construction (Form/Tab/Button/MessageBox wiring). Net: the
+  overwhelming majority of the code carries over untouched or near-untouched;
+  what's WinForms-specific is a small, well-bounded slice.
+- why open: this is a real architecture decision for Kyle to make, not
+  something to decide mid-task. The main tradeoff against switching: it adds
+  a network-facing surface (even localhost-only) to a project whose whole
+  ethos is local, deny-by-default enforcement — a philosophical tension, not
+  just an engineering one. OI-010's noted gap (multi-line pipe payloads fall
+  back to keystroke injection) is fine for today's single-line use but would
+  need closing for a richer web client.
+- done when: Kyle decides WinForms-vs-web for T21 (or explicitly defers the
+  decision past T21), and that decision is reflected in the T21 task text
+  before it's executed.
+
 ## Resolved
 
 ## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process
