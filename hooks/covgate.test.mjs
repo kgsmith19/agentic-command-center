@@ -264,6 +264,32 @@ test("end-to-end: an untested function fails the gate even at 100% lines", () =>
   assert.ok(/under floor on:.*funcs/.test(r.stdout), `must name the metric that caught it: ${r.stdout}`);
 });
 
+test("end-to-end: gui/ is inside the coverage fence — default discovery finds gui/*.test.mjs and an uncovered function fails the gate", () => {
+  const repo = path.join(BASE, "gui-partial");
+  fs.mkdirSync(path.join(repo, "gui"), { recursive: true });
+  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
+  g("init", "-q");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  fs.writeFileSync(
+    path.join(repo, "gui", "x.mjs"),
+    "export function add(a, b) { return a + b; }\nexport function sub(a, b) { return a - b; }\n"
+  );
+  fs.writeFileSync(
+    path.join(repo, "gui", "x.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "./x.mjs";\ntest("add", () => assert.equal(add(2, 3), 5));\n'
+  );
+  let out, status;
+  try {
+    execFileSync("node", [COVGATE], { cwd: repo, encoding: "utf8", env: { ...process.env, ACC_COVGATE_TESTS: undefined, ACC_POLICY: path.join(BASE, "nope.json") } });
+    status = 0;
+  } catch (e) {
+    out = String(e.stdout || "") + String(e.stderr || "");
+    status = e.status;
+  }
+  assert.notEqual(status, 0);
+  assert.ok(/FAIL.*gui\/x\.mjs/.test(out), `must name the offender: ${out}`);
+});
+
 test("end-to-end: default discovery covers BOTH hooks/ and runner/ (regression, 2026-08-01)", () => {
   // The bug this locks against: discovery once scanned only hooks/, so a
   // runner/ file could have a real, passing test suite and covgate would

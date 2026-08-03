@@ -60,13 +60,13 @@ export function floors(file) {
 // meet in the middle regardless of who emitted which slash.
 export const normPath = (p) => path.resolve(String(p)).replaceAll("\\", "/").toLowerCase();
 
-// Lib files only: .mjs directly under hooks/, runner/, or kernel/ (kernel/
-// allows one level of nesting for kernel/adapters/<harness>.mjs), minus tests
-// and harnesses. The GATE'S OWN SUBJECT, exported for its suite.
+// Lib files only: .mjs directly under hooks/, runner/, kernel/, or gui/
+// (kernel/ allows one level of nesting for kernel/adapters/<harness>.mjs),
+// minus tests and harnesses. The GATE'S OWN SUBJECT, exported for its suite.
 export function changedLibFiles(names) {
   return [...new Set(names)]
     .map((n) => String(n).replaceAll("\\", "/"))
-    .filter((n) => /^(hooks|runner|kernel)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e)\.mjs$/.test(n));
+    .filter((n) => /^(hooks|runner|kernel|gui)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e)\.mjs$/.test(n));
 }
 
 // lcov per file: DA:<line>,<hits> (lines), FNDA:<hits>,<name> (functions),
@@ -132,7 +132,7 @@ function main() {
   // the REAL guards/hooks tests while gating a throwaway fixture.
   const tests = process.env.ACC_COVGATE_TESTS
     ? process.env.ACC_COVGATE_TESTS.split(/[ ,]+/).filter(Boolean)
-    : ["hooks", "runner", "kernel", "kernel/adapters"].flatMap((d) => {
+    : ["hooks", "runner", "kernel", "kernel/adapters", "gui"].flatMap((d) => {
         let files = [];
         try { files = fs.readdirSync(path.join(cwd, d)).filter((f) => f.endsWith(".test.mjs")); } catch {}
         return files.map((f) => path.join(d, f));
