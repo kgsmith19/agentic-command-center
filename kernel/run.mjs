@@ -17,6 +17,8 @@ import { appendStarted, appendFinalized, decisionCounts } from "./ledger.mjs";
 import { writeRunFiles, verifySettingsPin, cleanupRun } from "./settings.mjs";
 import { envForKeys } from "./credentials.mjs";
 import { verifyAll } from "./verifier.mjs";
+import { effectiveCeilings, checkpointVerdict, updateAfterRun, readAutonomy } from "./autonomy.mjs";
+import { loadKernelPolicy } from "./policy.mjs";
 
 export function newRunId() {
   const t = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "T");
@@ -48,7 +50,7 @@ function promptFor(contract) {
   ].join("\n");
 }
 
-export async function runTask(contractPath, { adapter, afterStage } = {}) {
+export async function runTask(contractPath, { adapter, afterStage, tickMs = 60000 } = {}) {
   const contract = loadContract(contractPath);
   const { ok, errors } = validateContract(contract);
   if (!ok) {
@@ -118,9 +120,53 @@ export async function runTask(contractPath, { adapter, afterStage } = {}) {
       ttlMs: (contract.budget?.wallClockMin ?? 60) * 60 * 1000,
       env: { ...credentials, ACC_KERNEL_DIR: staged.dir },
     });
-    await handle.done;
   } catch (e) {
     return failClosed(e.message, harness);
+  }
+
+  // Supervised wait: re-evaluate the run against its ceilings on every tick,
+  // never trusting the harness to police itself. A breach stops the harness
+  // and the run finalizes as aborted-by-budget with the dimension that broke.
+  const policy = loadKernelPolicy();
+  const ceilings = effectiveCeilings(contract, policy, readAutonomy());
+  const ticksPerCheckpoint = Math.max(1, Math.round((policy.checkpointMin * 60000) / tickMs));
+
+  let breach = null;
+  let ticks = 0;
+  let attemptsAtLastCheckpoint = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+    const checkpointDue = ticks % ticksPerCheckpoint === 0;
+    const verdict = checkpointVerdict({
+      elapsedMs: Date.now() - startedAt,
+      ceilings,
+      tokens: harnessAdapter.readState(handle.events || []).tokens,
+      attemptsNow: decisionCounts(runId).total,
+      attemptsAtLastCheckpoint,
+      checkpointDue,
+    });
+    if (checkpointDue) attemptsAtLastCheckpoint = decisionCounts(runId).total;
+    if (verdict.stop && !breach) {
+      breach = verdict;
+      clearInterval(timer);
+      Promise.resolve(harnessAdapter.stopTask(handle)).catch(() => {});
+    }
+  }, tickMs);
+  timer.unref?.();
+
+  try {
+    await handle.done;
+  } finally {
+    clearInterval(timer);
+  }
+
+  if (breach) {
+    const aborted = finalize({
+      outcome: "aborted-by-budget", dimension: breach.dimension, error: breach.reason,
+      harness, criteria: [], tokens: harnessAdapter.readState(handle.events || []).tokens,
+    });
+    updateAfterRun(policy);
+    return aborted;
   }
 
   // Only now, with the harness process gone, does the kernel form its own
@@ -128,10 +174,12 @@ export async function runTask(contractPath, { adapter, afterStage } = {}) {
   const state = harnessAdapter.readState(handle.events || []);
   const { criteria, accepted } = await verifyAll(contract, { cwd: workspaceOf(contract) });
 
-  return finalize({
+  const outcome = finalize({
     outcome: accepted ? "accepted" : "rejected",
     harness, criteria, tokens: state.tokens,
   });
+  updateAfterRun(policy);
+  return outcome;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

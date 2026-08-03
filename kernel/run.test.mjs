@@ -252,3 +252,73 @@ test("the staging directory is removed on every exit path (AC-G3)", async () => 
   });
   assert.equal(fs.existsSync(S.runDir(badRun.runId)), false);
 });
+
+test("a run over its wall-clock ceiling is stopped and marked aborted-by-budget (AC-B1)", async () => {
+  let stopped = false;
+  const c = good();
+  c.budget.wallClockMin = 0.001;                    // 60 ms
+  const adapter = {
+    id: "fake", identity: () => ({ name: "fake", version: "1.0.0" }),
+    startTask: async () => {
+      let resolveDone;
+      const done = new Promise((r) => (resolveDone = r));
+      return { pid: 1, events: [], done, stop: async () => { stopped = true; resolveDone({ code: 143, events: [] }); } };
+    },
+    sendStep: async () => {}, stopTask: async (h) => h.stop(),
+    readState: () => ({ toolCalls: 0, tokens: 0, texts: [], sessionId: "s" }),
+  };
+  const r = await R.runTask(contractFile(c), { adapter, tickMs: 10 });
+  assert.equal(stopped, true, "the harness must actually be stopped");
+  assert.equal(r.outcome, "aborted-by-budget");
+  assert.equal(r.dimension, "wallClock");
+  assert.equal(L.readRuns().find((x) => x.event === "run_finalized").dimension, "wallClock");
+});
+
+test("a stopTask that itself throws while enforcing a breach is swallowed, not crashed (AC-B1 fault tolerance, OI-019)", async () => {
+  const c = good();
+  c.budget.wallClockMin = 0.001;                    // 60 ms
+  let resolveDone;
+  const done = new Promise((r) => (resolveDone = r));
+  const adapter = {
+    id: "fake", identity: () => ({ name: "fake", version: "1.0.0" }),
+    startTask: async () => ({ pid: 1, events: [], done }),
+    sendStep: async () => {},
+    // Models a harness whose own stop path fails (e.g. an already-dead
+    // process) while the OS-level kill still lands moments later — the
+    // kernel's abort must not depend on stopTask() resolving cleanly.
+    stopTask: async () => { setTimeout(() => resolveDone({ code: 143, events: [] }), 5); throw new Error("kill failed"); },
+    readState: () => ({ toolCalls: 0, tokens: 0, texts: [], sessionId: "s" }),
+  };
+  const r = await R.runTask(contractFile(c), { adapter, tickMs: 10 });
+  assert.equal(r.outcome, "aborted-by-budget");
+  assert.equal(r.dimension, "wallClock");
+});
+
+test("a run over its token ceiling is stopped, using the LIVE event stream (AC-B1)", async () => {
+  const c = good();
+  c.budget.tokens = 10;
+  const events = [];
+  const adapter = {
+    id: "fake", identity: () => ({ name: "fake", version: "1.0.0" }),
+    startTask: async () => {
+      let resolveDone;
+      const done = new Promise((r) => (resolveDone = r));
+      setTimeout(() => events.push({ type: "assistant", message: { usage: { output_tokens: 999 }, content: [] } }), 15);
+      return { pid: 1, events, done, stop: async () => resolveDone({ code: 143, events }) };
+    },
+    sendStep: async () => {}, stopTask: async (h) => h.stop(),
+    readState: (evts) => ({ toolCalls: 0, tokens: evts.length * 999, texts: [], sessionId: "s" }),
+  };
+  const r = await R.runTask(contractFile(c), { adapter, tickMs: 10 });
+  assert.equal(r.outcome, "aborted-by-budget");
+  assert.equal(r.dimension, "tokens");
+});
+
+test("the autonomy window is updated after every finalized run (AC-B2 wiring)", async () => {
+  const A = await import("./autonomy.mjs");
+  fs.rmSync(path.join(L.ledgerDir(), "autonomy.json"), { force: true });
+  fs.rmSync(path.join(workDir, "out.txt"), { force: true });
+  for (let i = 0; i < 4; i++) await R.runTask(contractFile(good()), { adapter: recordingAdapter().adapter });
+  assert.equal(A.readAutonomy().factor, 0.5, "four rejected runs must have tightened the ceilings");
+  assert.equal(A.readAutonomy().log.at(-1).direction, "tighten");
+});
