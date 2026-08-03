@@ -24,6 +24,21 @@ export function readAutonomy() {
   }
 }
 
+// Strict read for ENFORCEMENT points (guardhook). ENOENT = fresh state (the
+// first-run case). Anything else THROWS: an enforcement point that treats a
+// corrupt state file as "no tightening" fails open, and readAutonomy's
+// lenient fallback is exactly that. Reporting paths keep readAutonomy.
+export function readAutonomyStrict() {
+  let raw;
+  try {
+    raw = fs.readFileSync(autonomyFile(), "utf8");
+  } catch (e) {
+    if (e.code === "ENOENT") return { ...FRESH, log: [] };
+    throw e;
+  }
+  return { ...FRESH, ...JSON.parse(raw) };
+}
+
 export function writeAutonomy(state) {
   fs.mkdirSync(path.dirname(autonomyFile()), { recursive: true });
   fs.writeFileSync(autonomyFile(), JSON.stringify(state, null, 2));

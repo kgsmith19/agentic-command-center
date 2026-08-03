@@ -139,3 +139,13 @@ test("a checkpoint stops a run over any ceiling, naming the dimension (AC-B1)", 
   assert.equal(A.checkpointVerdict({ ...base, attemptsNow: 5 }).dimension, "toolCalls");
   assert.equal(A.checkpointVerdict(base).stop, false);
 });
+
+test("readAutonomyStrict: missing file is fresh, corrupt file THROWS (never fails open)", () => {
+  fs.rmSync(L.autonomyFile(), { force: true });
+  assert.equal(A.readAutonomyStrict().factor, 1);
+  fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });
+  fs.writeFileSync(L.autonomyFile(), "{ not json");
+  assert.throws(() => A.readAutonomyStrict());
+  fs.writeFileSync(L.autonomyFile(), JSON.stringify({ factor: 0.5, runsLeft: 3 }));
+  assert.equal(A.readAutonomyStrict().factor, 0.5);
+});

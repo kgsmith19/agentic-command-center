@@ -78,6 +78,12 @@ do something unintended inside its allowance. `WebSearch` has no host to
 scope — a contract can only grant or withhold searching as a whole. This is
 a deterministic process-level boundary, not an OS sandbox.
 
+The toolCalls ceiling itself tightens live: the guardhook computes it via the
+same `effectiveCeilings(contract, policy, autonomy)` the supervisor uses, on
+every fire, so an autonomy-tightened factor applies to the very next tool
+call — no tick-interval latency gap. Wall-clock and stall detection remain
+the supervisor's, checked at each `checkpointMin` tick.
+
 ## Credentials
 
 The contract lists vault key **names**; `kernel/credentials.mjs` is the only

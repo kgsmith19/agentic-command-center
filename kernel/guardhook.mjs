@@ -16,6 +16,7 @@ import { decide } from "./guard.mjs";
 import { verifySettingsPin } from "./settings.mjs";
 import { loadKernelPolicy, alwaysDenyWriteRoots } from "./policy.mjs";
 import { appendDecision, decisionCounts } from "./ledger.mjs";
+import { effectiveCeilings, readAutonomyStrict } from "./autonomy.mjs";
 
 function deny(reason, runId, record) {
   if (runId && record) {
@@ -81,9 +82,22 @@ try {
   });
 }
 
-const ceiling = Number.isFinite(contract?.budget?.toolCalls)
-  ? contract.budget.toolCalls
-  : policy.budget.toolCalls;
+let autonomy;
+try {
+  autonomy = readAutonomyStrict();
+} catch (e) {
+  deny(`cannot read autonomy state (${e.message}) — failing closed`, pin.runId, {
+    tool: payload?.tool_name ?? null, allow: false, rule: "config", reason: "unreadable autonomy state", target: null,
+  });
+}
+// The SAME function the supervisor uses (run.mjs) — the two enforcement
+// points cannot drift, and tightening applies on the very next fire (OI-024).
+const ceiling = effectiveCeilings(contract, policy, autonomy).toolCalls;
+if (!Number.isFinite(ceiling)) {
+  deny(`no finite toolCalls ceiling from contract/policy (got ${ceiling}) — failing closed`, pin.runId, {
+    tool: payload?.tool_name ?? null, allow: false, rule: "config", reason: "non-finite toolCalls ceiling", target: null,
+  });
+}
 
 // Attempts, not just successes: a harness looping on denied calls is burning a
 // real budget and must hit the same ceiling.
@@ -96,7 +110,10 @@ const d = decide(payload, {
 });
 
 try {
-  appendDecision(pin.runId, { tool: d.tool, allow: d.allow, rule: d.rule, reason: d.reason, target: d.target });
+  appendDecision(pin.runId, {
+    tool: d.tool, allow: d.allow, rule: d.rule, reason: d.reason, target: d.target,
+    ceiling, autonomyFactor: autonomy.factor ?? 1,
+  });
 } catch (e) {
   // A decision that cannot be recorded is a decision that cannot be audited.
   deny(`cannot write the decision log (${e.message}) — failing closed`);

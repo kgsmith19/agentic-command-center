@@ -18,6 +18,8 @@ fs.writeFileSync(POLICY, JSON.stringify({ kernel: { alwaysAllowTools: ["TodoWrit
 
 const S = await import("./settings.mjs");
 const L = await import("./ledger.mjs");
+const AU = await import("./autonomy.mjs");
+const P = await import("./policy.mjs");
 
 const RUN = "r-hook";
 const contract = {
@@ -168,4 +170,65 @@ test("the tool-call ceiling is enforced across separate hook fires (AC-B1)", () 
   const over = call();               // contract budget.toolCalls is 3
   assert.equal(over.code, 2);
   assert.match(over.err, /ceiling/);
+});
+
+test("a tightened autonomy factor shrinks the per-fire ceiling to EXACTLY effectiveCeilings' number (OI-024)", () => {
+  stage();
+  fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });
+  fs.writeFileSync(L.autonomyFile(), JSON.stringify({ factor: 0.5 }));
+  const shrunk = AU.effectiveCeilings(contract, P.loadKernelPolicy(), { factor: 0.5 }).toolCalls; // 3 * 0.5 -> 2
+  const read = () => fire({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } });
+  for (let i = 0; i < shrunk; i++) assert.equal(read().code, 0, `fire ${i + 1} of ${shrunk} must still be allowed`);
+  const over = read();
+  assert.equal(over.code, 2, "the fire after the shrunk ceiling must be denied");
+  const rows = fs.readFileSync(L.decisionsFile(RUN), "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(rows.at(-1).ceiling, shrunk, "the decision record must carry the effective ceiling");
+  assert.equal(rows.at(-1).autonomyFactor, 0.5, "…and the factor that produced it");
+});
+
+test("absent autonomy state means base ceiling, corrupt autonomy state fails closed", () => {
+  stage(); // no autonomy file
+  const read = () => fire({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } });
+  for (let i = 0; i < 3; i++) assert.equal(read().code, 0); // contract.budget.toolCalls = 3
+  assert.equal(read().code, 2);
+  stage();
+  fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });
+  fs.writeFileSync(L.autonomyFile(), "{ not json");
+  const r = read();
+  assert.equal(r.code, 2);
+  assert.match(r.err, /autonomy/i);
+});
+
+test("a contract yielding no finite toolCalls ceiling denies instead of comparing against NaN", () => {
+  process.env.ACC_ROOT = ROOT; process.env.ACC_POLICY = POLICY;
+  fs.rmSync(ROOT, { recursive: true, force: true });
+  S.writeRunFiles({ ...contract, budget: { ...contract.budget, toolCalls: "many" } }, { runId: RUN, guardhookPath: HOOK });
+  const r = fire({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } });
+  assert.equal(r.code, 2);
+  assert.match(r.err, /finite/i);
+});
+
+test("the autonomy-state and non-finite-ceiling denials still record with tool:null when the payload itself has no tool_name", () => {
+  stage();
+  fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });
+  fs.writeFileSync(L.autonomyFile(), "{ not json");
+  const noToolAutonomy = fire({});
+  assert.equal(noToolAutonomy.code, 2);
+  assert.match(noToolAutonomy.err, /autonomy/i);
+
+  stage();
+  S.writeRunFiles({ ...contract, budget: { ...contract.budget, toolCalls: "many" } }, { runId: RUN, guardhookPath: HOOK });
+  const noToolCeiling = fire({});
+  assert.equal(noToolCeiling.code, 2);
+  assert.match(noToolCeiling.err, /finite/i);
+});
+
+test("a stored autonomy factor of null falls back to 1 in the decision record, not NaN or null", () => {
+  stage();
+  fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });
+  fs.writeFileSync(L.autonomyFile(), JSON.stringify({ factor: null }));
+  const r = fire({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } });
+  assert.equal(r.code, 0);
+  const rows = fs.readFileSync(L.decisionsFile(RUN), "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(rows.at(-1).autonomyFactor, 1);
 });
