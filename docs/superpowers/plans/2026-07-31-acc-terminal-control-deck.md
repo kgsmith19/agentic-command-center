@@ -13,8 +13,7 @@
 
 ## Global Constraints
 
-- Fast tier must stay green: `node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs` from `C:\code\guards` (never `node --test hooks/`).
-- Never run a hook by hand against live state — always sandbox with `ACC_ROOT=<throwaway> ACC_POLICY=<file>` (guards OI-006).
+- Fast tier must stay green and hooks must never run by hand against live state — see `AGENTS.md` § "The regression, exactly" for the current command (`npm run test:windows` on Windows / `npm test` portable) and the `ACC_ROOT`/`ACC_POLICY` sandboxing rule (guards OI-006).
 - C# / PS 5.1 constraints unchanged: no `$"..."`, no `nameof`, no null-conditional in `Add-Type` C#; PS 5.1 has no `&&`/ternary.
 - Pause must never affect non-pty (external keystroke) sessions.
 - Legacy fallback launch stays byte-for-byte; with `$script:TermOk = $false` the deck shows only the unavailable label.

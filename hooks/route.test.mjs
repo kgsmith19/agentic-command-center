@@ -144,7 +144,12 @@ test("hook flags a route that sits outside the session cwd", () => {
   assert.match(ctx, /outside the session cwd/);
 });
 
-test("scope change blocks the prompt and queues a cd for the watcher", () => {
+// cdRequest requires the route's real directory to exist on disk
+// (hooks/route.mjs's fs.existsSync(r.path) gate) — meaningful only where the
+// fixture's routes point at real checked-out repos, i.e. Windows. Same
+// platform-skip pattern already used by hooks/budget.test.mjs and
+// hooks/testplan.test.mjs for their own OS-specific cases.
+test("scope change blocks the prompt and queues a cd for the watcher", { skip: process.platform !== "win32" }, () => {
   const sid = withConsole(`t${process.pid}f`);
   try {
     const out = JSON.parse(fire(sid, "add a supabase migration"));
@@ -158,7 +163,7 @@ test("scope change blocks the prompt and queues a cd for the watcher", () => {
   } finally { cleanup(sid); }
 });
 
-test("a mid-session re-scope also asks for a clear", () => {
+test("a mid-session re-scope also asks for a clear", { skip: process.platform !== "win32" }, () => {
   const sid = withConsole(`t${process.pid}g`);
   try {
     fire(sid, "fix the react component");            // first scope, cd queued
@@ -168,7 +173,7 @@ test("a mid-session re-scope also asks for a clear", () => {
   } finally { cleanup(sid); }
 });
 
-test("the same destination is never attempted twice — no deny loop", () => {
+test("the same destination is never attempted twice — no deny loop", { skip: process.platform !== "win32" }, () => {
   const sid = withConsole(`t${process.pid}h`);
   try {
     assert.equal(JSON.parse(fire(sid, "add a supabase migration")).decision, "block");
@@ -202,7 +207,7 @@ test("an untypable prompt with no clear to ride on is never blocked", () => {
   } finally { cleanup(sid); }
 });
 
-test("a multi-line mid-session re-scope queues the prompt instead of typing it", () => {
+test("a multi-line mid-session re-scope queues the prompt instead of typing it", { skip: process.platform !== "win32" }, () => {
   const sid = withConsole(`t${process.pid}k`);
   const multi = "now add a supabase migration\nand a pytest for it";
   try {

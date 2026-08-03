@@ -1,0 +1,13 @@
+{
+  "name": "agentic-command-center",
+  "private": true,
+  "description": "Guard rail + control panel for Claude Code sessions on this machine. No dependencies — pure node:test, plain PowerShell/C#. This file exists to pin the Node floor and give CI, docs, and manual runs one source of truth for the test commands instead of copy-pasting them.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "ACC_ROUTING_MD=hooks/fixtures/ROUTING.md node --test --test-concurrency=1 hooks/goal.test.mjs hooks/usage.test.mjs hooks/statusline.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs hooks/lane.test.mjs hooks/route.test.mjs hooks/budget.test.mjs runner/runner.test.mjs",
+    "test:windows": "node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs runner/runner.test.mjs",
+    "covgate": "ACC_ROUTING_MD=hooks/fixtures/ROUTING.md node hooks/covgate.mjs"
+  }
+}

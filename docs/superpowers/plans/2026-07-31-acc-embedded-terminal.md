@@ -14,8 +14,7 @@
 
 ## Global Constraints
 
-- Fast tier must stay green: `node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs` from `C:\code\guards` (never `node --test hooks/`).
-- Never run a hook by hand against live state — always sandbox with `ACC_ROOT=<throwaway> ACC_POLICY=<file>` (guards OI-006).
+- Fast tier must stay green and hooks must never run by hand against live state — see `AGENTS.md` § "The regression, exactly" for the current command (`npm run test:windows` on Windows / `npm test` portable) and the `ACC_ROOT`/`ACC_POLICY` sandboxing rule (guards OI-006).
 - Pipe-server refusals mirror `sendconsole.ps1` exactly: reject control chars (`< 0x20` or `0x7f`) in TEXT payloads, reject payloads > 2100 chars. Content policy (the closed set of typeable constants, OI-004) stays in clearbot — the transport does not judge content.
 - Goal text never becomes keystrokes OR pipe bytes; only clearbot's constants are ever transmitted (`/clear`, `/cd <route>`, `Continue the active ACC goal.`, `Run the queued prompt.`).
 - C# must compile under PS 5.1's `Add-Type` (C# 5): no `$"..."`, no `nameof`, no null-conditional.

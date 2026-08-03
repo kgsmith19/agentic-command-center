@@ -272,17 +272,25 @@ function heartbeat(sb, ageMs) {
   fs.utimesSync(f, when, when);
 }
 
+// A portable synchronous sleep — no shell-out, works identically on every OS.
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 // ensureClearbot spawns detached, so the marker lands a moment later.
 function appears(file, ms = 6000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (fs.existsSync(file)) return true;
-    execFileSync("powershell", ["-NoProfile", "-Command", "Start-Sleep -Milliseconds 200"], { windowsHide: true });
+    sleepMs(200);
   }
   return false;
 }
 
-test("a stale heartbeat at a turn boundary revives the watcher", () => {
+// ensureClearbot() spawns cmd.exe directly (hooks/budget.mjs:80) — genuinely
+// Windows-only functionality, not a portability gap. Same pattern already used
+// by hooks/testplan.test.mjs for its POSIX-only chmod fault-injection case.
+test("a stale heartbeat at a turn boundary revives the watcher", { skip: process.platform !== "win32" }, () => {
   const sb = sandbox();
   const sid = "s-revive";
   const marker = fakeStarter(sb);

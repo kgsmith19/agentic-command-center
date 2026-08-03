@@ -12,9 +12,12 @@ Control.cmd`) is the user's GUI on top; the `/approve` skill
 1. **Secrets** — files whose basename matches a `secrets` glob in `config.json`
    (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `vault.json`) can be neither
    read nor written by agent tools, so keys never enter a conversation.
-2. **Self-protection** — writes to this repo and `~/.claude/settings.json` are
-   blocked: an agent may not edit the rules that constrain it. Exception:
-   runboxes (below).
+2. **Self-protection** — currently **OFF**: `C:/code/guards` is not in the
+   `protected` list (removed deliberately during the ACC build-out phase). Once
+   the ACC goal closes, it should be re-added (`C:/code/guards/` in full, or
+   specifically `C:/code/guards/gui/` and `C:/code/guards/watcher/`) to block
+   agent edits of the harness itself. When re-protected, only `~/.claude/settings.json`
+   will remain guarded. Exception when re-enabled: runboxes (below).
 3. **Cell ownership** — repos listed under `repos` in `config.json` have path
    prefixes owned by cells. Matching is by the **target file's path**, never
    the session folder, so a session launched from a parent directory is
@@ -59,6 +62,11 @@ Rules for scripts:
 - Minimal, idempotent, side-effect-obvious. Never print secret values.
 - Standing scripts (re-run buttons like `lifeos-mcp-setup.ps1`) put
   `# guards: keep` in the first 10 lines; everything else is one-shot.
+- **Never leave undo/uninstall scripts in the runbox** (guards OI-008). Undo
+  scripts live tracked in their own directory (e.g. `watcher/watchdog/`) and
+  are run deliberately. Auto-approve's directory order guarantee can cancel
+  conflicting scripts (`install` + `uninstall` in the same folder), making
+  the net effect undefined.
 
 Lifecycle (engine-owned):
 - `run <name | label:name>` executes a script with the project folder as cwd.
@@ -96,10 +104,14 @@ fire, so edits apply with no restart. It also writes/removes
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs runner/runner.test.mjs
-    -> 172 pass  FAST TIER, hermetic. Run from C:\code\guards; never
-       `node --test hooks/` (the runner grades the directory as one bogus
-       failing test).
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs runner/runner.test.mjs
+    -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
+       never `node --test hooks/` (the runner grades the directory as one
+       bogus failing test). `npm test` runs the portable subset of this same
+       list (everything except hooks/clearbot.test.mjs, which spawns real
+       cmd.exe/powershell consoles and only runs on Windows) — that's what
+       CI runs on Linux; `package.json` is the single source of truth for
+       both lists so this block and CI cannot drift apart silently again.
 node hooks/covgate.mjs
     -> COVERAGE GATE. Runs the fast tier under node's built-in coverage and
        fails any CHANGED lib file under the policy floors (lines/funcs 100,
