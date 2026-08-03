@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { loadContract, validateContract, toolsFor } from "./contract.mjs";
 import { resolveAdapter } from "./adapter.mjs";
 import { appendStarted, appendFinalized, decisionCounts } from "./ledger.mjs";
-import { writeRunFiles, verifySettingsPin, cleanupRun, runDir } from "./settings.mjs";
+import { writeRunFiles, verifySettingsPin, cleanupRun } from "./settings.mjs";
 import { envForKeys } from "./credentials.mjs";
 import { verifyAll } from "./verifier.mjs";
 
