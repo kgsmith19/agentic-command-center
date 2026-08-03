@@ -23,6 +23,24 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-018 lane.test.mjs full-jitter test is flaky under real randomness
+- opened: 2026-08-03
+- where: hooks/lane.test.mjs:370 "retry backoff is full jitter — delay can
+  land anywhere from 0 up to the exponential ceiling, not just the top half"
+- what: asserts at least one sampled delay lands under 400ms across a small
+  fixed number of draws from `Math.random()`-based full jitter; occasionally
+  every draw lands high by chance (observed: 709,854,575,924,494ms all >=
+  400) and the test fails with no code change. Found running the fast tier
+  while gating unrelated kernel/ work (T5-T8 of the ACC kernel plan);
+  confirmed flaky by rerunning `node --test hooks/lane.test.mjs` 3x (1 fail,
+  2 pass) with lane.mjs/lane.test.mjs untouched.
+- why open: out of scope for the kernel effort; needs either more samples,
+  a seeded RNG seam, or a statistical (not single-draw) assertion in
+  lane.test.mjs itself.
+- done when: the test passes deterministically across many repeated runs
+  (e.g. 50x `node --test hooks/lane.test.mjs` with zero flakes), or the
+  assertion is restructured to not depend on a single low-probability draw.
+
 ## OI-003 A clearbot-typed /cd does not take effect
 - opened: 2026-07-31
 - where: watcher/clearbot.ps1 (cd requests) / hooks/route.mjs
