@@ -283,29 +283,6 @@ line under `## Resolved`.
   just to turn red green — every test must be able to fail against a genuine
   regression, never tuned to the current implementation's behavior.
 
-## OI-020 No Playwright-driven remote e2e verifies the actual kernel GUI (screen, flow, layout)
-- opened: 2026-08-03
-- where: guards-gui.ps1 kernel settings tab (T21, not yet built); relates
-  OI-015 (interactive-lane wiring is PowerShell-only smoke-tested)
-- what: every GUI proof in this repo today is either a PowerShell
-  `-SmokeTest` (proves the form constructs, not what renders) or a human
-  screenshot/narration — ACC-HANDOFF.md's own stated limit is "-SmokeTest
-  cannot see layout." Kyle wants a real Playwright e2e, run in a remote
-  environment, that drives the kernel GUI and asserts on what is genuinely
-  on screen: the settings tab's fields, a live policy edit's visible effect,
-  the flow of starting/stopping a run.
-- why open: T21 (GUI kernel settings tab) has not been built yet, so this is
-  a requirement for that task's test plan, not a fix against existing code.
-  Also needs a design decision this codebase hasn't made: what "remote
-  environment" means for a WinForms desktop app — Playwright normally
-  targets browser/web UIs, so driving a WinForms PTY-hosted GUI needs its
-  own bridge (headless Windows CI? a screenshot/pixel harness?) that does
-  not exist yet.
-- done when: T21 (or a follow-up task) ships a Playwright-based e2e that
-  runs against a real rendered kernel settings tab in a remote/CI
-  environment and asserts on visible field state plus at least one
-  live-edit-applies-without-restart flow, replacing screenshot-only proof.
-
 ## OI-021 Kernel has no explicit handling for upstream API-overload errors, including failures in the harness's own error reporting
 - opened: 2026-08-03
 - where: kernel/adapters/claude-code.mjs (identity/startTask), hooks/lane.mjs
@@ -336,130 +313,55 @@ line under `## Resolved`.
   (e.g. `ttlMs` already bounds this — confirm and document) is written down
   and cited here.
 
-## OI-022 GUI frontend for T21: WinForms vs web is an open architecture decision, not yet made
-- opened: 2026-08-03
-- where: guards-gui.ps1, gui/PtyHost.cs, gui/term.html, gui/vendor (T21, not
-  yet built); relates OI-009 (GUI process is a SPOF for hosted sessions),
-  OI-020 (no Playwright e2e for the kernel GUI)
-- what: discussed switching T21's kernel settings tab (and possibly the
-  whole GUI) from WinForms to a web frontend, dev time not a factor. Upsides
-  identified: (1) decouples session hosting from the viewer, which would
-  structurally fix OI-009 — a persistent backend owns the ConPTY, a browser
-  tab is disposable/reconnectable, unlike today where closing the GUI process
-  kills every hosted session; (2) remote/multi-device access to the ledger,
-  decision log, and autonomy tightening, matching the kernel's already-
-  headless (`claude -p`) operating model; (3) much cheaper live/searchable
-  views (WebSocket/SSE push) than WinForms' manual redraw model.
-  Code-reuse question answered by direct inspection (2026-08-03): the split is
-  NOT even close to 50/50. `gui/PtyHost.cs` already serves a plain named-pipe
-  protocol (TEXT/SUBMIT/ESC in, OK/FAIL + output out) with zero UI-class
-  dependency — any client, web or WinForms, can drive it as-is over the same
-  pipe (or a thin WebSocket bridge in front of it). `gui/term.html` already
-  renders via xterm.js and talks to PtyHost only through structured JSON
-  messages over `window.chrome.webview.postMessage` (WebView2) — swapping that
-  transport for a plain WebSocket/fetch call is a small, contained change; the
-  terminal UI itself is already web technology. `guards-gui.ps1`'s own logic
-  is ~80% backend glue (hooks/kernel module calls, lane management, policy/
-  ledger reads) with no WinForms dependency at all, and only ~15-20% actual
-  WinForms construction (Form/Tab/Button/MessageBox wiring). Net: the
-  overwhelming majority of the code carries over untouched or near-untouched;
-  what's WinForms-specific is a small, well-bounded slice.
-- why open: this is a real architecture decision for Kyle to make, not
-  something to decide mid-task. The main tradeoff against switching: it adds
-  a network-facing surface (even localhost-only) to a project whose whole
-  ethos is local, deny-by-default enforcement — a philosophical tension, not
-  just an engineering one. OI-010's noted gap (multi-line pipe payloads fall
-  back to keystroke injection) is fine for today's single-line use but would
-  need closing for a richer web client.
-- done when: Kyle decides WinForms-vs-web for T21 (or explicitly defers the
-  decision past T21), and that decision is reflected in the T21 task text
-  before it's executed.
-
-## OI-023 claude-code adapter spawns with shell:true and an args array — Node's own runtime now flags this as unescaped, not just concatenated
-- opened: 2026-08-03
-- where: kernel/adapters/claude-code.mjs `identity()` (line ~24) and
-  `startTask()` (line ~62), both `execFileSync("claude", [...], {shell:true})`
-  / `spawnFn("claude", buildArgs(...), {shell:true})`; found during T22's
-  full-branch security review, visible live in this session's own
-  `kernel.e2e.mjs` runs: `(node:PID) [DEP0190] DeprecationWarning: Passing
-  args to a child process with shell option true can lead to security
-  vulnerabilities, as the arguments are not escaped, only concatenated.`
-- what: Node's own child_process now warns that `shell:true` + an args array
-  does NOT safely escape each element — it concatenates them into one command
-  line. `buildArgs()`'s current inputs are all kernel-controlled today
-  (`settingsPath` = a generated staging path already manually quoted,
-  `sessionId` = a `randomUUID()`, `tools` = a hardcoded literal vocabulary
-  from `contract.mjs`'s `toolsFor()`, never contract-supplied free text), so
-  there is no exploitable injection through this call site RIGHT NOW — but
-  the pattern itself is exactly the class of finding a security review must
-  flag, and it is inherited from `runner/runner.mjs`'s pre-existing use of
-  the same idiom (`.cmd` shims cannot be spawned without `shell:true` on
-  Windows), so it is not new to this effort, just newly re-surfaced by Node
-  version drift.
-- why open: a real fix needs research into safely invoking a Windows `.cmd`
-  shim without `shell:true` (e.g. resolving `claude.cmd`'s real target and
-  spawning that directly, or hand-verifying Node's actual Windows quoting
-  behavior well enough to trust it), which is a design decision, not a
-  same-pass fix — and touching `runner/runner.mjs` too would widen this past
-  the kernel effort's own scope fence.
-- done when: either a spawn path that does not trigger DEP0190 is adopted
-  for both `runner/runner.mjs` and `kernel/adapters/claude-code.mjs`, or a
-  written decision records why `shell:true` remains safe here (inputs are
-  provably never attacker-controlled) and the warning is suppressed
-  deliberately rather than left as ambient noise.
-
-## OI-024 The guardhook's per-fire tool-call ceiling never reflects autonomy tightening — only the periodic supervisor check does
-- opened: 2026-08-03
-- where: kernel/guardhook.mjs line ~84-86 (`ceiling = contract?.budget?.toolCalls
-  ?? policy.budget.toolCalls`) vs kernel/run.mjs's supervisor timer (Task 18),
-  which correctly uses `effectiveCeilings(contract, policy, readAutonomy())`;
-  found during T22's full-branch security/lean review.
-- what: when autonomy has tightened ceilings after a run of failures (T17),
-  `kernel/run.mjs`'s periodic check enforces the SHRUNK `toolCalls` number
-  (e.g. 100 instead of 200 at factor 0.5) — but `kernel/guardhook.mjs`, which
-  fires on every single tool call and is the faster of the two enforcement
-  points, still computes its own hard-stop ceiling from the RAW contract or
-  policy default, never the tightened value. A tightened run can therefore
-  still make up to the FULL untightened number of tool calls before the
-  supervisor's next tick (default 60s) notices and aborts it — the guardhook
-  never bypasses the deny-by-default boundary itself (writeRoots/readRoots/
-  bashPatterns/etc. are unaffected), but the tightening feature's toolCalls
-  dimension is enforced with tick-interval latency rather than immediately,
-  which the traceability table's AC-B1/AC-B2 language does not call out as
-  an accepted gap.
-- why open: fixing it means guardhook.mjs importing kernel/autonomy.mjs and
-  computing effectiveCeilings() on every fire (autonomy state is a small
-  JSON file, cheap to re-read) — a real code change to an already
-  checkpointed (R4) file, needing its own new test in guardhook.test.mjs,
-  which is a decision about whether that tighter latency actually matters in
-  practice (the wall-clock and stall dimensions are unaffected; only
-  toolCalls sees the gap) rather than something to slip in unreviewed at the
-  very end of the plan.
-- done when: either guardhook.mjs reads the live autonomy-adjusted ceiling
-  for toolCalls (with a guardhook.test.mjs case proving a tightened contract
-  is denied at the SHRUNK count, not the raw one), or this latency is
-  written down as an accepted tradeoff (the supervisor's checkpointMin/tick
-  interval is the real enforcement point for tightening, guardhook's ceiling
-  is a secondary hard stop only).
-
-## OI-025 e2e/loop.e2e.mjs (5 scenarios) was not re-run as part of T22's final verification sweep
-- opened: 2026-08-03
-- where: plan `docs/superpowers/plans/2026-08-03-acc-kernel-plan.md` Task 22
-  Step 5, final bullet ("`node e2e/loop.e2e.mjs` -> scenarios 1-5 still PASS,
-  proves the kernel did not disturb the goal loop").
-- what: Kyle explicitly chose to skip this run for this pass (real tokens,
-  ~15-20+ minutes) rather than run it during T22. Nothing in this kernel
-  effort touches the goal-loop files that suite covers (`hooks/goal.mjs`,
-  `hooks/budget.mjs`, `watcher/clearbot.ps1`, `gui/ptyhost.e2e.ps1`) — the
-  kernel lives entirely under `kernel/` plus additive changes to
-  `hooks/covgate.mjs`, `package.json`, `.github/workflows/ci.yml`,
-  `guards-gui.ps1`, and `policy.json`'s new `kernel` block — so no code path
-  this suite exercises changed. Risk is judged low, but not verified live.
-- why open: needs the 15-20+ minute real-token run Kyle deferred; a decision
-  only he can make on timing, not a defect to fix.
-- done when: `node e2e/loop.e2e.mjs` is run once against this branch (or
-  after merge) and scenarios 1-5 confirmed PASS, or a diff-only argument
-  (nothing touched that this suite covers) is accepted as sufficient instead.
+## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
+- opened: 2026-08-03, updated: 2026-08-03 (deferred run from
+  `2026-08-03-acc-kernel-plan.md` T22, executed as Task 11 of
+  `2026-08-03-acc-oi-closure-plan.md`)
+- where: `e2e/loop.e2e.mjs`, real-token run, output archived at
+  `runbox/task11-loop-e2e-output.txt` (not committed — regenerate by re-
+  running the suite; see below).
+- what: ran the deferred 15-20 min real-token proof suite. Result: only
+  Scenario 2 (under-budget turn-end re-prompt, OI-002) PASSED. Scenario 1
+  (over-budget clear/adopt/resume) timed out waiting for "cycle logged" —
+  first session cleared but no evidence a second session adopted/resumed.
+  Scenario 3 (Esc escalation, labeled OI-011 in the test's own output —
+  note that label is stale/mismatched: the currently-open OI-011 is an
+  unrelated "re-verify guards self-protection" issue, so either the suite's
+  inline comment or its wait-message attribution needs a look separately)
+  showed "(no clearbot log)" and timed out. Scenario 4 (typed `/cd` changes
+  session cwd) failed exactly as **already tracked in OI-003** (open since
+  2026-07-31): cwd stayed at `C:\code`, never moved to `C:\code\guards`,
+  despite a CD event being logged and replayed — this run is a live,
+  independent reproduction of OI-003, not a new defect. Scenario 5
+  (embedded-pty kick) failed with no assertion-failure reason printed, only
+  status fields.
+- root cause (high confidence, not a product regression): at the moment of
+  this run, 9 concurrent `claude.exe` processes were active on the machine
+  (verified via `Get-Process claude` immediately after) — this exact
+  signature (timeouts across most scenarios, 9 concurrent `claude.exe`) is
+  independently documented as the known failure mode in
+  `docs/superpowers/specs/2026-08-03-claude-launch-cap-design.md` (written
+  the same day, before this run, for unrelated reasons): unrelated
+  concurrent sessions starve the single automation slot's real-world timing
+  budget; `hooks/lane.mjs`'s `withLaunchSlot` only serializes ONE tracked
+  automation slot and cannot see or limit untracked manual `claude`
+  invocations on PATH. This closure batch's own Task 1-10 changes do not
+  touch any goal-loop file this suite covers (`hooks/goal.mjs`,
+  `hooks/budget.mjs`, `watcher/clearbot.ps1`, `gui/ptyhost.e2e.ps1`),
+  consistent with the timeouts (not assertion failures) seen in every
+  failing scenario.
+- why open: per the plan's own instruction, a failing proof run is not
+  looped blindly — this needs either a clean re-run with verifiably zero
+  other `claude.exe` processes running, or the machine-wide launch cap
+  (`docs/superpowers/specs/2026-08-03-claude-launch-cap-design.md` +
+  `docs/superpowers/plans/2026-08-03-claude-launch-cap-plan.md`, not yet
+  implemented) landing first, which is expected to fix this transitively.
+  OI-003 (Scenario 4) and the OI-011 label mismatch (Scenario 3) are
+  tracked/noted separately and do not block this item's own resolution.
+- done when: `node e2e/loop.e2e.mjs` is re-run with `Get-Process claude`
+  confirmed at ≤1 (this session's own) beforehand, and scenarios 1-5 are
+  confirmed PASS — or the launch-cap lands and is credited with fixing this
+  transitively per its own plan's verification step.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
@@ -485,6 +387,35 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-020 [RESOLVED 2026-08-03] Playwright e2e verifies the kernel GUI in CI
+- opened: 2026-08-03, resolved: 5deff38, 39322e1 — gui/e2e/kernel-settings.spec.mjs
+  asserts visible field state + a live-edit-applies-without-restart flow
+  against the real rendered page in the `gui-e2e` CI job (Linux/Playwright
+  lane), per spec 2026-08-03-acc-oi-closure-design.md §6.
+
+## OI-022 [RESOLVED 2026-08-03] GUI platform decided: web, migrated incrementally
+- opened: 2026-08-03, resolved: a102646, b6ffce4 — decision of record in
+  docs/superpowers/specs/2026-08-03-acc-oi-closure-design.md §5: local web
+  frontend (gui/server.mjs + gui/kernel.html, loopback-only, CSRF-closed by
+  construction), tab-by-tab migration starting with the kernel settings tab;
+  the WinForms field editor is retired, the tab now only hosts the web page
+  via WebView2 (or a browser-button fallback). OI-009/OI-010 remain open.
+
+## OI-023 [RESOLVED 2026-08-03] DEP0190 spawn pattern closed at all three sites
+- opened: 2026-08-03, resolved: 474aac1, 549d869, 5de9d60 — hooks/cmdline.mjs's
+  spawnSpec: POSIX spawns shell-free with a real argv array; Windows spawns
+  ONE fail-closed-quoted command string. Verified DEP0190-free live via the
+  kernel.e2e.mjs proof run (Task 5 of the closure plan, 2026-08-03, 3/3
+  scenarios PASS, zero DEP0190 in output) and a --throw-deprecation
+  regression-lock test in runner/runner.test.mjs.
+
+## OI-024 [RESOLVED 2026-08-03] Guardhook enforces autonomy-tightened ceilings per fire
+- opened: 2026-08-03, resolved: 3ddaa97 — kernel/guardhook.mjs now computes
+  effectiveCeilings(contract, policy, readAutonomyStrict()) on every fire,
+  the same function the supervisor uses; denial records carry `ceiling` and
+  `autonomyFactor`; a corrupt or unreadable autonomy state fails closed
+  (denies) instead of silently using the raw ceiling.
 
 ## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process
 - opened: 2026-07-31, resolved: 416e9ab "fix: stop-clearbot kill query
