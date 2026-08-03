@@ -92,6 +92,23 @@ test("changedLibFiles keeps lib .mjs under hooks/ and runner/, drops tests, harn
   assert.deepEqual(out.sort(), ["hooks/covgate.mjs", "hooks/lane.mjs", "runner/runner.mjs"]);
 });
 
+// Kernel modules must be gated exactly like hooks/ and runner/ — the gate is
+// what makes the kernel's 100/100/90 floors real. One level of nesting is
+// allowed so kernel/adapters/<harness>.mjs is gated too.
+test("changedLibFiles gates kernel modules, including one level of nesting", () => {
+  assert.deepEqual(
+    changedLibFiles([
+      "kernel/run.mjs",
+      "kernel/adapters/claude-code.mjs",
+      "hooks/guard.mjs",
+      "kernel/run.test.mjs",
+      "kernel/adapters/claude-code.test.mjs",
+      "docs/superpowers/plans/x.md",
+    ]),
+    ["kernel/run.mjs", "kernel/adapters/claude-code.mjs", "hooks/guard.mjs"]
+  );
+});
+
 test("parseLcov computes line, function and branch coverage per file", () => {
   const cov = parseLcov(
     [
