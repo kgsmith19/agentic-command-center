@@ -23,45 +23,6 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-001 stop-clearbot.cmd's kill query matches its own probe process
-- opened: 2026-07-31 (re-scoped same day — see correction below)
-- where: watcher/stop-clearbot.cmd
-- what: the kill query is `CommandLine -like '*clearbot.ps1*'` with NO self
-  exclusion, and the probing powershell's own command line contains that
-  pattern (it is inside the Where-Object filter). So the script enumerates
-  itself and calls `Stop-Process -Force` on its own pid; if its own entry
-  comes first it dies before killing the real watcher, and Stop silently
-  leaves clearbot running. The kill switch (`clearbot.stop`) is written
-  first, so the failure is quiet rather than dangerous — but "Stop" not
-  stopping is exactly the kind of thing the operator will not notice.
-- correction: this entry originally named `start-clearbot.cmd`. Verified
-  2026-07-31 by running it against one live instance: it requires the
-  `-File …clearbot.ps1` token AND excludes `$PID`, and correctly reported
-  "clearbot already running (1)". That half is FIXED; the stop script is
-  where the self-match class still lives.
-- why open: found mid-goal; logging was the assigned slice, the fix was not.
-- done when: the stop query excludes its own pid (and requires the `-File`
-  token) like the start probe and budget.mjs `clearbot-status` do, with a
-  test that spawns a decoy process and proves only the decoy is killed.
-
-## OI-002 Goal loop stalls when a goal session ends its turn UNDER hardK
-- opened: 2026-07-31
-- where: hooks/budget.mjs onStop + hooks/goal.mjs pending + watcher/clearbot.ps1
-- what: the loop's only continuation trigger is an OVER-budget Stop (block →
-  latch → clear request → clearbot). A goal session that voluntarily ends its
-  turn under the ceiling gets allow() and nothing else — no clear request, no
-  kick — and the goal sits dead until a human types. Observed live: cycle-2
-  session 130aefc6 checkpointed ~10:26:54 under the then-150k ceiling and
-  stalled 18 minutes (clearbot.log silent 10:25:18→10:45:13); it resumed only
-  because Kyle's unrelated prompt triggered a route re-scope clear.
-- why open: surfaced while root-causing the dials fix (cycle 3); the fix is a
-  liveness rule in goal.mjs pending ("goal active + turn ended + no clear
-  request pending → kickable after a short idle"), which is OI-011-adjacent
-  design work, not a one-liner.
-- done when: a throwaway-console E2E shows an active-goal session that ends
-  its turn under hardK gets the resume constant typed (no /clear needed)
-  within the kick cadence, and clearbot.log records why.
-
 ## OI-003 A clearbot-typed /cd does not take effect
 - opened: 2026-07-31
 - where: watcher/clearbot.ps1 (cd requests) / hooks/route.mjs
@@ -76,27 +37,6 @@ line under `## Resolved`.
   throwaway-console injection rig to reproduce safely, per AGENTS.md.
 - done when: a clearbot-typed /cd verifiably changes the session cwd in a
   throwaway console (route verdict matches cwd on the replayed prompt).
-
-## OI-004 Local request/job files are an unauthenticated command channel
-- opened: 2026-07-31 (pre-commit security review)
-- where: watcher/clearbot.ps1 + runner/clear-requests/; runner/runner.mjs +
-  runner/jobs/; watcher/sendconsole.ps1
-- what: clearbot re-derives WHAT may be typed (routes byte-checked, replay
-  re-vetted as printable single-line, constants otherwise) but never verifies
-  WHO a request is for — `req.consolePid` is not cross-checked against the
-  session's own `runner/state/<sid>.window` record, so any local writer
-  (including agent Bash, the guard's documented ceiling) can aim `/clear`,
-  `/cd <route>`, or a vetted single-line replay at ANY live console. Same
-  class: runner.mjs spawns `claude` from job files; sendconsole.ps1 types
-  whatever its caller passes (the closed set lives one layer up only); the
-  escalation threshold trusts `req.hardK` from the request.
-- why open: hardening. AGENTS.md is explicit that guards is a convention
-  enforcer, not a security boundary, so nothing promised is broken — but the
-  binding check is cheap and closes the cross-console case.
-- done when: clearbot refuses (and logs) a request whose consolePid does not
-  match the `<sid>.window` record; sendconsole itself rejects control chars
-  and multi-line text; escalation reads hardK from policy.json, not the
-  request.
 
 ## OI-005 Guard self-protection is off while the docs still claim it
 - opened: 2026-07-31 (pre-commit security review)
@@ -207,13 +147,19 @@ line under `## Resolved`.
 - where: hooks/engine.mjs guard config (relates OI-005: self-protection off,
   docs claim otherwise)
 - what: this branch added gui/PtyHost.cs, gui/term.html, gui/vendor/,
-  gui/ptyhost.e2e.ps1 and watcher/stubpipe.ps1 — whether the self-protection
-  path list still covers what the docs claim it covers has not been re-checked
-  since.
+  gui/ptyhost.e2e.ps1 and watcher/stubpipe.ps1 plus many watcher/ system
+  scripts (clearbot.ps1, launchers, watchdog/ integration). The full post-branch
+  file list is: `gui/PtyHost.cs`, `gui/term.html`, `gui/vendor/`, `gui/*.ps1`
+  (test/e2e), `watcher/clearbot.ps1`, `watcher/*.ps1` (screenshot, sendconsole,
+  stubs), `watcher/*.cmd` (start/stop launchers), `watcher/watchdog/*.ps1`
+  (system integration). All are strategic infrastructure and should be protected.
 - why open: verification task surfaced by the embedded-terminal completion
-  gate; OI-005 already tracks the underlying off-state.
-- done when: the protected-path list is re-verified against the post-branch
-  tree and either covers gui/ + watcher/ or the gap is ledgered precisely.
+  gate; OI-005 already tracks the underlying off-state (self-protection is
+  currently disabled while ACC build-out continues).
+- done when: `protected` list in config.json gains `C:/code/guards/gui/` and
+  `C:/code/guards/watcher/` (or the full `C:/code/guards/` prefix), verified
+  safe to re-enable once OI-005 re-protection happens, documented in AGENTS.md
+  (done 2026-08-03).
 
 ## OI-012 Stray console window at embedded launch not reproduced
 - opened: 2026-07-31
@@ -295,6 +241,40 @@ line under `## Resolved`.
   actually visible and a real double-Go-press. Still open — needs Kyle.
 
 ## Resolved
+
+## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process
+- opened: 2026-07-31, resolved: 416e9ab "fix: stop-clearbot kill query
+  excludes its own probe process (guards OI-001)"
+- resolution: `watcher/stop-clearbot.cmd`'s kill query now excludes `$PID`
+  and requires the `-File …clearbot.ps1` token, matching the start probe and
+  `budget.mjs clearbot-status`. This entry sat open under `## Open` well
+  after the fix landed — found and corrected 2026-08-03 during a docs pass;
+  a reminder the ledger needs occasional cross-checking against git log, not
+  just append-only trust.
+
+## OI-002 [RESOLVED 2026-08-03] Goal loop stalls when a goal session ends its turn UNDER hardK
+- opened: 2026-07-31, resolved: 0fa3407 "feat: under-budget turn ends re-arm
+  the goal kick, with a human back-off (guards OI-002)" + e796130 "feat: Stop
+  hook reports under-budget turn ends to the goal store"
+- resolution: `hooks/goal.mjs`'s `recordTurnEnd`/`pendingKicks` implement
+  exactly the liveness rule this entry called for — an under-budget turn end
+  re-arms the kick, gated by `kickSettleSeconds` and `humanHoldMinutes` so it
+  stays quiet during an active conversation and self-heals once Kyle walks
+  away. Covered by `hooks/goal.test.mjs`. Same stale-ledger note as OI-001.
+
+## OI-004 [RESOLVED 2026-08-03] Local request/job files are an unauthenticated command channel
+- opened: 2026-07-31, resolved: 3fc2ec4 "fix: verify request bindings,
+  refuse unsafe text, source hardK from policy (guards OI-004)"
+- resolution: `watcher/clearbot.ps1`'s `Test-Binding` now refuses (and logs)
+  a request whose `consolePid` doesn't match the session's own
+  `<sid>.window` record, on both the cd and clear paths; escalation reads
+  `hardK` from `policy.json` rather than trusting the request. Covered by
+  `hooks/clearbot.test.mjs`. **Not fully closed in spirit** — the underlying
+  request/window files are still local, unsigned, and agent-writable, so a
+  local writer can still forge a matching pair (see
+  `docs/2026-08-03-acc-adversarial-review.md` §2.5); the specific
+  cross-console mistargeting this entry described is fixed, the class it's
+  drawn from is not.
 
 ## OI-016 [RESOLVED 2026-08-02] Kyle's own manual terminals (outside the GUI) remain completely unlaned
 - opened: 2026-08-01, resolved: 2026-08-02

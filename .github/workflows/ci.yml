@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # A synthetic fixture, NOT the real routing table (which lives outside this
+  # repo — see hooks/route.mjs). Only exercises the portable scoring/parent/
+  # CLI logic; the four tests that need routes' target directories to exist
+  # on disk are platform-skipped on non-Windows (hooks/route.test.mjs).
+  ACC_ROUTING_MD: ${{ github.workspace }}/hooks/fixtures/ROUTING.md
+
+jobs:
+  fast-tier-linux:
+    name: Fast tier (Linux, portable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # `npm test` is the portable list (package.json). --test-concurrency=1 is
+      # baked into that script as cheap insurance against a known timing-
+      # sensitive flake in runner.test.mjs's "a hung run is killed PROMPTLY"
+      # case under loaded/nested sandboxes. hooks/clearbot.test.mjs is
+      # deliberately excluded from the portable list — it spawns real
+      # cmd.exe/powershell consoles and throws uncaught async exceptions
+      # after test-end on non-Windows, which can crash the whole
+      # node --test process rather than just fail a test.
+      - run: npm test
+
+  coverage-gate:
+    name: Coverage gate (changed-file floors)
+    needs: fast-tier-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # hooks/covgate.mjs gates `git diff --name-only HEAD` (uncommitted
+      # working-tree changes) — on a clean CI checkout that's always empty, so
+      # without rewriting HEAD here covgate would silently gate zero files and
+      # pass vacuously on every PR. Soft-reset HEAD back to the pre-change
+      # commit so the PR's/push's real changes appear as the working-tree diff.
+      - name: Rewrite HEAD so covgate sees the real diff
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.event.pull_request.base.ref }}" --quiet
+            BASE_SHA=$(git merge-base "origin/${{ github.event.pull_request.base.ref }}" HEAD)
+            git reset --soft "$BASE_SHA"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "::warning::first push on a new branch (no 'before' SHA) — skipping HEAD rewrite, covgate will gate nothing this run"
+            else
+              git reset --soft "$BEFORE"
+            fi
+          fi
+      # Explicit list, not covgate's default auto-discovery — left to default
+      # it would also pick up hooks/clearbot.test.mjs (Windows-only) and fail
+      # this job for the wrong reason (a red fast tier) instead of the real
+      # one (a coverage floor miss).
+      - name: node hooks/covgate.mjs
+        env:
+          ACC_COVGATE_TESTS: "hooks/goal.test.mjs,hooks/usage.test.mjs,hooks/statusline.test.mjs,hooks/testplan.test.mjs,hooks/covgate.test.mjs,hooks/prompts.test.mjs,hooks/lane.test.mjs,hooks/route.test.mjs,hooks/budget.test.mjs,runner/runner.test.mjs"
+        run: node hooks/covgate.mjs
+
+  windows-integration:
+    name: Windows integration (native)
+    runs-on: windows-latest
+    # No `needs` — runs in parallel with the Linux jobs, not gated by them.
+    # First real run on a GH-hosted (not Kyle's) Windows box is genuinely
+    # unverified; treat a failure here as new information to investigate,
+    # not assumed-broken CI config.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The fixture's routes are Windows-style paths (C:\code\...) that only
+      # correspond to real directories on Kyle's own machine. Create matching
+      # empty directories here so the four block-decision tests that are
+      # platform-skipped on Linux actually run and pass natively on Windows.
+      - name: Create fixture route directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path `
+            'C:\code', `
+            'C:\code\guards', `
+            'C:\code\lifeos-ecosystem', `
+            'C:\code\lifeos-ecosystem\lifeos', `
+            'C:\code\lifeos-ecosystem\lifeos-ui' | Out-Null
+      - name: Full fast tier (native)
+        run: npm run test:windows
+      - name: gui/ptyhost.test.ps1
+        shell: pwsh
+        run: powershell -File gui/ptyhost.test.ps1
+      - name: guards-gui.ps1 -SmokeTest
+        shell: pwsh
+        run: powershell -File guards-gui.ps1 -SmokeTest
+      # Diagnostic only — this one visually shows a window, so it's not a
+      # correctness assertion. Never gate merges on it.
+      - name: watcher/screenshot-gui.ps1 (diagnostic)
+        shell: pwsh
+        continue-on-error: true
+        run: powershell -File watcher/screenshot-gui.ps1
+      - name: Upload GUI screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-screenshot
+          path: '*.png'
+          if-no-files-found: ignore
+      - name: Clean up fixture route directories
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 'C:\code'

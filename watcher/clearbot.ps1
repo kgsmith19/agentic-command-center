@@ -12,14 +12,18 @@
 # the middle of a tool call or a half-written file.
 #
 # SAFETY INVARIANTS (all enforced below, every cycle):
-#   1. The typeable set is closed and auditable. Three things only:
+#   1. The typeable set is closed and auditable:
 #        a. "/clear" - a constant.
 #        b. "/cd <path>" where <path> is byte-identical to a route listed in
 #           ROUTING.md AND exists on disk. Not "a path the caller asked for" -
-#           a path from a table the guard protects. Anything else is refused.
-#        c. the session's OWN prompt, replayed verbatim after a cd, and only if
-#           it is a single line of printable text (checked again here, not
-#           trusted from the request file).
+#           a path from the route table. ROUTING.md is not in the protected list
+#           (may be edited by agents), but it is read fresh each cycle so a
+#           tampered request cannot bypass this check. Anything else is refused.
+#        c. Replay text: caller-chosen, single-line, ≤2000 chars, printable-only,
+#           passed via req.replay after a cd. Design intent is to replay the
+#           session's own prompt (captured by budget.mjs and passed in the
+#           request), but the code allows any printable text matching those
+#           constraints.
 #        d. "$KICK" - a constant. It restarts an active goal after a clear. The
 #           GOAL TEXT IS NEVER TYPED: it reaches the model through SessionStart
 #           context, so a multi-line goal is safe by construction (OI-004).
@@ -27,7 +31,7 @@
 #           when a typed /clear did not land (the over-budget turn refuses to
 #           end, OI-011); at most once per session per 10 minutes. It interrupts
 #           the turn; it cannot type, submit, or delete anything.
-#      There is no code path that types caller-chosen free text.
+#      The replay path (c) accepts caller-chosen text subject to content filtering.
 #   2. It types only into the exact console PID the session recorded for itself
 #      via winfind.ps1. It never searches by window title and never guesses.
 #      VERIFIED, not trusted: Test-Binding re-reads runner/state/<sid>.window
