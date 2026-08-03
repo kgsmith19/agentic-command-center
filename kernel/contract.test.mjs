@@ -13,16 +13,24 @@ fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ kernel: { hardCaps: { 
 const C = await import("./contract.mjs");
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
+// A real, portable absolute path outside the repo — NOT a hardcoded
+// Windows-style literal ("C:/code/proj"), because path.resolve() only treats
+// a drive-letter string as absolute on Windows; on POSIX it is relative to
+// cwd, which during a test run IS the repo, silently tripping the protected-
+// write-root overlap check for the wrong reason (found via GitHub Actions'
+// Linux fast-tier job — the exact hazard this fixture must not repeat).
+const PROJ = path.join(BASE, "proj");
+
 const good = () => ({
   goal: "make the suite green",
   constraints: ["no new dependencies"],
   allowedActions: {
-    readRoots: ["C:/code/proj"], writeRoots: ["C:/code/proj/src"],
+    readRoots: [PROJ], writeRoots: [path.join(PROJ, "src")],
     bashPatterns: ["npm test"], networkHosts: [], vaultKeys: [], subagents: [],
   },
   budget: { wallClockMin: 30, toolCalls: 100, tokens: 200000 },
   acceptanceCriteria: [{ id: "AC1", ears: "THE SYSTEM SHALL exit zero.",
-    verify: { method: "command", command: "npm test", cwd: "C:/code/proj" } }],
+    verify: { method: "command", command: "npm test", cwd: PROJ } }],
   rollbackPlan: "git checkout -- src/",
 });
 
@@ -81,7 +89,7 @@ test("acceptance criteria must exist and must be verifiable (AC-C2)", () => {
 
 test("an allowedActions field that is not an array is rejected", () => {
   const c = good();
-  c.allowedActions.readRoots = "C:/code/proj";
+  c.allowedActions.readRoots = PROJ;
   assert.match(C.validateContract(c).errors.join(" "), /readRoots must be an array/);
 });
 
