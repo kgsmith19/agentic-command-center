@@ -128,10 +128,13 @@ test("the tool-call ceiling falls back to the policy default when the contract o
 });
 
 test("a decision log that cannot be written fails closed (AC-G11)", () => {
-  // Block the ledger directory itself with a plain file, so ledger.mjs's own
-  // mkdirSync(recursive) throws ENOTDIR when appendDecision tries to write.
-  fs.mkdirSync(path.join(ROOT, "runner"), { recursive: true });
-  fs.writeFileSync(path.join(ROOT, "runner", "ledger"), "blocked");
+  // Block only THIS run's decisions file, not the whole ledger directory:
+  // OI-024's readAutonomyStrict() also reads a sibling file in that same
+  // directory (autonomyFile()) earlier in the hook's flow, so blocking the
+  // directory itself now trips that check first instead of the decision-log
+  // write this test targets. A directory in place of the decisions file
+  // makes appendFileSync throw while leaving autonomy.json's path untouched.
+  fs.mkdirSync(L.decisionsFile(RUN), { recursive: true });
   const r = fire({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } });
   assert.equal(r.code, 2);
   assert.match(r.err, /cannot write the decision log/);
