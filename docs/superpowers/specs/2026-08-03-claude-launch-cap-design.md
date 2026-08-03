@@ -188,11 +188,15 @@ would be complexity the actual risk doesn't justify.
 
 - Gate crash, timeout, or `node` missing (`ENOENT`/9009) → shim falls
   through → fail-open, per Goal 3.
-- CIM query itself failing (e.g. WMI service down) → treated as a gate
-  error → fail-open, and logged to the same breach-log file the watcher
-  reads, so a persistent CIM outage becomes visible via the watcher's own
-  "can I even read the process table" check rather than silently blocking
-  forever.
+- CIM query itself failing (e.g. WMI service down) inside the gate → caught,
+  treated as a gate error → fail-open. Deliberately NOT cross-logged into the
+  watcher's log file — that would be exactly the code-level coupling §3
+  Layer 2 rules out (a bug in one layer must not also break the layer meant
+  to detect it). A persistent CIM outage still becomes visible on its own:
+  the watcher runs its own independent `Get-CimInstance` call every poll,
+  uncaught by design, so the same outage shows up as failed runs in Task
+  Scheduler's history — the audit trail for watcher failures per this
+  section's next bullet.
 - Watcher failing to run (task disabled, host crashed) has no user-facing
   effect by design (alert-only) — Task Scheduler's own run history is the
   audit trail.
