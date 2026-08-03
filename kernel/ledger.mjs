@@ -60,8 +60,12 @@ export function appendDecision(runId, decision) {
   appendLine(decisionsFile(runId), { ts: new Date().toISOString(), ...decision });
 }
 
+export function readDecisions(runId) {
+  return readLines(decisionsFile(runId));
+}
+
 export function decisionCounts(runId) {
-  const rows = readLines(decisionsFile(runId));
+  const rows = readDecisions(runId);
   const allow = rows.filter((r) => r.allow === true).length;
   return { allow, deny: rows.length - allow, total: rows.length };
 }

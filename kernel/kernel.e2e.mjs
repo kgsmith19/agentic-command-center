@@ -21,6 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readRuns, readDecisions } from "./ledger.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
@@ -30,6 +31,10 @@ function sandbox() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "acc-kernel-e2e-"));
   const root = path.join(base, "acc");
   fs.mkdirSync(root, { recursive: true });
+  // kernel/ledger.mjs's own readers (used below) re-read ACC_ROOT on every
+  // call, so pointing THIS process at the sandbox is enough to reuse them
+  // instead of re-parsing the JSONL ledger by hand.
+  process.env.ACC_ROOT = root;
   const policyPath = path.join(base, "policy.json");
   fs.copyFileSync(path.join(REPO, "policy.json"), policyPath);
   const vaultPath = path.join(base, "vault.json");
@@ -73,20 +78,6 @@ function runKernel(sb, contract) {
   }
 }
 
-function ledgerRows(sb) {
-  const f = path.join(sb.root, "runner", "ledger", "runs.jsonl");
-  try {
-    return fs.readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  } catch { return []; }
-}
-
-function decisionsFor(sb, runId) {
-  const f = path.join(sb.root, "runner", "ledger", `${runId}.decisions.jsonl`);
-  try {
-    return fs.readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  } catch { return []; }
-}
-
 const listSafe = (dir) => { try { return fs.readdirSync(dir).sort(); } catch { return []; } };
 
 const results = [];
@@ -105,11 +96,11 @@ async function scenario1() {
   const sb = sandbox();
   try {
     const r = runKernel(sb, contractFor(sb, [sb.workDir]));
-    const rows = ledgerRows(sb);
+    const rows = readRuns();
     const started = rows.filter((x) => x.event === "run_started" && x.runId === r.runId);
     const finalized = rows.filter((x) => x.event === "run_finalized" && x.runId === r.runId);
     const text = fs.readFileSync(path.join(sb.workDir, "target.txt"), "utf8");
-    const decisions = decisionsFor(sb, r.runId);
+    const decisions = readDecisions(r.runId);
     const allowedWrite = decisions.find((d) => d.allow === true && d.rule === "writeRoots");
 
     const pass = started.length === 1 && finalized.length === 1 && r.outcome === "accepted" &&
@@ -133,7 +124,7 @@ async function scenario2() {
   try {
     const r = runKernel(sb, contractFor(sb, [sb.decoyDir]));
     const text = fs.readFileSync(path.join(sb.workDir, "target.txt"), "utf8");
-    const decisions = decisionsFor(sb, r.runId);
+    const decisions = readDecisions(r.runId);
     const deniedWrite = decisions.find((d) => d.allow === false && d.rule === "writeRoots");
 
     const pass = r.outcome === "rejected" && text === "before" && !!deniedWrite;

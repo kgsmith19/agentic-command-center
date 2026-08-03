@@ -78,6 +78,13 @@ test("guard decisions stream to a per-run sidecar and are counted", () => {
   assert.equal(fs.existsSync(L.decisionsFile("r6")), true);
 });
 
+test("readDecisions returns the full parsed rows, not just counts", () => {
+  L.appendDecision("r7", { tool: "Edit", allow: false, rule: "writeRoots", reason: "not granted", target: "C:/x/b.txt" });
+  assert.deepEqual(L.readDecisions("r7").map((d) => [d.tool, d.allow, d.rule, d.target]),
+    [["Edit", false, "writeRoots", "C:/x/b.txt"]]);
+  assert.equal(L.readDecisions("nope-no-such-run").length, 0, "a run with no decisions reads as empty, not an error");
+});
+
 test("autonomyFile lives beside the runs file, under the ledger dir", () => {
   assert.equal(path.dirname(L.autonomyFile()), L.ledgerDir());
   assert.equal(path.basename(L.autonomyFile()), "autonomy.json");
