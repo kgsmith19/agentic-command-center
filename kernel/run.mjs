@@ -152,7 +152,16 @@ export async function runTask(contractPath, { adapter, afterStage, tickMs = 6000
       Promise.resolve(harnessAdapter.stopTask(handle)).catch(() => {});
     }
   }, tickMs);
-  timer.unref?.();
+  // Deliberately left ref'd: this interval is the ONLY mechanism that
+  // detects a budget breach. Unref'ing it let Node end the process/promise
+  // wait before the timer fired again whenever nothing else held the event
+  // loop open (a fully-mocked adapter's `handle.done`, in particular) --
+  // observed as CI-only failures on Node 22 (kernel/run.test.mjs AC-B1/AC-B2:
+  // "Promise resolution is still pending but the event loop has already
+  // resolved"), never locally on Node 24. `clearInterval` already runs the
+  // instant `handle.done` resolves (see the `finally` below), so staying
+  // ref'd costs nothing at CLI-exit time -- it only keeps the process alive
+  // for exactly as long as supervision is actually in progress.
 
   try {
     await handle.done;
