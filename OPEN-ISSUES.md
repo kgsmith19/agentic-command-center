@@ -375,6 +375,92 @@ line under `## Resolved`.
   decision past T21), and that decision is reflected in the T21 task text
   before it's executed.
 
+## OI-023 claude-code adapter spawns with shell:true and an args array — Node's own runtime now flags this as unescaped, not just concatenated
+- opened: 2026-08-03
+- where: kernel/adapters/claude-code.mjs `identity()` (line ~24) and
+  `startTask()` (line ~62), both `execFileSync("claude", [...], {shell:true})`
+  / `spawnFn("claude", buildArgs(...), {shell:true})`; found during T22's
+  full-branch security review, visible live in this session's own
+  `kernel.e2e.mjs` runs: `(node:PID) [DEP0190] DeprecationWarning: Passing
+  args to a child process with shell option true can lead to security
+  vulnerabilities, as the arguments are not escaped, only concatenated.`
+- what: Node's own child_process now warns that `shell:true` + an args array
+  does NOT safely escape each element — it concatenates them into one command
+  line. `buildArgs()`'s current inputs are all kernel-controlled today
+  (`settingsPath` = a generated staging path already manually quoted,
+  `sessionId` = a `randomUUID()`, `tools` = a hardcoded literal vocabulary
+  from `contract.mjs`'s `toolsFor()`, never contract-supplied free text), so
+  there is no exploitable injection through this call site RIGHT NOW — but
+  the pattern itself is exactly the class of finding a security review must
+  flag, and it is inherited from `runner/runner.mjs`'s pre-existing use of
+  the same idiom (`.cmd` shims cannot be spawned without `shell:true` on
+  Windows), so it is not new to this effort, just newly re-surfaced by Node
+  version drift.
+- why open: a real fix needs research into safely invoking a Windows `.cmd`
+  shim without `shell:true` (e.g. resolving `claude.cmd`'s real target and
+  spawning that directly, or hand-verifying Node's actual Windows quoting
+  behavior well enough to trust it), which is a design decision, not a
+  same-pass fix — and touching `runner/runner.mjs` too would widen this past
+  the kernel effort's own scope fence.
+- done when: either a spawn path that does not trigger DEP0190 is adopted
+  for both `runner/runner.mjs` and `kernel/adapters/claude-code.mjs`, or a
+  written decision records why `shell:true` remains safe here (inputs are
+  provably never attacker-controlled) and the warning is suppressed
+  deliberately rather than left as ambient noise.
+
+## OI-024 The guardhook's per-fire tool-call ceiling never reflects autonomy tightening — only the periodic supervisor check does
+- opened: 2026-08-03
+- where: kernel/guardhook.mjs line ~84-86 (`ceiling = contract?.budget?.toolCalls
+  ?? policy.budget.toolCalls`) vs kernel/run.mjs's supervisor timer (Task 18),
+  which correctly uses `effectiveCeilings(contract, policy, readAutonomy())`;
+  found during T22's full-branch security/lean review.
+- what: when autonomy has tightened ceilings after a run of failures (T17),
+  `kernel/run.mjs`'s periodic check enforces the SHRUNK `toolCalls` number
+  (e.g. 100 instead of 200 at factor 0.5) — but `kernel/guardhook.mjs`, which
+  fires on every single tool call and is the faster of the two enforcement
+  points, still computes its own hard-stop ceiling from the RAW contract or
+  policy default, never the tightened value. A tightened run can therefore
+  still make up to the FULL untightened number of tool calls before the
+  supervisor's next tick (default 60s) notices and aborts it — the guardhook
+  never bypasses the deny-by-default boundary itself (writeRoots/readRoots/
+  bashPatterns/etc. are unaffected), but the tightening feature's toolCalls
+  dimension is enforced with tick-interval latency rather than immediately,
+  which the traceability table's AC-B1/AC-B2 language does not call out as
+  an accepted gap.
+- why open: fixing it means guardhook.mjs importing kernel/autonomy.mjs and
+  computing effectiveCeilings() on every fire (autonomy state is a small
+  JSON file, cheap to re-read) — a real code change to an already
+  checkpointed (R4) file, needing its own new test in guardhook.test.mjs,
+  which is a decision about whether that tighter latency actually matters in
+  practice (the wall-clock and stall dimensions are unaffected; only
+  toolCalls sees the gap) rather than something to slip in unreviewed at the
+  very end of the plan.
+- done when: either guardhook.mjs reads the live autonomy-adjusted ceiling
+  for toolCalls (with a guardhook.test.mjs case proving a tightened contract
+  is denied at the SHRUNK count, not the raw one), or this latency is
+  written down as an accepted tradeoff (the supervisor's checkpointMin/tick
+  interval is the real enforcement point for tightening, guardhook's ceiling
+  is a secondary hard stop only).
+
+## OI-025 e2e/loop.e2e.mjs (5 scenarios) was not re-run as part of T22's final verification sweep
+- opened: 2026-08-03
+- where: plan `docs/superpowers/plans/2026-08-03-acc-kernel-plan.md` Task 22
+  Step 5, final bullet ("`node e2e/loop.e2e.mjs` -> scenarios 1-5 still PASS,
+  proves the kernel did not disturb the goal loop").
+- what: Kyle explicitly chose to skip this run for this pass (real tokens,
+  ~15-20+ minutes) rather than run it during T22. Nothing in this kernel
+  effort touches the goal-loop files that suite covers (`hooks/goal.mjs`,
+  `hooks/budget.mjs`, `watcher/clearbot.ps1`, `gui/ptyhost.e2e.ps1`) — the
+  kernel lives entirely under `kernel/` plus additive changes to
+  `hooks/covgate.mjs`, `package.json`, `.github/workflows/ci.yml`,
+  `guards-gui.ps1`, and `policy.json`'s new `kernel` block — so no code path
+  this suite exercises changed. Risk is judged low, but not verified live.
+- why open: needs the 15-20+ minute real-token run Kyle deferred; a decision
+  only he can make on timing, not a defect to fix.
+- done when: `node e2e/loop.e2e.mjs` is run once against this branch (or
+  after merge) and scenarios 1-5 confirmed PASS, or a diff-only argument
+  (nothing touched that this suite covers) is accepted as sufficient instead.
+
 ## Resolved
 
 ## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process
