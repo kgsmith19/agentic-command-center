@@ -420,69 +420,78 @@ $chkAutoApprove.Text = 'Also run Claude''s requested scripts automatically (no /
 # call of a running kernel task, no restart (AC-U2). This is NOT a ledger
 # viewer; run history stays a `node kernel/ledger.mjs query` job (spec §15).
 $tabK = New-Tab 'Kernel'
-$lblK0 = Add-Ctl $tabK (New-Object System.Windows.Forms.Label) 15 10 650 18
-$lblK0.Text = 'Ceilings and dials for the headless kernel (node kernel/run.mjs). Edits apply live, no restart.'
+# The kernel settings UI is a WEB page now (gui/kernel.html served by
+# gui/server.mjs on 127.0.0.1) — the first tab migrated per spec
+# docs/superpowers/specs/2026-08-03-acc-oi-closure-design.md §5-§6. This tab
+# only HOSTS it (WebView2 when the runtime exists; a browser button always).
+# The same page and API are what Playwright drives in CI (gui/e2e/).
+$pnlKTop = New-Object System.Windows.Forms.Panel
+$pnlKTop.Dock = 'Top'; $pnlKTop.Height = 36
+$btnKOpen = New-Object System.Windows.Forms.Button
+$btnKOpen.Text = 'Open in browser'; $btnKOpen.SetBounds(15, 5, 140, 26)
+$lblKStatus = New-Object System.Windows.Forms.Label
+$lblKStatus.SetBounds(170, 10, 480, 20)
+$pnlKTop.Controls.Add($btnKOpen); $pnlKTop.Controls.Add($lblKStatus)
+$tabK.Controls.Add($pnlKTop)
 
-$grpKBudget = Add-Ctl $tabK (New-Object System.Windows.Forms.GroupBox) 15 38 650 128
-$grpKBudget.Text = ' Harness, per-run budget, and hard caps '
-$lblKHarness = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.Label) 15 26 65 20
-$lblKHarness.Text = 'Harness:'
-$txtKHarness = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.TextBox) 85 23 120 22
-$lblKCheckpoint = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.Label) 220 26 175 20
-$lblKCheckpoint.Text = 'Checkpoint interval (min):'
-$txtKCheckpoint = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.TextBox) 400 23 55 22
+$script:kernelSrv = $null
+$script:kernelUrl = $null
+function Ensure-KernelServer {
+    if ($script:kernelSrv -and -not $script:kernelSrv.HasExited) { return $true }
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'node'
+        $psi.Arguments = '"' + (Join-Path $Root 'gui\server.mjs') + '" --port 0'
+        $psi.WorkingDirectory = $Root
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.CreateNoWindow = $true
+        $script:kernelSrv = [System.Diagnostics.Process]::Start($psi)
+        $line = $script:kernelSrv.StandardOutput.ReadLine()
+        if ($line -notmatch '^LISTENING (\d+)$') { throw "unexpected server banner: $line" }
+        $script:kernelUrl = "http://127.0.0.1:$($Matches[1])/kernel.html"
+        $lblKStatus.Text = ''
+        return $true
+    } catch {
+        $script:kernelUrl = $null
+        $lblKStatus.Text = "kernel settings server failed to start: $($_.Exception.Message)"
+        $lblKStatus.ForeColor = [System.Drawing.Color]::Firebrick
+        return $false
+    }
+}
+$btnKOpen.Add_Click({ if (Ensure-KernelServer) { Start-Process $script:kernelUrl } })
 
-$lblKWall = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.Label) 15 56 110 20
-$lblKWall.Text = 'Wall-clock (min):'
-$txtKWall = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.TextBox) 130 53 55 22
-$lblKTools = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.Label) 195 56 80 20
-$lblKTools.Text = 'Tool calls:'
-$txtKTools = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.TextBox) 280 53 55 22
-$lblKTokens = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.Label) 345 56 60 20
-$lblKTokens.Text = 'Tokens:'
-$txtKTokens = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.TextBox) 410 53 90 22
-
-$lblKHardCap = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.Label) 15 86 220 20
-$lblKHardCap.Text = 'Hard cap on wall-clock (min):'
-$txtKHardCap = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.TextBox) 240 83 55 22
-$lblKHardCap2 = Add-Ctl $grpKBudget (New-Object System.Windows.Forms.Label) 305 86 320 20
-$lblKHardCap2.Text = 'no contract may set a budget above this'
-
-$grpKAuto = Add-Ctl $tabK (New-Object System.Windows.Forms.GroupBox) 15 174 650 90
-$grpKAuto.Text = ' Autonomy — automatic tightening after a run of failures '
-$lblKWindow = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.Label) 15 26 65 20
-$lblKWindow.Text = 'Window:'
-$txtKWindow = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.TextBox) 85 23 50 22
-$lblKReject = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.Label) 150 26 90 20
-$lblKReject.Text = 'Reject rate:'
-$txtKReject = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.TextBox) 245 23 50 22
-$lblKFactor = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.Label) 310 26 55 20
-$lblKFactor.Text = 'Factor:'
-$txtKFactor = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.TextBox) 370 23 50 22
-$lblKRuns = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.Label) 435 26 45 20
-$lblKRuns.Text = 'Runs:'
-$txtKRuns = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.TextBox) 485 23 50 22
-$lblKAutoNote = Add-Ctl $grpKAuto (New-Object System.Windows.Forms.Label) 15 52 620 20
-$lblKAutoNote.Text = 'Reject rate and factor are fractions (0.3 = 30%, 0.5 = half); window/runs are counts of finalized runs.'
-$lblKAutoNote.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-$lblKAutoNote.ForeColor = [System.Drawing.Color]::FromArgb(90, 95, 100)
-
-$grpKLists = Add-Ctl $tabK (New-Object System.Windows.Forms.GroupBox) 15 274 650 110
-$grpKLists.Text = ' Always-allowed tools and extra protected write roots '
-$lblKAllow = Add-Ctl $grpKLists (New-Object System.Windows.Forms.Label) 15 26 190 20
-$lblKAllow.Text = 'Always-allowed tools:'
-$txtKAllow = Add-Ctl $grpKLists (New-Object System.Windows.Forms.TextBox) 210 23 420 22
-$lblKDeny = Add-Ctl $grpKLists (New-Object System.Windows.Forms.Label) 15 56 190 20
-$lblKDeny.Text = 'Extra protected write roots:'
-$txtKDeny = Add-Ctl $grpKLists (New-Object System.Windows.Forms.TextBox) 210 53 420 22
-$lblKListsNote = Add-Ctl $grpKLists (New-Object System.Windows.Forms.Label) 15 82 620 20
-$lblKListsNote.Text = 'Comma separated. This repo and the user .claude folder are always protected in addition to these.'
-$lblKListsNote.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-$lblKListsNote.ForeColor = [System.Drawing.Color]::FromArgb(90, 95, 100)
-
-$btnKSave = Add-Ctl $tabK (New-Object System.Windows.Forms.Button) 15 394 220 30
-$btnKSave.Text = 'Save kernel settings'
-$lblKSaved = Add-Ctl $tabK (New-Object System.Windows.Forms.Label) 245 399 400 20
+$script:kwvInit = $false
+function Ensure-KernelWeb {
+    if (-not (Ensure-KernelServer)) { return }
+    if (-not $script:TermOk) { $lblKStatus.Text = 'WebView2 runtime missing - use the browser button.'; return }
+    if ($script:kwvInit) { return }
+    $script:kwvInit = $true
+    $script:kwv = New-Object Microsoft.Web.WebView2.WinForms.WebView2
+    $script:kwv.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $tabK.Controls.Add($script:kwv)
+    $script:kwv.BringToFront()
+    $script:kwv.add_CoreWebView2InitializationCompleted({
+        if ($script:kwv.CoreWebView2) { $script:kwv.CoreWebView2.Navigate($script:kernelUrl) }
+    })
+    # Same no-threadpool init dance as the Terminal tab (guards-gui.ps1:1382).
+    $script:kwvEnvTask = $null
+    $script:kwvTimer = New-Object System.Windows.Forms.Timer
+    $script:kwvTimer.Interval = 100
+    $script:kwvTimer.Add_Tick({
+        if ($script:kwvEnvTask -and $script:kwvEnvTask.IsCompleted) {
+            $script:kwvTimer.Stop()
+            if (-not $script:kwvEnvTask.IsFaulted) {
+                [void]$script:kwv.EnsureCoreWebView2Async($script:kwvEnvTask.Result)
+            } else {
+                $lblKStatus.Text = 'WebView2 init failed - use the browser button.'
+            }
+        }
+    })
+    $udf = Join-Path $env:LOCALAPPDATA 'acc-webview2'
+    $script:kwvEnvTask = [Microsoft.Web.WebView2.Core.CoreWebView2Environment]::CreateAsync($null, $udf, $null)
+    $script:kwvTimer.Start()
+}
 
 # ---------- tab: Start work ----------
 # The front door. ACC launches the session, so the folder and the rules are set
@@ -788,7 +797,7 @@ $txtProt.Add_KeyDown({
 $tabControl.Add_SelectedIndexChanged({
     if ($tabControl.SelectedTab -eq $tabR) { Refresh-Requests }
     if ($tabControl.SelectedTab -eq $tabP) { Refresh-Process }
-    if ($tabControl.SelectedTab -eq $tabK) { Refresh-Kernel }
+    if ($tabControl.SelectedTab -eq $tabK) { Ensure-KernelWeb }
 })
 
 # tooltips + input hints
@@ -959,57 +968,6 @@ $btnPolSave.Add_Click({
         [System.Windows.Forms.MessageBox]::Show("Not saved: $_", 'Something went wrong') | Out-Null
     }
 })
-# ---------- Kernel tab logic (ACC-KERNEL-TAB) ----------
-function Refresh-Kernel {
-    try {
-        $pol = (Read-PolicyText) | ConvertFrom-Json
-        $k = $pol.kernel
-        $txtKHarness.Text = [string]$k.harness
-        $txtKWall.Text = [string]$k.budget.wallClockMin
-        $txtKTools.Text = [string]$k.budget.toolCalls
-        $txtKTokens.Text = [string]$k.budget.tokens
-        $txtKHardCap.Text = [string]$k.hardCaps.wallClockMin
-        $txtKCheckpoint.Text = [string]$k.checkpointMin
-        $txtKWindow.Text = [string]$k.autonomy.window
-        $txtKReject.Text = [string]$k.autonomy.rejectRate
-        $txtKFactor.Text = [string]$k.autonomy.factor
-        $txtKRuns.Text = [string]$k.autonomy.runs
-        $txtKAllow.Text = (@($k.alwaysAllowTools) -join ', ')
-        $txtKDeny.Text = (@($k.extraDenyWriteRoots) -join ', ')
-        $lblKSaved.Text = ''
-    } catch {
-        $lblKSaved.Text = "cannot read policy.json: $_"
-        $lblKSaved.ForeColor = [System.Drawing.Color]::Firebrick
-    }
-}
-$btnKSave.Add_Click({
-    try {
-        $pol = (Read-PolicyText) | ConvertFrom-Json
-        $k = $pol.kernel
-        $k.harness = $txtKHarness.Text.Trim()
-        $k.budget.wallClockMin = [double]$txtKWall.Text
-        $k.budget.toolCalls = [int]$txtKTools.Text
-        $k.budget.tokens = [long]$txtKTokens.Text
-        $k.hardCaps.wallClockMin = [double]$txtKHardCap.Text
-        $k.checkpointMin = [double]$txtKCheckpoint.Text
-        $k.autonomy.window = [int]$txtKWindow.Text
-        $k.autonomy.rejectRate = [double]$txtKReject.Text
-        $k.autonomy.factor = [double]$txtKFactor.Text
-        $k.autonomy.runs = [int]$txtKRuns.Text
-        $k.alwaysAllowTools = @($txtKAllow.Text -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        $k.extraDenyWriteRoots = @($txtKDeny.Text -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        $json = $pol | ConvertTo-Json -Depth 10
-        $enc = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($script:PolicyFile, $json, $enc)
-        $lblKSaved.Text = 'Saved. Next tool call in a running kernel task sees this - no restart.'
-        $lblKSaved.ForeColor = [System.Drawing.Color]::DarkGreen
-        Refresh-Kernel
-    } catch {
-        $lblKSaved.Text = "Not saved: $_"
-        $lblKSaved.ForeColor = [System.Drawing.Color]::Firebrick
-    }
-})
-
 $btnKill.Add_Click({
     $dir = Split-Path $script:StopFile -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -1617,7 +1575,10 @@ $goalTimer = New-Object System.Windows.Forms.Timer
 $goalTimer.Interval = 5000
 $goalTimer.Add_Tick({ if ($pnlWork.Visible) { Refresh-Goals } })
 $form.Add_Shown({ $goalTimer.Start() })
-$form.Add_FormClosed({ $goalTimer.Stop(); $goalTimer.Dispose() })
+$form.Add_FormClosed({
+    $goalTimer.Stop(); $goalTimer.Dispose()
+    if ($script:kernelSrv -and -not $script:kernelSrv.HasExited) { try { $script:kernelSrv.Kill() } catch {} }
+})
 
 # Closing the GUI kills any embedded session (the pty child lives in this
 # process). Confirm first; Dispose -> Kill terminates the child tree.
@@ -1633,7 +1594,6 @@ $form.Add_FormClosing({
 })
 
 Refresh-Process
-Refresh-Kernel
 Refresh-ProfileNote
 Refresh-Goals
 if ($ShowTab) {
@@ -1642,7 +1602,7 @@ if ($ShowTab) {
     if ($match) { $tabControl.SelectedTab = $match }
 }
 if ($SmokeTest) {
-    Write-Output "SMOKE OK status=$($lblStatus.Text) secrets=$($lstSecrets.Items.Count) protected=$($lstProt.Items.Count) projects=$($lstProj.Items.Count) vault=$($lstVault.Items.Count) runbox=$($lstRunbox.Items.Count) folders=$($cboFolder.Items.Count) tabs=$($tabControl.TabPages.Count) tab1=$($tabControl.TabPages[0].Text) workdirs=$($cboWorkDir.Items.Count) profile=$(Get-SelectedProfile) profnote=$($lblS2b.Text) tier=$($lblPTier.Text) summary=$($lblPSummary.Text) act=$($lblStatusAct.Text) clearbot=$($lblCB.Text) work=$($pnlWork.Controls.Count) adv=$($tabControl.Visible) goal=$($lblGoal.Text) autoapprove=$($chkAutoApprove.Checked) kernelHarness=$($txtKHarness.Text) kernelWall=$($txtKWall.Text) kernelTools=$($txtKTools.Text) kernelTokens=$($txtKTokens.Text) kernelHardCap=$($txtKHardCap.Text) kernelCheckpoint=$($txtKCheckpoint.Text) kernelWindow=$($txtKWindow.Text) kernelReject=$($txtKReject.Text) kernelFactor=$($txtKFactor.Text) kernelRuns=$($txtKRuns.Text) kernelAllow=$($txtKAllow.Text) kernelDeny=$($txtKDeny.Text)"
+    Write-Output "SMOKE OK status=$($lblStatus.Text) secrets=$($lstSecrets.Items.Count) protected=$($lstProt.Items.Count) projects=$($lstProj.Items.Count) vault=$($lstVault.Items.Count) runbox=$($lstRunbox.Items.Count) folders=$($cboFolder.Items.Count) tabs=$($tabControl.TabPages.Count) tab1=$($tabControl.TabPages[0].Text) workdirs=$($cboWorkDir.Items.Count) profile=$(Get-SelectedProfile) profnote=$($lblS2b.Text) tier=$($lblPTier.Text) summary=$($lblPSummary.Text) act=$($lblStatusAct.Text) clearbot=$($lblCB.Text) work=$($pnlWork.Controls.Count) adv=$($tabControl.Visible) goal=$($lblGoal.Text) autoapprove=$($chkAutoApprove.Checked)"
 } else {
     [void]$form.ShowDialog()
 }
