@@ -1,7 +1,7 @@
 {
   "name": "agentic-command-center",
   "private": true,
-  "description": "Guard rail + control panel for Claude Code sessions on this machine. No dependencies — pure node:test, plain PowerShell/C#. This file exists to pin the Node floor and give CI, docs, and manual runs one source of truth for the test commands instead of copy-pasting them.",
+  "description": "Guard rail + control panel for Claude Code sessions on this machine. No runtime dependencies — pure node:test, plain PowerShell/C#; @playwright/test is the one devDependency (GUI e2e). This file exists to pin the Node floor and give CI, docs, and manual runs one source of truth for the test commands instead of copy-pasting them.",
   "engines": {
     "node": ">=22"
   },

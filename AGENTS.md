@@ -146,6 +146,9 @@ powershell -File gui/ptyhost.test.ps1
        protocol accepts/refuses, dispose kills the child. No claude, no GUI.
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
 powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
+npm run e2e:gui
+    -> GUI e2e. Playwright drives gui/kernel.html against gui/server.mjs in a
+       sandbox; runs headless in CI (gui-e2e job).
 ```
 
 **Never run a hook by hand against live state.** `bindSession` adopts a goal by

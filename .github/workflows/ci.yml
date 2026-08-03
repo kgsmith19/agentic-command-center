@@ -128,3 +128,19 @@ jobs:
         if: always()
         shell: pwsh
         run: Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 'C:\code'
+
+  gui-e2e:
+    name: GUI e2e (Playwright, kernel settings)
+    runs-on: ubuntu-latest
+    # No `needs` — parallel with the other jobs, same doctrine as
+    # windows-integration. Fully sandboxed: playwright.config.mjs points
+    # ACC_POLICY/ACC_ROOT at a mkdtemp dir, never live state.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:gui
