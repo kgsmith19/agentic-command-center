@@ -70,6 +70,29 @@ try {
     Check 'unknown op refused'   ((Send-Pipe $pipe 'BOGUS') -like 'FAIL*')
     Check 'ESC accepted'         ((Send-Pipe $pipe 'ESC') -eq 'OK')
 
+    # OI-010: TEXTB64 carries a multi-line payload TEXT structurally cannot
+    # (ReadLine framing means a raw newline would truncate the wire message
+    # itself). \r\n is the one allowed control sequence, as the intentional
+    # line separator between the two shell commands below - mirrors the
+    # PTYPROOF-73 proof shape exactly, just with two tokens instead of one.
+    function ToB64([string]$s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
+    $b64 = ToB64("echo PTYPROOF-B64-LINE-A`r`necho PTYPROOF-B64-LINE-B")
+    Check 'TEXTB64 accepted' ((Send-Pipe $pipe ('TEXTB64 ' + $b64)) -eq 'OK')
+    Start-Sleep -Milliseconds 80
+    Check 'SUBMIT (TEXTB64) accepted' ((Send-Pipe $pipe 'SUBMIT') -eq 'OK')
+    $deadline = (Get-Date).AddSeconds(10); $seenA = $false; $seenB = $false
+    while ((Get-Date) -lt $deadline -and -not ($seenA -and $seenB)) {
+        Start-Sleep -Milliseconds 250
+        $snap = $pty.Snapshot()
+        $seenA = ([regex]::Matches($snap, 'PTYPROOF-B64-LINE-A').Count -ge 2)
+        $seenB = ([regex]::Matches($snap, 'PTYPROOF-B64-LINE-B').Count -ge 2)
+    }
+    Check 'both TEXTB64 lines executed (output appeared)' ($seenA -and $seenB)
+
+    Check 'TEXTB64 invalid base64 refused'   ((Send-Pipe $pipe 'TEXTB64 not-valid-base64!!') -like 'FAIL*')
+    Check 'TEXTB64 bare CR (no LF) refused'  ((Send-Pipe $pipe ('TEXTB64 ' + (ToB64("a`rb"))) ) -like 'FAIL*')
+    Check 'TEXTB64 over-length refused'      ((Send-Pipe $pipe ('TEXTB64 ' + (ToB64('x' * 2101)))) -like 'FAIL*')
+
     $pty.Resize(100, 40)   # must not throw
     $cpid = $pty.ChildPid
     $pty.Dispose()

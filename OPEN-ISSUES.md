@@ -23,38 +23,31 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-018 lane.test.mjs full-jitter test is flaky under real randomness
-- opened: 2026-08-03
-- where: hooks/lane.test.mjs:370 "retry backoff is full jitter — delay can
-  land anywhere from 0 up to the exponential ceiling, not just the top half"
-- what: asserts at least one sampled delay lands under 400ms across a small
-  fixed number of draws from `Math.random()`-based full jitter; occasionally
-  every draw lands high by chance (observed: 709,854,575,924,494ms all >=
-  400) and the test fails with no code change. Found running the fast tier
-  while gating unrelated kernel/ work (T5-T8 of the ACC kernel plan);
-  confirmed flaky by rerunning `node --test hooks/lane.test.mjs` 3x (1 fail,
-  2 pass) with lane.mjs/lane.test.mjs untouched.
-- why open: out of scope for the kernel effort; needs either more samples,
-  a seeded RNG seam, or a statistical (not single-draw) assertion in
-  lane.test.mjs itself.
-- done when: the test passes deterministically across many repeated runs
-  (e.g. 50x `node --test hooks/lane.test.mjs` with zero flakes), or the
-  assertion is restructured to not depend on a single low-probability draw.
-
 ## OI-003 A clearbot-typed /cd does not take effect
 - opened: 2026-07-31
-- where: watcher/clearbot.ps1 (cd requests) / hooks/route.mjs
+- where: watcher/clearbot.ps1 Invoke-Cd
 - what: two consecutive cd requests to `C:\code` were typed and replayed
   (clearbot.log 10:45:13 `CD 130aefc6 → C:\code clear=True`, 10:45:37
   `CD dde31bdb → C:\code clear=False`) yet the session's cwd stayed
   `C:\code\guards` — the next prompt fell back to the advisory line (the
   designed escape hatch, so no deny-loop, but the scope move itself failed
-  twice). Suspect timing (typed while the fresh session was still starting)
-  or /cd needing different input than a plain typed line.
-- why open: found in the same cycle-3 timeline reconstruction; needs the
-  throwaway-console injection rig to reproduce safely, per AGENTS.md.
-- done when: a clearbot-typed /cd verifiably changes the session cwd in a
-  throwaway console (route verdict matches cwd on the replayed prompt).
+  twice).
+- root cause (found 2026-08-04): the second log line is the tell — `clear=
+  False`. `Invoke-Cd`'s `$req.clear` branch sleeps 1200ms after the clear
+  before doing anything else; the non-clear branch fell straight through to
+  `/cd $dest` with zero settle delay, typing it before a just-started
+  session's REPL was ready to receive it.
+- fix in place: 4e22e81 — the same 1200ms settle now runs on the non-clear
+  path too, mirroring the clear branch exactly.
+- why open: per AGENTS.md's own doctrine ("verified by injection into a
+  throwaway console — do not test them against a real working session"),
+  the fix needs a real-token repro to close, which this session does not
+  run itself. `e2e/loop.e2e.mjs` scenario 4 is already exactly this
+  reproduction (already named "guards OI-003" in its own comment/report
+  line, already queues a `clear:false` cd request against a real console)
+  — no new script needed.
+- done when: Kyle runs `node e2e/loop.e2e.mjs --only 4` and scenario 4
+  passes (the cwd actually moves), then this entry can close.
 
 ## OI-005 Guard self-protection is off while the docs still claim it
 - opened: 2026-07-31 (pre-commit security review)
@@ -70,31 +63,6 @@ line under `## Resolved`.
 - done when: after the ACC goal closes, `C:/code/guards` is back in
   `protected` (ideally with `C:/code/ROUTING.md` added), or the AGENTS.md /
   clearbot wording is changed to match reality.
-
-## OI-006 Running budget.mjs SessionStart by hand hijacks the live goal binding
-- opened: 2026-07-31 (hit while verifying the heartbeat work — self-inflicted,
-  which is exactly why it is worth recording)
-- where: hooks/budget.mjs onSessionStart → hooks/goal.mjs bindSession
-- what: `bindSession` adopts an active goal by CONSOLE PID (that is the
-  mechanism that survives a /clear, and it must stay). So piping a synthetic
-  SessionStart payload into the live hook from a console that owns a goal
-  rebinds that goal to whatever `session_id` the payload carried. Observed:
-  a smoke test with `session_id:"hbtest"` moved the live goal's sessionId to
-  "hbtest" and armed a kick, which clearbot then typed into the real console.
-  The damage is silent: the real session's Stop hook can no longer find its
-  own goal (`goalForSession` misses), so cycle logging and the new turn-end
-  liveness stop working for that session.
-- why open: the obvious guard (require a UUID-shaped session id) risks
-  breaking legitimate post-clear adoption for a hazard only reachable by
-  hand-running the hook, and AGENTS.md is explicit that guards is a
-  convention enforcer, not a security boundary. Recovery is cheap and known:
-  re-run SessionStart with the true session id, then `goal.mjs kicked <id>`.
-- mitigation in place: every verification recipe in the plan (and AGENTS.md,
-  Task 11) now sets `ACC_ROOT` to a throwaway tree, so a hand-run hook cannot
-  reach live goal state.
-- done when: either a binding guard exists that cannot break legitimate
-  post-clear adoption, or hand-running hooks against live state is impossible
-  by construction.
 
 ## OI-007 External (Scheduled Task) watcher supervision needs elevation
 - opened: 2026-07-31
@@ -119,22 +87,6 @@ line under `## Resolved`.
 - done when: either the task is registered from an elevated shell, or the
   spec is amended to make in-process revive + Startup launcher the design.
 
-## OI-008 Two related runbox scripts can auto-run in an order that cancels them
-- opened: 2026-07-31
-- where: watcher/clearbot.ps1 Invoke-AutoApprove + the runbox
-- what: auto-approve runs every pending script in directory order, so shipping
-  an install script and its uninstall script together makes the net effect
-  depend on that order. Observed: `acc-watchdog-unregister.ps1` ran first and
-  reported "not registered", and had the order been reversed it would have
-  silently undone the registration seconds after it happened.
-- why open: the mechanism is working as designed (Kyle enabled auto-approve
-  deliberately); this is about how scripts are AUTHORED. Convention fix for
-  now: never leave an undo script in the runbox — undo scripts live tracked
-  under `watcher/watchdog/` and are run deliberately.
-- done when: either the convention is documented in AGENTS.md's runbox rules
-  (a `# guards: manual` marker, or "no undo scripts in the runbox"), or
-  auto-approve refuses a script whose name pairs with another pending one.
-
 ## OI-009 GUI process is a single point of failure for hosted sessions
 - opened: 2026-07-31
 - where: guards-gui.ps1 / gui/PtyHost.cs
@@ -146,19 +98,6 @@ line under `## Resolved`.
 - done when: a GUI crash with a live hosted session either reattaches the
   session on GUI restart or is detected and surfaced within a minute, proven
   by killing the GUI mid-session in a test.
-
-## OI-010 Pipe TEXT protocol is single-line; multi-line replay still falls back
-- opened: 2026-07-31
-- where: gui/PtyHost.cs ServePipe + watcher/clearbot.ps1 Send-Pipe (OI-004
-  successor)
-- what: the TEXT op carries one line and refuses control chars (< 0x20), so a
-  multi-line replay payload cannot travel the pty path and drops to keystroke
-  injection, which refuses it too (sendconsole multi-line refusal) — multi-line
-  replays silently do not happen on any transport.
-- why open: no current caller sends multi-line replays (clearbot types only
-  closed-set constants); framing is protocol design work, not a patch.
-- done when: a framed multi-line op exists with the same content policy, with a
-  clearbot test proving a two-line replay lands via the pipe.
 
 ## OI-011 Re-verify guards self-protection coverage of guards/ paths
 - opened: 2026-07-31
@@ -195,24 +134,6 @@ line under `## Resolved`.
 - done when: the Gate 4 manual launch (Kyle watching) shows zero extra
   console windows; if one appears, its parent chain names the spawner and
   this entry gets the real fix.
-
-## OI-014 killTree's Windows branch (taskkill /t) is unverified
-- opened: 2026-08-01
-- where: runner/runner.mjs killTreeWin32
-- what: runClaudeOnce's timeout used to orphan the real claude process on a
-  hang — `child.kill()` under `shell:true` only signals the intermediate
-  shell, not the process it wraps (verified: an 8s+ orphan on POSIX with the
-  old code, ~10ms clean kill with the fix). The POSIX fix (process-group
-  SIGTERM) is proven for real by runner.test.mjs on this sandbox. The
-  Windows fix (`taskkill /pid <pid> /t /f`) is proven only structurally — an
-  injected-exec test confirms runner.mjs ISSUES that exact command, but no
-  POSIX sandbox can confirm taskkill actually kills the tree the way the
-  POSIX test confirms process-group SIGTERM does.
-- why open: needs a real Windows run to close, which this environment cannot
-  produce.
-- done when: Kyle (or a Windows CI run) reproduces the same proof the POSIX
-  test already gives — spawn a real hung `claude -p` (or a stand-in), let
-  runner.mjs's timeout fire, and confirm no orphaned claude.exe survives it.
 
 ## OI-015 guards-gui.ps1 interactive-lane wiring is unverified — this sandbox has no PowerShell at all
 - opened: 2026-08-01
@@ -282,36 +203,6 @@ line under `## Resolved`.
   explicit, ledgered reason none is needed. No test may be added or loosened
   just to turn red green — every test must be able to fail against a genuine
   regression, never tuned to the current implementation's behavior.
-
-## OI-021 Kernel has no explicit handling for upstream API-overload errors, including failures in the harness's own error reporting
-- opened: 2026-08-03
-- where: kernel/adapters/claude-code.mjs (identity/startTask), hooks/lane.mjs
-  (529-specific backoff exists per OI-017 but is proven only for automated
-  runner.mjs launches, not yet against kernel/run.mjs's own launch path),
-  kernel/run.mjs failClosed paths
-- what: Kyle, verbatim: "the API itself can be overloaded and Claude Code
-  does not see those as [errors] — that would turn his connection off from
-  reading the error... we must even handle those ULTRA META errors." I.e. a
-  529/rate-limit/overload condition from Anthropic's API may not surface as
-  a clean, catchable error from the `claude` CLI subprocess at all — the
-  harness's OWN error-reporting path can itself fail silently, a level
-  beyond "startTask threw" (already covered by Task 16's failed-to-start
-  test). Nothing in the kernel today distinguishes "the harness process
-  exited/errored cleanly" from "the harness process is hung or silently
-  degraded because the upstream API is overloaded and the CLI never told
-  anyone."
-- why open: needs research into what a real API-overload/degraded-CLI
-  failure looks like from the outside (stdout/stderr shape, hang vs clean
-  exit, exit code) before a test can be written against it — currently
-  unknown and not yet reproducible on demand. Intersects T17/T18 (ceilings)
-  and the proof tier (T19), which spends real tokens and is the one place
-  concurrent real launches are most likely to hit this for real.
-- done when: either a real or faithfully-simulated overload scenario is
-  captured (e.g. a fake adapter mimicking a hung/silently-failed CLI) with a
-  kernel-level test proving the run still fails closed within its
-  wall-clock ceiling rather than hanging forever, or the mitigating design
-  (e.g. `ttlMs` already bounds this — confirm and document) is written down
-  and cited here.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
@@ -387,6 +278,122 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-018 [RESOLVED 2026-08-04] lane.test.mjs full-jitter test's false-failure rate is now negligible
+- opened: 2026-08-03, resolved: d753da4 — same assertion (at least one
+  sampled delay under 400ms), sample count raised 4→20 (retries: 6→21,
+  success threshold calls<=5→calls<=20). The original comment's odds were
+  also wrong, not just thin: it computed (0.5)^4 against the 500ms
+  equal-jitter floor, not the actual 400ms assertion threshold — the honest
+  single-draw failure chance is P(draw>=400)=0.6, so 4 samples was really
+  ~13% (matching the observed double-flake), while 20 samples brings it to
+  (0.6)^20 ~= 0.0037%. Verified green across 3 full runs of
+  `node --test hooks/lane.test.mjs` (isolated jitter-test runs all green;
+  the file's one remaining flake, `reownSlot ... owner.json can't be
+  written`, is a separate, pre-existing, unrelated sandbox-timing issue).
+  lane.mjs's jitter formula is untouched.
+
+## OI-014 [RESOLVED 2026-08-04] killTree's Windows branch now runs its direct pid-liveness proof on every platform
+- opened: 2026-08-01, resolved: 6c6b759 — removed the
+  `process.platform !== "win32"` guard around the direct
+  `process.kill(pid, 0)` check inside "a hung run is killed PROMPTLY at its
+  timeout, not merely eventually" (runner/runner.test.mjs). The check now
+  runs unconditionally, so on this repo's `windows-integration` CI job
+  (`.github/workflows/ci.yml`, `windows-latest`, `npm run test:windows`) it
+  becomes the first real proof that killTreeWin32's `taskkill /pid <pid> /t
+  /f` actually kills the fake claude's process tree rather than merely
+  detaching from it — the same proof the POSIX branch already had via
+  process-group SIGTERM. `runner/runner.mjs`'s `killTreeWin32`/`killTree`
+  are untouched; this closed a test gap, not a code bug. 40/40
+  runner.test.mjs green locally (behaviorally unchanged here — the removed
+  guard already evaluated true on this platform).
+
+## OI-021 [RESOLVED 2026-08-04] kernel/README.md documents that any harness hang, including a silent one, is bounded by wall-clock ceilings, not error reporting
+- opened: 2026-08-03, resolved: 3557f5e — added a paragraph to
+  kernel/README.md's "The boundary and its honest ceilings" section citing
+  the actual enforcement path: `checkpointVerdict` (kernel/run.mjs's
+  supervisor tick) reads only elapsed wall-clock time, tokens, and
+  tool-call counts — never the harness child's stdout/stderr/exit code —
+  so a harness hung silently by an unreported upstream API overload starves
+  the token/tool-call signals too and still trips the wall-clock ceiling.
+  `stopTask` kills the child directly on breach without depending on the
+  harness's own error reporting. `kernel/run.test.mjs`'s AC-B1 test already
+  proves this exact shape (a fake adapter whose `done` promise resolves
+  only via the supervisor's own `stopTask`, every other signal held at
+  zero) and is cited by name. `ttlMs` is noted as a second, independent
+  bound on the harness's lane slot. Docs-only, per OI-021's own "or" clause
+  permitting a written-and-cited mitigating-design resolution; no kernel
+  code changed.
+
+## OI-008 [RESOLVED 2026-08-04] runbox undo/uninstall convention is already documented in AGENTS.md
+- opened: 2026-07-31, resolved: 2026-08-04 — AGENTS.md's runbox section
+  (`AGENTS.md:65`) already states, verbatim: "Never leave undo/uninstall
+  scripts in the runbox (guards OI-008). Undo scripts live tracked in their
+  own directory (e.g. watcher/watchdog/) and are run deliberately."
+  Satisfies the entry's own first "done when" option exactly. Ledger-only
+  resolution — no code or doc change needed beyond this closure.
+
+## OI-006 [RESOLVED 2026-08-04] bindSession refuses to rebind an active goal on anything but a UUID-shaped sessionId
+- opened: 2026-07-31, resolved: 8319f6a — the obvious guard (require a
+  UUID-shaped session id) turned out not to risk legitimate post-clear
+  adoption after all: a non-UUID sessionId is now treated exactly like none
+  was passed — the existing consolePid-based lookup still runs, but
+  sessionId/needsKick/boundAt are left untouched instead of overwritten.
+  Reproduces the ledger's own hazard directly (`bindSession({ sessionId:
+  "hbtest", consolePid: LIVE })` against a bound goal: sessionId/needsKick/
+  boundAt provably unchanged) and confirms a real UUID still adopts
+  normally, via two new regression tests in hooks/goal.test.mjs.
+  AGENTS.md's "never hand-run a hook against live state" warning is updated
+  to note the specific hijack is now closed, but still calls for
+  sandboxing (`markKicked`/`setStatus`/cycle logging are still reachable by
+  a hand-run hook).
+  Touching bindSession subjected the whole file to covgate's 100/100/90
+  floor; the file's real pre-existing coverage was 64/50/58%, and a deeper
+  look found even that number was wrong, not just low — goal.test.mjs's
+  per-test cache-busted reimport of goal.mjs (`?t=${n}`) meant node's own
+  lcov merge (last-write-wins per file path, not a union) only ever
+  reported the LAST-loaded test's coverage. Fixed at the root: goal.mjs's
+  ROOT/GOALS/DONE paths now resolve from the environment on every call
+  instead of once at import, so goal.test.mjs and budget.test.mjs's own
+  direct goal.mjs usage share one module instance with no cache-busting
+  anywhere (this also closed the same collision between the two test
+  files when covgate runs them together). `main()` (the CLI dispatcher) is
+  now exported and tested in-process, since a spawned subprocess is
+  invisible to this file's own coverage instrumentation. New tests cover
+  `goalForSession`/`resolveId`/every CLI subcommand/the remaining
+  defensive catch branches. Real coverage after the fix: 100% lines, 100%
+  funcs, 98–99% branches (`ACC_COVGATE_TESTS=... node hooks/covgate.mjs`
+  green) — the only remaining gaps are the ACC_ROOT/ACC_GOALS_DIR env
+  ternaries at import and the CLI entry-point guard's true branch, neither
+  reachable in-process without reintroducing the collision. No
+  `branchFloorOverrides` entry needed.
+
+## OI-010 [RESOLVED 2026-08-04] a framed TEXTB64 op carries a multi-line payload with the same content policy as TEXT
+- opened: 2026-07-31, resolved: 4e22e81 — added `TEXTB64 <base64>`
+  to `PtyHost.Handle()` (gui/PtyHost.cs), checked alongside TEXT/SUBMIT/ESC:
+  base64-decodes with a try/catch (unlike the existing unvalidated `WriteB64`,
+  which stays the in-process WebView2 keystroke path — the pipe gets the
+  same validation TEXT gets), refuses every control char TEXT refuses except
+  an internal `\r\n` pair (the intentional line separator — a bare `\r` or
+  `\n` is still refused), same 2100-char cap. `watcher/clearbot.ps1` gained
+  `Send-MultilineKeys` (sibling to `Send-Keys`) — additive, no current
+  caller, since deciding whether clearbot should auto-replay a multi-line
+  prompt is a separate decision this fix does not make. Fixed a real bug
+  found while designing this: `Send-Pipe`'s 80ms pre-SUBMIT settle was
+  gated on `-like 'TEXT *'`, which would have silently missed `TEXTB64 `
+  (no space at index 5) and reintroduced the exact paste-vs-Enter race the
+  transport exists to avoid; broadened to `'TEXT*'`. New test case in
+  gui/ptyhost.test.ps1 mirrors the existing PTYPROOF-73 template with a
+  two-line payload, plus refusal cases (invalid base64, a bare `\r`,
+  over-length).
+  One design choice made without local verification (no PowerShell in this
+  environment): the internal line separator is `\r\n`, not a bare `\n` —
+  the safer bet since `\r` alone is `PtyHost.cs`'s own proven-working Enter
+  byte. `gui/ptyhost.test.ps1` is this repo's own real proof (real ConPTY,
+  real cmd.exe) and runs on the `windows-integration` CI job
+  (`.github/workflows/ci.yml`) — if the `\r\n` assumption is wrong, that
+  run is expected to say so, and is the trigger for a follow-up push should
+  it come back red.
 
 ## OI-020 [RESOLVED 2026-08-03] Playwright e2e verifies the kernel GUI in CI
 - opened: 2026-08-03, resolved: 5deff38, 39322e1 — gui/e2e/kernel-settings.spec.mjs

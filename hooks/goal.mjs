@@ -28,10 +28,20 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT: see budget.mjs. Both must honour it or a test would split its state
-// across two trees.
-const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
-export const GOALS = process.env.ACC_GOALS_DIR || path.join(ROOT, "runner", "goals");
-const DONE = path.join(GOALS, "done");
+// across two trees. Resolved on every call, not captured once at import: a
+// test process that imports this module once and then runs many cases, each
+// against its own ACC_ROOT/ACC_GOALS_DIR sandbox, needs every call to see
+// whatever is current -- a module-load-time const would only ever see the
+// first sandbox and silently leak state into every later one.
+function root() {
+  return process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
+}
+export function goalsDir() {
+  return process.env.ACC_GOALS_DIR || path.join(root(), "runner", "goals");
+}
+function doneDir() {
+  return path.join(goalsDir(), "done");
+}
 
 // A kick is only sent once the binding has had time to settle. SessionStart runs
 // before the TUI is ready to accept input, so firing the instant a goal binds
@@ -53,8 +63,8 @@ const HUMAN_HOLD_MS_DEFAULT = 10 * 60_000;
 const nowIso = () => new Date().toISOString();
 
 function ensureDirs() {
-  fs.mkdirSync(GOALS, { recursive: true });
-  fs.mkdirSync(DONE, { recursive: true });
+  fs.mkdirSync(goalsDir(), { recursive: true });
+  fs.mkdirSync(doneDir(), { recursive: true });
 }
 
 function readJson(p, dflt) {
@@ -66,11 +76,11 @@ function readJson(p, dflt) {
 }
 
 function goalPath(id) {
-  return path.join(GOALS, `${safeId(id)}.json`);
+  return path.join(goalsDir(), `${safeId(id)}.json`);
 }
 
 export function logPath(id) {
-  return path.join(GOALS, `${safeId(id)}.log.md`);
+  return path.join(goalsDir(), `${safeId(id)}.log.md`);
 }
 
 // Ids are used to build file paths and are echoed into injected context, so they
@@ -93,9 +103,9 @@ export function readGoal(id) {
 export function listGoals() {
   try {
     return fs
-      .readdirSync(GOALS)
+      .readdirSync(goalsDir())
       .filter((f) => f.endsWith(".json"))
-      .map((f) => readJson(path.join(GOALS, f), null))
+      .map((f) => readJson(path.join(goalsDir(), f), null))
       .filter((g) => g && g.id);
   } catch {
     return [];
@@ -162,6 +172,13 @@ export function createGoal({ text, cwd, profile }) {
   return goal;
 }
 
+// Real Claude Code session ids are always UUIDs. bindSession is reachable by
+// hand (piping a fake SessionStart payload into budget.mjs against live
+// state), and a synthetic sessionId there would otherwise silently steal a
+// live console's goal binding (OI-006, reproduced). A non-UUID sessionId is
+// therefore treated exactly like none was passed at all.
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Called from SessionStart. Two ways in:
 //   - ACC_GOAL is set   -> the Command Center launched this session for that goal
 //   - otherwise         -> adopt whatever active goal owns this console
@@ -177,8 +194,11 @@ export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   }
   if (!goal) return null;
 
-  const fresh = goal.sessionId !== sessionId;
-  goal.sessionId = sessionId || goal.sessionId;
+  // A non-UUID id (garbage, or simply absent) never touches sessionId/
+  // needsKick/boundAt below -- it is inert, not "no-op with side effects".
+  const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
+  const fresh = validId !== null && goal.sessionId !== validId;
+  if (validId !== null) goal.sessionId = validId;
   if (consolePid) goal.consolePid = Number(consolePid);
   if (!goal.cwd && cwd) goal.cwd = cwd;
   if (fresh) {
@@ -235,8 +255,8 @@ export function setStatus(id, status, why) {
     // Archive so the live directory only ever holds work in flight.
     try {
       ensureDirs();
-      fs.renameSync(goalPath(id), path.join(DONE, `${safeId(id)}.json`));
-      fs.renameSync(logPath(id), path.join(DONE, `${safeId(id)}.log.md`));
+      fs.renameSync(goalPath(id), path.join(doneDir(), `${safeId(id)}.json`));
+      fs.renameSync(logPath(id), path.join(doneDir(), `${safeId(id)}.log.md`));
     } catch {}
   }
   return goal;
@@ -315,7 +335,7 @@ function resolveId(argv) {
   return act.length === 1 ? act[0].id : "";
 }
 
-function main() {
+export function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0] || "list";
 
@@ -338,7 +358,7 @@ function main() {
     let dials = {};
     try {
       const pol = JSON.parse(
-        fs.readFileSync(process.env.ACC_POLICY || path.join(ROOT, "policy.json"), "utf8")
+        fs.readFileSync(process.env.ACC_POLICY || path.join(root(), "policy.json"), "utf8")
       );
       dials = {
         kickSettleSeconds: pol?.goals?.kickSettleSeconds,
@@ -380,6 +400,4 @@ function main() {
   );
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  main();
-}
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) main();

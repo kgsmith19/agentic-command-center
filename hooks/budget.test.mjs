@@ -20,6 +20,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ptyAnchorPid } from "./usage.mjs";
+// goal.mjs resolves its store from ACC_ROOT/ACC_GOALS_DIR on every call, not
+// at import time (see hooks/goal.mjs), specifically so a single shared import
+// works across many tests each pointed at their own sandbox -- important here
+// beyond just tidiness: when covgate.mjs runs this file in the same node
+// process as goal.test.mjs, a second, differently-parameterized import of
+// goal.mjs would collide with goal.test.mjs's own coverage instance (node's
+// lcov merge is last-write-wins per file path, not a union -- see OI-006).
+import * as gm from "./goal.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, "budget.mjs");
@@ -49,6 +57,11 @@ const POLICY = {
   autoClear: { enabled: true },
   goals: { autoResume: true, maxCycles: 0 },
 };
+
+// Real Claude Code session ids are UUIDs, and OI-006's bindSession guard now
+// rejects anything else as a rebind source, so tests that seed a goal via
+// bindSession (and later look it up by that exact sessionId) need one.
+const SID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 function sandbox(policyExtra) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "acc-budget-"));
@@ -142,15 +155,14 @@ test("latched + stop_hook_active: clear request still fires (the OI-011 deadlock
 
 test("further over-budget stops re-request the clear; the goal cycle is one-shot", async () => {
   const sb = sandbox();
-  const sid = "s-goal";
+  const sid = SID(1);
   seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
 
   // Seed a goal in the sandbox tree and bind this session to it, the same way
-  // SessionStart would. goal.mjs resolves its store from ACC_ROOT at import.
+  // SessionStart would. goal.mjs resolves its store from ACC_ROOT on every call.
   process.env.ACC_ROOT = sb.root;
   process.env.ACC_GOALS_DIR = "";
-  const gm = await import(`./goal.mjs?t=budget-${Math.floor(Math.random() * 1e9)}`);
   const g = gm.createGoal({ text: "finish the thing", cwd: sb.root });
   gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
 
@@ -214,10 +226,9 @@ function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
 }
 
 // Seed a goal in the sandbox and bind this session to it, as SessionStart does.
-async function seedGoal(sb, sid) {
+function seedGoal(sb, sid) {
   process.env.ACC_ROOT = sb.root;
   process.env.ACC_GOALS_DIR = "";
-  const gm = await import(`./goal.mjs?t=live-${Math.floor(Math.random() * 1e9)}`);
   const g = gm.createGoal({ text: "keep going", cwd: sb.root });
   gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
   gm.markKicked(g.id); // a kick already fired; needsKick is false
@@ -226,7 +237,7 @@ async function seedGoal(sb, sid) {
 
 test("under budget with an active goal: the turn end re-arms the kick", async () => {
   const sb = sandbox();
-  const sid = "s-live-machine";
+  const sid = SID(2);
   const { gm, g } = await seedGoal(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC goal.");
 
@@ -241,7 +252,7 @@ test("under budget with an active goal: the turn end re-arms the kick", async ()
 
 test("a human-prompted turn end is classified as human", async () => {
   const sb = sandbox();
-  const sid = "s-live-human";
+  const sid = SID(3);
   const { gm, g } = await seedGoal(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
 

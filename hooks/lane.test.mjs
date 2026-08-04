@@ -368,21 +368,24 @@ test("laneStatusAll() reports both categories plus breaker state in one call", a
 
 // ================================================================= jitter
 test("retry backoff is full jitter — delay can land anywhere from 0 up to the exponential ceiling, not just the top half", async () => {
-  setPolicy({ slots: 1, minGapMs: 0, retries: 6, backoffBaseMs: 1000, backoffCapMs: 1000, pollMs: 20 });
+  setPolicy({ slots: 1, minGapMs: 0, retries: 21, backoffBaseMs: 1000, backoffCapMs: 1000, pollMs: 20 });
   const delays = [];
   let calls = 0;
   await retryTransport("jitter-spread", async () => {
     calls++;
     if (calls > 1) delays.push(Date.now() - delays._last);
     delays._last = Date.now();
-    return calls <= 5 ? { code: 1, err: "econnreset" } : { code: 0 };
+    return calls <= 20 ? { code: 1, err: "econnreset" } : { code: 0 };
   });
   // With base=1000, cap=1000, every ceiling is 1000ms — full jitter means
-  // U(0, 1000). Equal jitter (the old formula) never goes below 500. At
-  // least one of 4 samples landing under 400ms is what distinguishes them;
-  // this is probabilistic but the odds of ALL 4 landing >=500 under true
-  // full jitter are (0.5)^4 ~= 6% — acceptable flake budget for what this
-  // proves (nobody can accidentally revert to equal jitter unnoticed).
+  // U(0, 1000). Equal jitter (the old formula) never goes below 500. The
+  // assertion below only requires landing under 400ms, so the honest
+  // single-draw failure probability is P(draw >= 400) = 600/1000 = 0.6 (not
+  // the 0.5 an equal-jitter comparison would suggest). With OI-018's
+  // original 4 samples that was (0.6)^4 ~= 13% — flaky enough to hit twice
+  // in one evening, as observed. 20 samples brings it to (0.6)^20 ~= 0.0037%,
+  // low enough that a revert to equal jitter is what would ever fail this,
+  // not chance.
   assert.ok(delays.some((d) => d < 400), `expected at least one sub-400ms delay under full jitter, got: ${delays.join(",")}`);
   setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
 });
