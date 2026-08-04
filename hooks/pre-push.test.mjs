@@ -4,9 +4,9 @@
 // (a plain file copy -- covgate.mjs has zero npm deps, pure node built-ins),
 // matching the real deployed shape: hooks/pre-push and hooks/covgate.mjs both
 // live under the pushed repo's own hooks/ dir, exactly as `cd "$REPO_ROOT" &&
-// node hooks/covgate.mjs` (inside hooks/pre-push) expects. `sh` is required on
-// PATH -- Git for Windows ships one (this whole repo already depends on git),
-// and every Linux runner has one natively.
+// node hooks/covgate.mjs` (inside hooks/pre-push) expects. A POSIX `sh` is
+// required; it is resolved by resolveSh() below rather than assumed to be on
+// PATH, because on Windows it usually is not (see that function's comment).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -20,6 +20,39 @@ const HOOK_SRC = path.join(HERE, "pre-push");
 const COVGATE_SRC = path.join(HERE, "covgate.mjs");
 const COVGATE_TEST_SRC = path.join(HERE, "covgate.test.mjs");
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-prepush-test-"));
+
+// `sh` is NOT reliably on PATH on Windows, and this file's header used to claim
+// it was ("Git for Windows ships one"). True of the binary, false of the PATH:
+// the installer puts git.exe in ...\Git\cmd (on PATH) and sh.exe in ...\Git\bin
+// (not). So these 7 tests were green only when run from a Git Bash shell, and
+// under `npm run test:windows` (PowerShell) every one of them failed with
+// spawnSync -> ENOENT, status null, empty output - a red tier that then blocked
+// `node hooks/covgate.mjs` for anything else being changed. Resolve sh from
+// git's own install instead of trusting PATH, and THROW rather than skip if
+// none is found: a silently skipped gate is worse than a loud one.
+function resolveSh() {
+  const works = (cmd) => {
+    try { return spawnSync(cmd, ["-c", "exit 0"]).status === 0 ? cmd : null; } catch { return null; }
+  };
+  const onPath = works("sh");
+  if (onPath) return onPath;
+  let gitExe = "";
+  try {
+    gitExe = execFileSync(process.platform === "win32" ? "where" : "which", ["git"], { encoding: "utf8" })
+      .split(/\r?\n/)[0].trim();
+  } catch {}
+  if (gitExe) {
+    for (const rel of [["..", "bin", "sh.exe"], ["..", "usr", "bin", "sh.exe"]]) {
+      const cand = path.resolve(path.dirname(gitExe), ...rel);
+      if (fs.existsSync(cand) && works(cand)) return cand;
+    }
+  }
+  throw new Error(
+    "pre-push.test.mjs needs a POSIX sh and found none (tried PATH, then git's own bin/ and usr/bin/). " +
+      "Install Git for Windows or put sh on PATH."
+  );
+}
+const SH = resolveSh();
 
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
@@ -62,7 +95,7 @@ function fixture(name) {
 // success, which would hide this hook's own fail-open diagnostics.
 function runHook(repo, lines) {
   const hookPath = path.join(repo, ".git", "hooks", "pre-push");
-  const r = spawnSync("sh", [hookPath], {
+  const r = spawnSync(SH, [hookPath], {
     cwd: repo, encoding: "utf8",
     input: lines.map((l) => l + "\n").join(""),
     env: { ...process.env, ACC_POLICY: path.join(BASE, "nope.json") },
