@@ -156,6 +156,12 @@ node kernel/kernel.e2e.mjs
 powershell -File gui/ptyhost.test.ps1
     -> INTEGRATION. Acc.PtyHost against a real cmd.exe on a ConPTY - pipe
        protocol accepts/refuses, dispose kills the child. No claude, no GUI.
+powershell -File watcher/claude-cap-watch.test.ps1
+powershell -File watcher/install-cap-watch-task.test.ps1
+    -> FAST TIER, hermetic, PowerShell. Pure functions only: the launch-cap
+       breach/fail-open decision, and the ACC-ClaudeCapWatch task spec
+       (registers nothing). Not in the node runner, so they are listed here
+       or they never get run.
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
 powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
 npm run e2e:gui
