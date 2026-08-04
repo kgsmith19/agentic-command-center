@@ -84,6 +84,25 @@ every fire, so an autonomy-tightened factor applies to the very next tool
 call — no tick-interval latency gap. Wall-clock and stall detection remain
 the supervisor's, checked at each `checkpointMin` tick.
 
+A harness that hangs silently — including one hung because the upstream API
+itself is overloaded and the CLI never surfaces that as an error — is bounded
+by the same ceilings as any other failure mode. `checkpointVerdict` (called
+from `kernel/run.mjs`'s supervisor tick) never reads the harness child's
+stdout, stderr, or exit code; it only compares elapsed wall-clock time,
+accumulated tokens, and tool-call counts against `effectiveCeilings`. A
+silent hang starves the token and tool-call signals too — both stay flat —
+so detection falls through to the wall-clock ceiling, which fires
+unconditionally on a plain clock read. On breach, `stopTask` calls `killFn`
+(`killTree`) directly against the child process; it does not wait for, or
+depend on, the harness's own error reporting to say anything at all.
+`kernel/run.test.mjs`'s AC-B1 test proves exactly this shape: a fake adapter
+whose `done` promise has no resolver except the supervisor's own `stopTask`
+call, with every other signal (events, tokens, tool calls) held at zero for
+the whole run — structurally identical to a silently-hung CLI — and the run
+still stops at its wall-clock ceiling with `dimension: "wallClock"`. `ttlMs`
+(passed to `startTask`, derived from the same contract budget) is a second,
+independent bound on the harness's lane slot, for the same reason.
+
 ## Credentials
 
 The contract lists vault key **names**; `kernel/credentials.mjs` is the only
