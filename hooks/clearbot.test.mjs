@@ -329,3 +329,49 @@ test("pty transport: a dead pipe falls back to keystroke injection", () => {
     assert.match(typed(stub), /\/clear/, "via keystroke injection");
   } finally { stub.kill(); }
 });
+
+// --- OI-009: a hosted GUI dying is detected without needing any request ----
+// The hosted session's own claude.exe lives inside the GUI's ConPTY, so a GUI
+// crash kills the session too - there is no Stop hook left to notice. clearbot
+// watches every pty window record on its own cycle, independent of requests.
+
+test("OI-009: a pty window whose hosting process dies is flagged after having been seen alive", () => {
+  const root = sandbox();
+  const stub = startStub(); // stands in for the GUI's own consolePid
+  try {
+    writePtyWindow(root, "s-guidead", stub.pid, "acc-term-unused");
+    runOnce(root); // cycle 1: process is alive, records the alive marker
+    assert.ok(
+      fs.existsSync(path.join(root, "runner", "state", "s-guidead.pty-alive")),
+      "alive marker written while the hosting process is still up"
+    );
+
+    stub.kill();
+    const end = Date.now() + 10000;
+    while (Date.now() < end) {
+      try { process.kill(stub.pid, 0); } catch { break; } // ESRCH once it's actually gone
+      sleep(200);
+    }
+
+    runOnce(root); // cycle 2: was alive, now isn't -> alert
+    const alertPath = path.join(root, "runner", "state", "s-guidead.gui-dead.json");
+    assert.ok(fs.existsSync(alertPath), "gui-dead alert written once the hosting process is confirmed gone");
+    const alert = JSON.parse(fs.readFileSync(alertPath, "utf8"));
+    assert.equal(alert.sessionId, "s-guidead");
+    assert.equal(alert.consolePid, stub.pid);
+  } finally { stub.kill(); }
+});
+
+test("OI-009: a pty window never confirmed alive is not falsely flagged as a dead GUI", () => {
+  const root = sandbox();
+  // A pid essentially guaranteed not to be a running process, and clearbot
+  // never got a cycle where it WAS alive - this must read as stale debris
+  // (or a race at session start), not a crash to alert on.
+  writePtyWindow(root, "s-stale", 999999, "acc-term-unused");
+  runOnce(root);
+  assert.equal(
+    fs.existsSync(path.join(root, "runner", "state", "s-stale.gui-dead.json")),
+    false,
+    "never having been seen alive must not itself trigger an alert"
+  );
+});

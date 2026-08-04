@@ -23,8 +23,12 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-003 A clearbot-typed /cd does not take effect
-- opened: 2026-07-31
+## OI-003 [BLOCKED — runbox] A clearbot-typed /cd does not take effect
+- opened: 2026-07-31, blocked 2026-08-04: needs a real-token e2e run, which
+  only Kyle should trigger deliberately. Script staged:
+  `runbox/oi-003-verify-cd-scenario4.ps1` (runs
+  `node e2e/loop.e2e.mjs --only 4` and reports pass/fail). Run via
+  `/approve-kgs`.
 - where: watcher/clearbot.ps1 Invoke-Cd
 - what: two consecutive cd requests to `C:\code` were typed and replayed
   (clearbot.log 10:45:13 `CD 130aefc6 → C:\code clear=True`, 10:45:37
@@ -87,18 +91,6 @@ line under `## Resolved`.
 - done when: either the task is registered from an elevated shell, or the
   spec is amended to make in-process revive + Startup launcher the design.
 
-## OI-009 GUI process is a single point of failure for hosted sessions
-- opened: 2026-07-31
-- where: guards-gui.ps1 / gui/PtyHost.cs
-- what: an ACC-hosted claude session lives on a ConPTY inside the GUI process,
-  so a GUI crash or close kills every hosted session with it — no heartbeat,
-  no reattach, no restart story. External console sessions are unaffected.
-- why open: surfaced while shipping the embedded terminal; supervision is a
-  separate design (relates OI-007's elevation question).
-- done when: a GUI crash with a live hosted session either reattaches the
-  session on GUI restart or is detected and surfaced within a minute, proven
-  by killing the GUI mid-session in a test.
-
 ## OI-011 Re-verify guards self-protection coverage of guards/ paths
 - opened: 2026-07-31
 - where: hooks/engine.mjs guard config (relates OI-005: self-protection off,
@@ -117,23 +109,6 @@ line under `## Resolved`.
   `C:/code/guards/watcher/` (or the full `C:/code/guards/` prefix), verified
   safe to re-enable once OI-005 re-protection happens, documented in AGENTS.md
   (done 2026-08-03).
-
-## OI-012 Stray console window at embedded launch not reproduced
-- opened: 2026-07-31
-- where: guards-gui.ps1 pty launch / hooks/budget.mjs ensureClearbot
-- what: Kyle observed an extra command prompt opening as claude loaded into
-  the Terminal tab (same launch that produced the binding MISMATCH). Both
-  candidate spawn chains were instrumented and are clean: a sandboxed pty
-  launch of real claude (gui/ptyhost.e2e.ps1) produced zero new windowed
-  processes, and the full ensureClearbot chain (node detached spawn -> cmd /c
-  start-clearbot.cmd -> Start-Process -WindowStyle Hidden) executed fully
-  with zero windows. The MISMATCH root cause (dead transient-shell consolePid,
-  fixed in de669dc) came from the same launch, so the stray window may have
-  been a one-off of that broken state.
-- why open: not reproducible after the fix; no evidence left to act on.
-- done when: the Gate 4 manual launch (Kyle watching) shows zero extra
-  console windows; if one appears, its parent chain names the spawner and
-  this entry gets the real fix.
 
 ## OI-015 guards-gui.ps1 interactive-lane wiring is unverified — this sandbox has no PowerShell at all
 - opened: 2026-08-01
@@ -278,6 +253,32 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-009 [SHRUNK + FIXED 2026-08-04] GUI process is a single point of failure for hosted sessions
+- opened: 2026-07-31, shrunk+fixed: 2026-08-04 — delivered detection, not
+  reattach: reattaching a hosted session on GUI restart is real, separate
+  architecture work (a new session-persistence story) and is cut from this
+  entry; it is not re-filed since nothing today needs it more than the
+  detection half did. `watcher/clearbot.ps1` (`Watch-HostedGui`, runs every
+  Step, independent of any one session's own hooks — the hosted session's own
+  Stop hook cannot fire once its GUI has died) now watches every pty-
+  transport `.window` record's `consolePid`, marks it alive on disk each
+  cycle it's up, and once a previously-alive one is confirmed gone writes
+  `runner/state/<sid>.gui-dead.json`. A window record never seen alive is
+  treated as stale debris, not a crash, to avoid false positives. Detection
+  lands within one clearbot cycle (2s default) of the next Step after the
+  kill, comfortably inside the entry's "within a minute". Verified:
+  `node --test hooks/clearbot.test.mjs` (12/12) — both the flagged-after-
+  seen-alive case and the never-seen-alive non-false-positive case, killing a
+  real process mid-test.
+
+## OI-012 [RETIRED 2026-08-04] Stray console window at embedded launch not reproduced
+- opened: 2026-07-31, retired: 2026-08-04 — both candidate spawn chains
+  (gui/ptyhost.e2e.ps1's sandboxed pty launch, and the full ensureClearbot
+  chain) were already proven to produce zero windowed processes, and the
+  likely root cause (dead transient-shell consolePid) was already fixed in
+  de669dc. No repro since, no parent-chain evidence to act on. Reopen with a
+  fresh entry if it recurs and a spawner can be named.
 
 ## OI-018 [RESOLVED 2026-08-04] lane.test.mjs full-jitter test's false-failure rate is now negligible
 - opened: 2026-08-03, resolved: d753da4 — same assertion (at least one

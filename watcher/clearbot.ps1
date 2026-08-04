@@ -68,6 +68,7 @@ $LogFile  = Join-Path $PSScriptRoot 'clearbot.log'
 # invisible, and silently ends ALL autonomy (no clears, no resumes).
 $HeartbeatFile = Join-Path $PSScriptRoot 'clearbot.heartbeat'
 $SendConsole = Join-Path $PSScriptRoot 'sendconsole.ps1'
+$StateDir = Join-Path $Root 'runner\state'
 $MaxAgeSec = 900
 $KEYS = '/clear'          # invariant 1a.
 $KICK = 'Continue the active ACC goal.'   # invariant 1d.
@@ -442,6 +443,40 @@ $lastFire = @{}
 # invariant 1e: one escalation per session per 10 minutes, tracked in-process.
 $escalated = @{}
 
+# OI-009: an ACC-hosted session's claude.exe lives inside the GUI's ConPTY, so
+# a GUI crash silently kills the session too - no heartbeat, no surfacing.
+# clearbot already runs continuously and independently of any one session's
+# own hooks (unlike budget.mjs's reviveClearbotIfDead, which only fires from
+# a Stop hook - useless if the hosted session IS the thing that just died), so
+# it is the right place to notice. Liveness is tracked on disk, not in-process
+# memory, the same way clearbot.heartbeat already is: a `-Once` test run (or a
+# crash-and-restart of clearbot itself) must not lose "was this alive a moment
+# ago", or a merely-old .window file from a long-finished session would look
+# exactly like a live one that just died.
+function Watch-HostedGui {
+    foreach ($f in @(Get-ChildItem $StateDir -Filter *.window -ErrorAction SilentlyContinue)) {
+        $sid = $f.BaseName
+        $deadMarker = Join-Path $StateDir "$sid.gui-dead.json"
+        if (Test-Path $deadMarker) { continue }   # already surfaced once - don't re-alert every cycle
+
+        $w = $null
+        try { $w = Get-Content $f.FullName -Raw | ConvertFrom-Json } catch {}
+        if (-not $w -or $w.transport -ne 'pty' -or -not $w.consolePid) { continue }
+
+        $aliveMarker = Join-Path $StateDir "$sid.pty-alive"
+        $alive = Get-Process -Id ([int]$w.consolePid) -ErrorAction SilentlyContinue
+        if ($alive) {
+            try { Set-Content -Path $aliveMarker -Value (Get-Date -Format 'o') -Encoding ascii } catch {}
+            continue
+        }
+        if (-not (Test-Path $aliveMarker)) { continue }   # never confirmed alive - stale debris, not a crash
+
+        $alert = @{ sessionId = $sid; consolePid = [int]$w.consolePid; detectedAt = (Get-Date -Format 'o') }
+        try { Set-Content -Path $deadMarker -Value ($alert | ConvertTo-Json -Compress) -Encoding ascii } catch {}
+        Log "GUI-DEAD $sid : hosting GUI (pid $($w.consolePid)) is gone - hosted session lost, alert written to $deadMarker"
+    }
+}
+
 function Step {
     # Before the kill switch: a stopped-but-alive watcher is still alive, and
     # the difference matters when diagnosing why nothing is being typed.
@@ -517,6 +552,7 @@ function Step {
 
     Invoke-Kicks
     Invoke-AutoApprove
+    Watch-HostedGui
 }
 
 if ($Once) { Step; exit 0 }
