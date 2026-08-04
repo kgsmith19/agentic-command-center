@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const { parseLcov, changedLibFiles, normPath, floors } = await import("./covgate.mjs");
+const { parseLcov, changedLibFiles, normPath, floors, parseRange } = await import("./covgate.mjs");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const COVGATE = path.join(HERE, "covgate.mjs");
@@ -76,6 +76,18 @@ test("floors() honors a real custom numeric override", () => {
   process.env.ACC_POLICY = custom;
   assert.deepEqual(floors(), { lines: 42, funcs: 55, branches: 33 });
   process.env.ACC_POLICY = saved;
+});
+
+test("parseRange accepts \"<oldrev> <newrev>\", tolerates extra whitespace", () => {
+  assert.deepEqual(parseRange("abc123 def456"), { oldrev: "abc123", newrev: "def456" });
+  assert.deepEqual(parseRange("  abc123   def456  "), { oldrev: "abc123", newrev: "def456" });
+});
+
+test("parseRange rejects anything that isn't exactly two tokens", () => {
+  assert.equal(parseRange(""), null);
+  assert.equal(parseRange("onlyone"), null);
+  assert.equal(parseRange("one two three"), null);
+  assert.equal(parseRange(undefined), null);
 });
 
 test("changedLibFiles keeps lib .mjs under hooks/ and runner/, drops tests, harnesses and noise", () => {
@@ -336,6 +348,104 @@ test("end-to-end: default discovery covers BOTH hooks/ and runner/ (regression, 
   assert.ok(/hooks\/h\.mjs/.test(out) && / ok /.test(out.match(/.*hooks\/h\.mjs.*/)[0]), out);
   assert.ok(/runner\/r\.mjs/.test(out) && / ok /.test(out.match(/.*runner\/r\.mjs.*/)[0]), out);
   assert.ok(/PASS/.test(out), out);
+});
+
+test("end-to-end: ACC_COVGATE_RANGE gates the commit range, ignoring uncommitted working-tree changes", () => {
+  // Two real commits: root (lib.mjs, fully covered) then a second commit
+  // that ADDS extra.mjs (also fully covered). After that, a THIRD,
+  // deliberately UNCOVERED file is left dirty in the working tree — range
+  // mode must gate only what the range actually touched (extra.mjs), never
+  // the dirty file, proving it reads git history, not the working tree.
+  const repo = path.join(BASE, "range-mode");
+  fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
+  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
+  g("init", "-q");
+  fs.writeFileSync(path.join(repo, "hooks", "lib.mjs"), "export const lib = () => 1;\n");
+  fs.writeFileSync(
+    path.join(repo, "hooks", "lib.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { lib } from "./lib.mjs";\ntest("lib", () => assert.equal(lib(), 1));\n'
+  );
+  g("add", "-A");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "root");
+  const oldrev = g("rev-parse", "HEAD").trim();
+
+  fs.writeFileSync(path.join(repo, "hooks", "extra.mjs"), "export const extra = () => 2;\n");
+  fs.writeFileSync(
+    path.join(repo, "hooks", "extra.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { extra } from "./extra.mjs";\ntest("extra", () => assert.equal(extra(), 2));\n'
+  );
+  g("add", "-A");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "add extra");
+  const newrev = g("rev-parse", "HEAD").trim();
+
+  // Dirty, uncommitted, deliberately uncovered — must be invisible to range mode.
+  fs.writeFileSync(path.join(repo, "hooks", "dirty.mjs"), "export const dirty = () => 3;\n");
+
+  const rangeOut = execFileSync("node", [COVGATE], {
+    cwd: repo, encoding: "utf8",
+    env: { ...process.env, ACC_COVGATE_RANGE: `${oldrev} ${newrev}`, ACC_COVGATE_TESTS: undefined, ACC_POLICY: path.join(BASE, "nope.json") },
+  });
+  assert.ok(/hooks\/extra\.mjs/.test(rangeOut), rangeOut);
+  assert.ok(!/hooks\/lib\.mjs/.test(rangeOut), `unchanged-in-range file must not appear: ${rangeOut}`);
+  assert.ok(!/hooks\/dirty\.mjs/.test(rangeOut), `dirty working-tree file must not appear: ${rangeOut}`);
+  assert.ok(/PASS/.test(rangeOut), rangeOut);
+
+  // Same repo, default (working-tree) mode: the dirty file IS visible and,
+  // being untested, fails — proving the two modes are genuinely different,
+  // not that range mode happens to also see everything.
+  let defaultOut, defaultStatus;
+  try {
+    defaultOut = execFileSync("node", [COVGATE], {
+      cwd: repo, encoding: "utf8",
+      env: { ...process.env, ACC_COVGATE_RANGE: undefined, ACC_COVGATE_TESTS: undefined, ACC_POLICY: path.join(BASE, "nope.json") },
+    });
+    defaultStatus = 0;
+  } catch (e) {
+    defaultOut = String(e.stdout || "") + String(e.stderr || "");
+    defaultStatus = e.status;
+  }
+  assert.notEqual(defaultStatus, 0);
+  assert.ok(/FAIL.*hooks\/dirty\.mjs/.test(defaultOut), defaultOut);
+});
+
+test("end-to-end: ACC_COVGATE_RANGE accepts the empty-tree hash as oldrev, for a brand-new ref push", () => {
+  const repo = path.join(BASE, "range-newref");
+  fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
+  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
+  g("init", "-q");
+  fs.writeFileSync(path.join(repo, "hooks", "lib.mjs"), "export const lib = () => 1;\n");
+  fs.writeFileSync(
+    path.join(repo, "hooks", "lib.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { lib } from "./lib.mjs";\ntest("lib", () => assert.equal(lib(), 1));\n'
+  );
+  g("add", "-A");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "root");
+  const newrev = g("rev-parse", "HEAD").trim();
+  const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+  const out = execFileSync("node", [COVGATE], {
+    cwd: repo, encoding: "utf8",
+    env: { ...process.env, ACC_COVGATE_RANGE: `${EMPTY_TREE} ${newrev}`, ACC_COVGATE_TESTS: undefined, ACC_POLICY: path.join(BASE, "nope.json") },
+  });
+  assert.ok(/hooks\/lib\.mjs/.test(out), out);
+  assert.ok(/PASS/.test(out), out);
+});
+
+test("end-to-end: a malformed ACC_COVGATE_RANGE fails closed, naming the expected shape", () => {
+  const repo = fixture("badrange", { covered: true });
+  let out, status;
+  try {
+    execFileSync("node", [COVGATE], {
+      cwd: repo, encoding: "utf8",
+      env: { ...process.env, ACC_COVGATE_RANGE: "onlyonetoken", ACC_COVGATE_TESTS: "hooks/lib.test.mjs", ACC_POLICY: path.join(BASE, "nope.json") },
+    });
+    status = 0;
+  } catch (e) {
+    out = String(e.stdout || "") + String(e.stderr || "");
+    status = e.status;
+  }
+  assert.notEqual(status, 0);
+  assert.ok(/ACC_COVGATE_RANGE must be/.test(out), out);
 });
 
 test("end-to-end: nothing changed means nothing to gate", () => {

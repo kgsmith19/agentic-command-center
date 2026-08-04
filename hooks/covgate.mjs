@@ -19,6 +19,10 @@
 // Dials: policy.json tests.changedLineCoverage (default 100). Test list
 // override: ACC_COVGATE_TESTS (comma/space separated, relative to cwd) — used
 // by covgate's own suite to gate a fixture repo instead of this one.
+// Range override: ACC_COVGATE_RANGE="<oldrev> <newrev>" gates a commit range
+// instead of the working tree (git diff between the two revs, no untracked
+// files, no mutation of the caller's repo) — used by hooks/pre-push (OI-030)
+// to gate a push before it leaves the machine.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -106,15 +110,41 @@ function git(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).split(/\r?\n/).filter(Boolean);
 }
 
+// OI-030: a local pre-push hook must gate the COMMIT RANGE being pushed, not
+// the working tree — `git diff --name-only HEAD` (the default, above) is
+// always empty for already-committed work. Parses "<oldrev> <newrev>"
+// (whitespace-separated — the exact two fields a pre-push hook already reads
+// off its own stdin, so the caller passes them straight through with no
+// translation). Never mutates the caller's repo (no reset/checkout) — the
+// range is one `git diff` between two revs the caller names. Exported so its
+// parsing can be unit-tested without a subprocess.
+export function parseRange(raw) {
+  const parts = String(raw ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 2) return null;
+  return { oldrev: parts[0], newrev: parts[1] };
+}
+
 function main() {
   const cwd = process.cwd();
 
   let changed;
   try {
-    changed = changedLibFiles([
-      ...git(["diff", "--name-only", "HEAD"], cwd),
-      ...git(["ls-files", "--others", "--exclude-standard"], cwd),
-    ]).filter((f) => fs.existsSync(path.join(cwd, f)));
+    const rangeRaw = process.env.ACC_COVGATE_RANGE;
+    if (rangeRaw !== undefined) {
+      const range = parseRange(rangeRaw);
+      if (!range) {
+        console.error(`covgate: FAIL — ACC_COVGATE_RANGE must be "<oldrev> <newrev>", got: ${JSON.stringify(rangeRaw)}`);
+        process.exit(1);
+      }
+      changed = changedLibFiles(
+        git(["diff", "--name-only", range.oldrev, range.newrev], cwd)
+      ).filter((f) => fs.existsSync(path.join(cwd, f)));
+    } else {
+      changed = changedLibFiles([
+        ...git(["diff", "--name-only", "HEAD"], cwd),
+        ...git(["ls-files", "--others", "--exclude-standard"], cwd),
+      ]).filter((f) => fs.existsSync(path.join(cwd, f)));
+    }
   } catch (e) {
     console.error(`covgate: FAIL — cannot determine what changed (${String(e.message || e).trim()})`);
     process.exit(1);
@@ -163,8 +193,16 @@ function main() {
     // and cleanup, corrupting each other's JSON mid-write (found 2026-08-02,
     // real Windows run: "Warning: Could not report code coverage. SyntaxError:
     // Unexpected end of JSON input", 100% reproducible with the full fast tier).
+    // ACC_COVGATE_RANGE must not leak in either, for the identical reason as
+    // the other two: a range-mode covgate invocation (hooks/pre-push, OI-030)
+    // spawns THIS test run, which in turn spawns covgate.test.mjs's own
+    // fixture covgate.mjs invocations three levels deep — those fixtures
+    // gate unrelated, isolated repos with their own unrelated commit shas, so
+    // inheriting the outer range would hand them oldrev/newrev that don't
+    // exist in their history at all ("fatal: bad object", found while writing
+    // hooks/pre-push.test.mjs, 2026-08-04).
     { cwd, encoding: "utf8", stdio: ["ignore", "inherit", "inherit"],
-      env: { ...process.env, NODE_TEST_CONTEXT: undefined, NODE_V8_COVERAGE: undefined } }
+      env: { ...process.env, NODE_TEST_CONTEXT: undefined, NODE_V8_COVERAGE: undefined, ACC_COVGATE_RANGE: undefined } }
   );
   if (run.status !== 0) {
     console.error("covgate: FAIL — the fast tier is red; coverage of failing tests proves nothing");
