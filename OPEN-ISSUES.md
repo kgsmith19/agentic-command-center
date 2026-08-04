@@ -181,29 +181,6 @@ line under `## Resolved`.
   satisfied the launch cap being live is sufficient credit per the plan's
   own verification step.
 
-## OI-029 [MITIGATED — autoCd disabled] route.mjs's blocking auto-cd repeatedly ate real prompts instead of delivering them
-- opened: 2026-08-04
-- where: hooks/route.mjs `deny()`/`cdRequest()`, policy.json `autoCd`
-- what: Kyle reported, fresh session, admin laptop: trying to tell the agent
-  something important repeatedly got intercepted by the UserPromptSubmit
-  router instead of reaching it. Mechanism: when route.mjs decides scope
-  differs from cwd it returns `decision: block` and hands off to the watcher
-  to auto-`/cd` (+`/clear` on rescope) and replay the prompt — if that
-  replay doesn't cleanly land, the prompt is effectively lost for that turn
-  and the cycle can repeat on the next one. This is very likely the same
-  underlying failure already tracked in OI-003 (clearbot-typed /cd not
-  taking effect; fix committed 4e22e81 but not yet verified by a real-token
-  run) surfacing as a live, felt incident rather than a test-suite finding.
-- why open: immediate relief applied same-day — `policy.json`'s
-  `autoCd.enabled` flipped to `false` (Kyle, 2026-08-04), which makes
-  route.mjs advisory-only: it still tells the agent the right scope but
-  never blocks a prompt or types anything. This is a mitigation, not a fix
-  — the underlying replay reliability is still unverified.
-- done when: OI-003 closes (real-token proof that a clearbot-typed /cd
-  reliably takes effect, including the non-clear settle-delay fix), then
-  `autoCd.enabled` can be deliberately re-enabled and re-watched for a
-  recurrence before this entry closes too.
-
 ## OI-030 [URGENT] Repeated red CI on main — fold the coverage gate into a local pre-push hook, ACC-style
 - opened: 2026-08-04
 - where: new file `hooks/pre-push` (tracked source) + `.git/hooks/pre-push`
@@ -348,6 +325,15 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-029 [RESOLVED 2026-08-04] route.mjs's blocking auto-cd repeatedly ate real prompts instead of delivering them
+- opened: 2026-08-04, resolved: 2926a2d/6207c66 — `autoCd.enabled` flipped
+  back to `true` now that OI-003 (the actual root cause, the too-short
+  clearbot settle delay) is resolved and real-token-verified. Mitigation
+  (disabling autoCd) is no longer needed.
+- verification: `hooks/route.test.mjs` (24/24), `hooks/clearbot.test.mjs`
+  (13/13), `node hooks/covgate.mjs` PASS. Watch for a recurrence before
+  fully trusting this long-term, per the policy.json note.
 
 ## OI-003 [RESOLVED 2026-08-05] A clearbot-typed /cd does not take effect
 - opened: 2026-07-31, resolved: 2026-08-05
