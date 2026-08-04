@@ -218,6 +218,58 @@ line under `## Resolved`.
   satisfied the launch cap being live is sufficient credit per the plan's
   own verification step.
 
+## OI-029 [MITIGATED — autoCd disabled] route.mjs's blocking auto-cd repeatedly ate real prompts instead of delivering them
+- opened: 2026-08-04
+- where: hooks/route.mjs `deny()`/`cdRequest()`, policy.json `autoCd`
+- what: Kyle reported, fresh session, admin laptop: trying to tell the agent
+  something important repeatedly got intercepted by the UserPromptSubmit
+  router instead of reaching it. Mechanism: when route.mjs decides scope
+  differs from cwd it returns `decision: block` and hands off to the watcher
+  to auto-`/cd` (+`/clear` on rescope) and replay the prompt — if that
+  replay doesn't cleanly land, the prompt is effectively lost for that turn
+  and the cycle can repeat on the next one. This is very likely the same
+  underlying failure already tracked in OI-003 (clearbot-typed /cd not
+  taking effect; fix committed 4e22e81 but not yet verified by a real-token
+  run) surfacing as a live, felt incident rather than a test-suite finding.
+- why open: immediate relief applied same-day — `policy.json`'s
+  `autoCd.enabled` flipped to `false` (Kyle, 2026-08-04), which makes
+  route.mjs advisory-only: it still tells the agent the right scope but
+  never blocks a prompt or types anything. This is a mitigation, not a fix
+  — the underlying replay reliability is still unverified.
+- done when: OI-003 closes (real-token proof that a clearbot-typed /cd
+  reliably takes effect, including the non-clear settle-delay fix), then
+  `autoCd.enabled` can be deliberately re-enabled and re-watched for a
+  recurrence before this entry closes too.
+
+## OI-030 [URGENT] Repeated red CI on main — pushes land before the coverage gate is checked
+- opened: 2026-08-04
+- where: `.github/workflows` (single workflow `CI`), direct pushes to `main`
+- what: at least 6 failed CI runs since 2026-08-03 (verified via `gh run
+  list`/`gh run view --log-failed`), e.g. run 30931491214
+  ("cap guardhook.mjs's stdin read size, closing OI-028") failed on
+  `kernel/guardhook.mjs` branches 85.7% under the 90% floor; run 30929758995
+  ("machine-wide claude launch cap") failed on `hooks/lane.mjs` lines
+  97%/funcs 98% under the 100% floor. Every failure found is a genuine
+  `covgate` (changed-file coverage floor) failure, not flaky infra — each
+  was repaired by an immediate follow-up commit rather than caught before
+  the push that broke it. Current HEAD (run 30931903502) is green.
+- why open: needs a decision. Most recent commits push straight to `main`
+  with no PR (only 1 of the last ~15 runs went through a PR), and this repo
+  has no server-side branch protection (per `C:\code\CLAUDE.md`: "there is
+  no server-side branch protection"), so a red commit can land on `main`
+  itself before anything catches it — the ledger's own doctrine
+  ("merge only on green CI") is being followed in spirit (green is always
+  restored fast) but not in mechanism (red commits DO land, briefly). Two
+  independent levers: (a) run `node hooks/covgate.mjs` +
+  `npm run test:windows` locally before every push to main (discipline, not
+  enforced), (b) enable GitHub branch protection requiring the CI check to
+  pass before merge, forcing a PR-based flow instead of direct pushes.
+  Kyle's call which (or both).
+- done when: a decision is recorded and, if branch protection is chosen,
+  it's enabled and verified (a red PR cannot be merged to main); if
+  local-discipline is chosen, a pre-push hook or documented habit change
+  ensures covgate/tests run before every push to main.
+
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
 - where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart

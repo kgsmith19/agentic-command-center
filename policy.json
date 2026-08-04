@@ -92,9 +92,9 @@
                                }
                  },
     "autoCd":  {
-                   "enabled":  true,
+                   "enabled":  false,
                    "clearOnRescope":  true,
-                   "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing."
+                   "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing. Set false 2026-08-04 (Kyle, guards OI-029) after repeated real prompts got blocked/eaten by stalled rescope cycles -- re-enable once OI-003's real-token verification confirms the replay actually lands."
                },
     "lane":  {
                  "slots":  1,
