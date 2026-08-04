@@ -40,7 +40,11 @@ never built on vocabulary that is about to change.
 
 ## Sub-projects
 
-### B — the named defects  [IN PROGRESS]
+### B — the named defects  [B1/B2a/B3 DONE 773005e; B2b remains as OI-034]
+
+Resume point: B2b (OI-034, console identity by (pid, startTime)) is the only
+piece of B left. Everything else in B is committed and verified live.
+
 Spec: `docs/superpowers/specs/2026-08-04-acc-known-defects-design.md`
 
 - **B1** 60s console flash. Root cause: the task ran Interactive, so Windows
