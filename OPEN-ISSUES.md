@@ -198,126 +198,6 @@ line under `## Resolved`.
   satisfied the launch cap being live is sufficient credit per the plan's
   own verification step.
 
-## OI-030 [URGENT] Repeated red CI on main — fold the coverage gate into a local pre-push hook, ACC-style
-- opened: 2026-08-04
-- where: new file `hooks/pre-push` (tracked source) + `.git/hooks/pre-push`
-  (installed copy, untracked by git itself) + `runbox/install-pre-push-gate.ps1`
-  (or equivalent installer)
-- what (evidence): at least 6 failed CI runs since 2026-08-03 (`gh run
-  list` / `gh run view --log-failed`), e.g. run 30931491214 failed on
-  `kernel/guardhook.mjs` branches 85.7% < 90% floor; run 30929758995 failed
-  on `hooks/lane.mjs` lines 97%/funcs 98% < 100% floor. Every failure found
-  is a genuine `covgate` floor miss, not flaky infra, and each was repaired
-  by an immediate follow-up commit — i.e. red commits DO land on `main`
-  before anything catches them, because nothing runs the gate before the
-  push leaves the machine. Current HEAD is green.
-- standing rule this falls under (Kyle, 2026-08-04): when something can't
-  just be decided/executed unilaterally and would otherwise depend on a
-  human remembering to do it, default to asking whether ACC can enforce it
-  automatically instead of leaving it as a habit or a one-off manual step.
-- decision on scope (Kyle, 2026-08-04): not designing this in full right
-  now — this entry itself IS the spec, written to be picked up and executed
-  without further research. Two candidate approaches were researched;
-  recommendation is Approach A, Approach B is documented but explicitly
-  not started (no GitHub token/API wiring exists in this repo today — see
-  below):
-
-  APPROACH A — local pre-push git hook (RECOMMENDED, no new secrets needed):
-    - Mechanism: mirror the launch-cap shim's gate() contract exactly
-      (`hooks/lane.mjs:403`, `shim/claude.cmd`) — a script that returns one
-      of two outcomes: refuse (block the push) only on an explicit,
-      deliberate negative verdict; on ANY other failure (the gate script
-      itself crashing, node missing, a bug in the gate) FAIL OPEN and allow
-      the push. This asymmetry is the whole point of the existing pattern
-      and must not be diluted: a bug in the gate must never permanently
-      lock Kyle out of pushing.
-    - Trigger scope: only gate pushes where the destination ref is
-      `refs/heads/main` — git passes this via the pre-push hook's stdin as
-      lines of `<local ref> <local sha1> <remote ref> <remote sha1>`; parse
-      that, skip the gate entirely for any other target ref (feature
-      branches stay fast).
-    - What actually runs on a gated push: `node hooks/covgate.mjs` scoped
-      to the commit range about to be pushed (the range between the
-      remote-tracking sha and the local sha being pushed, from the same
-      stdin line) — NOT the working-tree-vs-HEAD diff `covgate.mjs` uses by
-      default. OPEN TECHNICAL GAP, not yet verified: `hooks/covgate.mjs:114-117`
-      computes "changed files" via `git diff --name-only HEAD` (working
-      tree vs. last commit) + `git ls-files --others` (untracked) — that
-      diffs *uncommitted* changes, which on its face does NOT cover commits
-      already made locally but not yet pushed (a pre-push hook's actual
-      job). But real CI runs (e.g. 30931491214) DID correctly catch a
-      coverage failure in an already-pushed commit, so `covgate.mjs` or
-      `.github/workflows/ci.yml`'s invocation of it must do something more
-      than lines 114-117 alone suggest. Read `hooks/covgate.mjs` in full
-      and `.github/workflows/ci.yml`'s exact invocation BEFORE writing the
-      hook script, and reuse/adapt whatever real mechanism CI relies on
-      rather than guessing. If covgate fails, print its exact failure
-      output (same text a human would see in the CI log) and refuse the
-      push (exit nonzero from the hook). Whether to also run
-      `npm run test:windows` synchronously here (thorough but slower) or
-      leave that to CI (covgate already re-runs the relevant test files
-      under `--experimental-test-coverage` per `hooks/covgate.mjs:145`, so
-      it may be redundant) is an open call for implementation time — lean
-      toward covgate-only for pre-push speed, since CI is still the full
-      backstop.
-    - Install mechanism: the hook's actual logic lives in a tracked file
-      (e.g. `hooks/pre-push`), since `.git/hooks/` itself is never
-      committed and would silently not exist on a fresh clone or another
-      machine. An idempotent installer (`runbox/install-pre-push-gate.ps1`,
-      same shape as `runbox/install-claude-cap-gate.ps1`) copies/symlinks
-      the tracked file into `.git/hooks/pre-push` and marks it executable.
-      This is a one-time local action Kyle runs via `/approve-kgs`, same as
-      every other runbox install script — not something Claude should run
-      directly.
-    - Known, accepted bypass: `git push --no-verify` skips all git hooks —
-      standard git behavior, not a gap to close. It's the deliberate
-      emergency escape hatch (requires an explicit, visible flag, not
-      silently on by default).
-    - Use cases this must handle correctly:
-      1. Claude (or Kyle) commits a `.mjs` lib change with insufficient
-         coverage and runs `git push` targeting `main` — hook runs covgate
-         against the pushed commit range, covgate reports FAIL, push is
-         refused with covgate's real output shown, nothing reaches GitHub,
-         CI never even sees the red commit.
-      2. A push from a manual terminal outside Claude Code entirely (same
-         class of gap OI-016 named for the launch cap) — still gated,
-         because this is a plain git hook, not scoped to Claude Code
-         sessions.
-      3. `covgate.mjs` itself crashes, or node is missing/broken — hook
-         fails OPEN, push proceeds; a broken gate must never become a
-         total push lockout.
-      4. Push targets a feature/PR branch, not `main` — hook is a no-op,
-         no added latency.
-      5. A legitimate emergency push needs to bypass a wrongly-failing
-         gate — `git push --no-verify`, logged, not silent-by-default.
-
-  APPROACH B — GitHub-side branch protection (documented, not started):
-    - Would require: (1) a GitHub PAT with repo-admin scope added to the
-      local vault (`hooks/engine.mjs` vault-import — Kyle provides the
-      token himself, never pasted into chat, per the global vault-keys
-      rule), (2) a one-time `gh api repos/kgsmith19/agentic-command-center/branches/main/protection`
-      call requiring the `CI` check to pass before merge, (3) switching
-      from direct-push-to-main to a PR-based flow (branch protection cannot
-      block a direct push by the repo owner unless "include administrators"
-      is also enabled, which has its own tradeoffs worth a separate look).
-    - Advantage over Approach A: enforced server-side regardless of which
-      machine pushes (covers a future second machine, a contributor, etc).
-      Disadvantage: needs new secret plumbing that doesn't exist today, and
-      a workflow-shape change (PRs instead of direct pushes) that touches
-      how nearly every recent commit in this repo's history has landed.
-    - Not being pursued now; revisit if Approach A alone proves
-      insufficient (e.g. once more than one machine/contributor pushes to
-      this repo) or if Kyle decides he wants server-side enforcement
-      regardless.
-- done when: `hooks/pre-push` (tracked) exists and matches the gate()
-  contract above; `runbox/install-pre-push-gate.ps1` exists and is proven
-  idempotent; after Kyle runs it via `/approve-kgs`, a deliberately-red
-  test push to `main` (a throwaway commit with an uncovered branch) is
-  refused locally with covgate's real output shown, and a deliberately
-  clean push proceeds normally; `git push --no-verify` is confirmed to
-  still bypass it (expected, not a bug). Approach B stays undone/unstarted
-  unless separately decided.
-
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
 - where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart
@@ -342,6 +222,36 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-030 [RESOLVED 2026-08-04] Repeated red CI on main -- fold the coverage gate into a local pre-push hook, ACC-style
+- opened: 2026-08-04, resolved: 1726574/644ab7e/d8e7ed8, merged 275a899 -- Approach A
+  (local pre-push git hook) shipped exactly as this entry's own spec described.
+  hooks/covgate.mjs gained ACC_COVGATE_RANGE="<oldrev> <newrev>" (gates a commit
+  range via git diff between two revs, never mutates the caller's HEAD/working
+  tree -- the local-hook-safe alternative to CI's own "git reset --soft" trick,
+  which would be destructive to run against Kyle's real working repo).
+  hooks/pre-push (tracked, LF-pinned via .gitattributes, mode 100755) mirrors
+  the launch-cap shim's fail-open contract exactly: refuses a push ONLY on an
+  explicit "covgate: FAIL" verdict for a push targeting refs/heads/main, fails
+  OPEN on anything else (non-main branch, node missing, covgate crashing).
+  Installed via runbox/install-pre-push-gate.ps1 (untracked -- runbox/ is
+  gitignored -- Kyle runs it via /approve-kgs, not run by Claude).
+  "git push --no-verify" remains the standard, unhandled bypass, as the
+  entry's own spec called for.
+- a real bug was found and fixed along the way (TDD, not speculative): without
+  clearing ACC_COVGATE_RANGE before covgate.mjs's own internal spawned test run
+  (same treatment NODE_TEST_CONTEXT/NODE_V8_COVERAGE already got), a range-mode
+  invocation's oldrev/newrev leaked three levels deep into covgate.test.mjs's own
+  unrelated nested fixture repos, which then tried to diff commit shas that don't
+  exist in their own isolated history ("fatal: bad object").
+- verification: hooks/covgate.test.mjs (24/24, 4 new range-mode tests), hooks/pre-
+  push.test.mjs (7/7 new: refuse on a genuine floor miss, pass when clean, no-op on
+  non-main, brand-new-ref via the empty-tree hash, deleted-ref no-op, fail-open on an
+  unrecognized crash, multi-line stdin), full fast tier (438/439, 1 pre-existing
+  unrelated skip), node hooks/covgate.mjs (covgate.mjs itself: 100%/100%/94.8%).
+  Kyle still needs to run /approve-kgs on the runbox installer before the gate is
+  actually live in .git/hooks/ -- the code is proven, the local install is not yet
+  applied to this machine.
 
 ## OI-029 [RESOLVED 2026-08-04] route.mjs's blocking auto-cd repeatedly ate real prompts instead of delivering them
 - opened: 2026-08-04, resolved: 2926a2d/6207c66 — `autoCd.enabled` flipped
