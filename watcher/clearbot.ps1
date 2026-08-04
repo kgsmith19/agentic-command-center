@@ -45,6 +45,13 @@
 #      (someone cleared manually) the request is dropped.
 #   6. Kill switch: watcher/clearbot.stop present => does nothing at all.
 #   7. One clear per session per 60s, tracked in-process.
+#
+# OI-010: Send-MultilineKeys (below) adds a pty-transport primitive that can
+# carry a multi-line payload -- the wire framing (TEXTB64 in PtyHost.cs) that
+# invariant 1c's "single-line" constraint exists because of is no longer an
+# absolute limit. It has NO caller in the cycle loop below, so it changes
+# nothing about what is typed automatically today; invariant 1's closed set
+# is unchanged until something calls it.
 param(
     [int]$IntervalMs = 2000,
     [switch]$Once
@@ -137,9 +144,10 @@ function Get-TermPipe([int]$ConsolePid) {
     return $null
 }
 
-# Ops entries: 'ESC', 'SUBMIT', or 'TEXT <payload>'. One op per connection,
-# matching the server. The server enforces the same refusals as
-# sendconsole.ps1 (control chars, length); content policy stays here.
+# Ops entries: 'ESC', 'SUBMIT', 'TEXT <payload>', or 'TEXTB64 <payload>'. One
+# op per connection, matching the server. The server enforces the same
+# refusals as sendconsole.ps1 (control chars, length); content policy stays
+# here.
 function Send-Pipe([string]$PipeName, [string[]]$Ops) {
     foreach ($op in $Ops) {
         try {
@@ -154,7 +162,9 @@ function Send-Pipe([string]$PipeName, [string[]]$Ops) {
         } catch { return @{ ok = $false; out = "$op -> $($_.Exception.Message)" } }
         # The paste heuristic is exactly what broke injection: give the TUI a
         # beat between the text and the Enter so the CR is its own keypress.
-        if ($op -like 'TEXT *') { Start-Sleep -Milliseconds 80 }
+        # 'TEXT*' (not 'TEXT *') deliberately also matches 'TEXTB64 ...' -- OI-010's
+        # multi-line op needs the exact same settle before SUBMIT that TEXT gets.
+        if ($op -like 'TEXT*') { Start-Sleep -Milliseconds 80 }
     }
     return @{ ok = $true; out = 'OK' }
 }
@@ -174,6 +184,27 @@ function Send-Keys($cpid, [string]$text, [switch]$ClearLineFirst) {
     if ($ClearLineFirst) { $a += '-ClearLineFirst' }
     $out = & powershell @a 2>&1 | Out-String
     return @{ ok = ($out -match 'OK wrote='); out = $out.Trim() }
+}
+
+# OI-010: the pty-transport equivalent of Send-Keys for a MULTI-LINE payload.
+# No keystroke-injection fallback -- sendconsole.ps1 refuses multi-line text
+# outright (a newline there would submit a fragment, several prompts instead
+# of one, exactly what OI-004 exists to prevent), so a dead/absent pty pipe
+# means this fails rather than degrading. Dormant infrastructure as of
+# OI-010's close: nothing in the cycle loop below calls it yet -- deciding
+# whether clearbot should auto-replay a multi-line prompt is a separate,
+# larger decision this fix does not make.
+function Send-MultilineKeys($cpid, [string[]]$Lines, [switch]$ClearLineFirst) {
+    $pipe = Get-TermPipe $cpid
+    if (-not $pipe) { return @{ ok = $false; out = 'no pty pipe for this console' } }
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($Lines -join "`r`n")))
+    $ops = @()
+    if ($ClearLineFirst) { $ops += 'ESC' }
+    $ops += ('TEXTB64 ' + $b64)
+    $ops += 'SUBMIT'
+    $r = Send-Pipe $pipe $ops
+    if ($r.ok) { return @{ ok = $true; out = "pty OK pipe=$pipe" } }
+    return @{ ok = $false; out = "pty pipe '$pipe' failed ($($r.out))" }
 }
 
 # invariant 1e: the only non-text injection. One Esc, nothing else.
@@ -219,6 +250,14 @@ function Invoke-Cd($req) {
         if (-not $r.ok) { Log "ABORT cd $($req.sessionId): clear failed -> $($r.out)"; return $false }
         Start-Sleep -Milliseconds 1200
     }
+
+    # OI-003: the non-clear path used to send /cd with zero settle delay,
+    # typing it before a just-started session's REPL was ready to receive it
+    # (reproduced: two consecutive cd requests, both logged as sent, neither
+    # took effect -- the second was clear=False). Same 1200ms the clear
+    # branch already gives itself, for the same reason: a just-started
+    # session needs a beat before anything typed into it actually lands.
+    if (-not $req.clear) { Start-Sleep -Milliseconds 1200 }
 
     $r = Send-Keys $cpid "/cd $dest" -ClearLineFirst
     if (-not $r.ok) { Log "ABORT cd $($req.sessionId): /cd failed -> $($r.out)"; return $false }

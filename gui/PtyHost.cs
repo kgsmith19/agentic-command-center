@@ -212,6 +212,30 @@ namespace Acc
                 WriteText(payload);
                 return "OK";
             }
+            // TEXTB64 <base64>: OI-010. TEXT's line-based framing (ReadLine)
+            // structurally cannot carry a raw newline, so a multi-line payload
+            // travels as base64 instead -- decoded here, not via the existing
+            // WriteB64 (that one is the in-process WebView2 keystroke path,
+            // unvalidated by design; the pipe gets the same content policy as
+            // TEXT). \r\n is the one allowed control sequence, as the intended
+            // internal line separator -- everything else \r/\n does is refused,
+            // same as a lone \r would be if it slipped through TEXT.
+            if (line.StartsWith("TEXTB64 ", StringComparison.Ordinal))
+            {
+                string payload;
+                try { payload = Encoding.UTF8.GetString(Convert.FromBase64String(line.Substring(8))); }
+                catch (FormatException) { return "FAIL unsafe TEXTB64: invalid base64"; }
+                for (int i = 0; i < payload.Length; i++)
+                {
+                    char c = payload[i];
+                    if (c == '\r') { if (i + 1 >= payload.Length || payload[i + 1] != '\n') return "FAIL unsafe TEXTB64: control characters"; continue; }
+                    if (c == '\n') { if (i == 0 || payload[i - 1] != '\r') return "FAIL unsafe TEXTB64: control characters"; continue; }
+                    if (c < 0x20 || c == 0x7f) return "FAIL unsafe TEXTB64: control characters";
+                }
+                if (payload.Length > 2100) return "FAIL unsafe TEXTB64: exceeds 2100 chars";
+                WriteText(payload);
+                return "OK";
+            }
             return "FAIL unknown op";
         }
 
