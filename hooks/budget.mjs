@@ -469,7 +469,7 @@ function onSessionStart(p, policy) {
     ...[
     `[ACC] Context budget: soft ${softK}k, hard ${hardK}k. Context is checked after EVERY tool call; past ${hardK}k you will be told to checkpoint and end the turn, and the Stop hook enforces it.`,
     `[ACC] Subagents: allowlist ${JSON.stringify(policy.subagents.allow)}; implementation work goes to a runner session, not a subagent. Explore reports are capped at ${policy.subagents.exploreMaxReportLines} lines, structural only, no file dumps.`,
-    `[ACC] Reviews: /diff-review and /sec-diff are the default checks (main thread, no fan-out). /lean-review is ${policy.review.fullLeanReview}.`,
+    `[ACC] Reviews: /diff-review-kgs and /sec-diff-kgs are the default checks (main thread, no fan-out). /lean-review-kgs is ${policy.review.fullLeanReview}.`,
     ]
   );
   inject("SessionStart", lines.join("\n"));
