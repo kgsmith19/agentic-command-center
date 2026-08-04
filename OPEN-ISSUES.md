@@ -25,18 +25,29 @@ line under `## Resolved`.
 
 ## OI-003 A clearbot-typed /cd does not take effect
 - opened: 2026-07-31
-- where: watcher/clearbot.ps1 (cd requests) / hooks/route.mjs
+- where: watcher/clearbot.ps1 Invoke-Cd
 - what: two consecutive cd requests to `C:\code` were typed and replayed
   (clearbot.log 10:45:13 `CD 130aefc6 → C:\code clear=True`, 10:45:37
   `CD dde31bdb → C:\code clear=False`) yet the session's cwd stayed
   `C:\code\guards` — the next prompt fell back to the advisory line (the
   designed escape hatch, so no deny-loop, but the scope move itself failed
-  twice). Suspect timing (typed while the fresh session was still starting)
-  or /cd needing different input than a plain typed line.
-- why open: found in the same cycle-3 timeline reconstruction; needs the
-  throwaway-console injection rig to reproduce safely, per AGENTS.md.
-- done when: a clearbot-typed /cd verifiably changes the session cwd in a
-  throwaway console (route verdict matches cwd on the replayed prompt).
+  twice).
+- root cause (found 2026-08-04): the second log line is the tell — `clear=
+  False`. `Invoke-Cd`'s `$req.clear` branch sleeps 1200ms after the clear
+  before doing anything else; the non-clear branch fell straight through to
+  `/cd $dest` with zero settle delay, typing it before a just-started
+  session's REPL was ready to receive it.
+- fix in place: 4e22e81 — the same 1200ms settle now runs on the non-clear
+  path too, mirroring the clear branch exactly.
+- why open: per AGENTS.md's own doctrine ("verified by injection into a
+  throwaway console — do not test them against a real working session"),
+  the fix needs a real-token repro to close, which this session does not
+  run itself. `e2e/loop.e2e.mjs` scenario 4 is already exactly this
+  reproduction (already named "guards OI-003" in its own comment/report
+  line, already queues a `clear:false` cd request against a real console)
+  — no new script needed.
+- done when: Kyle runs `node e2e/loop.e2e.mjs --only 4` and scenario 4
+  passes (the cwd actually moves), then this entry can close.
 
 ## OI-005 Guard self-protection is off while the docs still claim it
 - opened: 2026-07-31 (pre-commit security review)
@@ -87,19 +98,6 @@ line under `## Resolved`.
 - done when: a GUI crash with a live hosted session either reattaches the
   session on GUI restart or is detected and surfaced within a minute, proven
   by killing the GUI mid-session in a test.
-
-## OI-010 Pipe TEXT protocol is single-line; multi-line replay still falls back
-- opened: 2026-07-31
-- where: gui/PtyHost.cs ServePipe + watcher/clearbot.ps1 Send-Pipe (OI-004
-  successor)
-- what: the TEXT op carries one line and refuses control chars (< 0x20), so a
-  multi-line replay payload cannot travel the pty path and drops to keystroke
-  injection, which refuses it too (sendconsole multi-line refusal) — multi-line
-  replays silently do not happen on any transport.
-- why open: no current caller sends multi-line replays (clearbot types only
-  closed-set constants); framing is protocol design work, not a patch.
-- done when: a framed multi-line op exists with the same content policy, with a
-  clearbot test proving a two-line replay lands via the pipe.
 
 ## OI-011 Re-verify guards self-protection coverage of guards/ paths
 - opened: 2026-07-31
@@ -369,6 +367,33 @@ line under `## Resolved`.
   ternaries at import and the CLI entry-point guard's true branch, neither
   reachable in-process without reintroducing the collision. No
   `branchFloorOverrides` entry needed.
+
+## OI-010 [RESOLVED 2026-08-04] a framed TEXTB64 op carries a multi-line payload with the same content policy as TEXT
+- opened: 2026-07-31, resolved: 4e22e81 — added `TEXTB64 <base64>`
+  to `PtyHost.Handle()` (gui/PtyHost.cs), checked alongside TEXT/SUBMIT/ESC:
+  base64-decodes with a try/catch (unlike the existing unvalidated `WriteB64`,
+  which stays the in-process WebView2 keystroke path — the pipe gets the
+  same validation TEXT gets), refuses every control char TEXT refuses except
+  an internal `\r\n` pair (the intentional line separator — a bare `\r` or
+  `\n` is still refused), same 2100-char cap. `watcher/clearbot.ps1` gained
+  `Send-MultilineKeys` (sibling to `Send-Keys`) — additive, no current
+  caller, since deciding whether clearbot should auto-replay a multi-line
+  prompt is a separate decision this fix does not make. Fixed a real bug
+  found while designing this: `Send-Pipe`'s 80ms pre-SUBMIT settle was
+  gated on `-like 'TEXT *'`, which would have silently missed `TEXTB64 `
+  (no space at index 5) and reintroduced the exact paste-vs-Enter race the
+  transport exists to avoid; broadened to `'TEXT*'`. New test case in
+  gui/ptyhost.test.ps1 mirrors the existing PTYPROOF-73 template with a
+  two-line payload, plus refusal cases (invalid base64, a bare `\r`,
+  over-length).
+  One design choice made without local verification (no PowerShell in this
+  environment): the internal line separator is `\r\n`, not a bare `\n` —
+  the safer bet since `\r` alone is `PtyHost.cs`'s own proven-working Enter
+  byte. `gui/ptyhost.test.ps1` is this repo's own real proof (real ConPTY,
+  real cmd.exe) and runs on the `windows-integration` CI job
+  (`.github/workflows/ci.yml`) — if the `\r\n` assumption is wrong, that
+  run is expected to say so, and is the trigger for a follow-up push should
+  it come back red.
 
 ## OI-020 [RESOLVED 2026-08-03] Playwright e2e verifies the kernel GUI in CI
 - opened: 2026-08-03, resolved: 5deff38, 39322e1 — gui/e2e/kernel-settings.spec.mjs
