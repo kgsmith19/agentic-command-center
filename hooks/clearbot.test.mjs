@@ -99,12 +99,12 @@ function writeRequest(root, sid, req) {
   return path.join(root, "runner", "clear-requests", name);
 }
 
-function runOnce(root) {
+function runOnce(root, extraEnv = {}) {
   try {
     return execFileSync(
       "powershell",
       ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "watcher", "clearbot.ps1"), "-Once"],
-      { encoding: "utf8", timeout: 90000, windowsHide: true }
+      { encoding: "utf8", timeout: 90000, windowsHide: true, env: { ...process.env, ...extraEnv } }
     );
   } catch (e) {
     return String(e.stdout || "") + String(e.stderr || "");
@@ -169,6 +169,49 @@ test("an off-table cd destination is refused and never typed", () => {
     assert.match(out, /REFUSE cd/);
     assert.equal(typed(stub, 1500).trim(), "", "an off-table path is never typed");
   } finally { stub.kill(); }
+});
+
+// guards OI-003: the non-clear /cd settle used to be a hardcoded 1200ms that
+// failed a real-token repro; it now reads policy.json's tui.readySettleMs
+// (watcher/clearbot.ps1 Get-TuiReadyMs), the same dial hooks/goal.mjs's kick
+// delay falls back to. Get-AllowedPaths needs a real ROUTING.md match to let
+// a cd through at all, so this is the one test in the file that also needs
+// the ACC_ROUTING_MD override (mirrors hooks/route.mjs's own override) -
+// $Root's real parent has no repo tree in a sandbox, so without it every /cd
+// here would be refused as off-table regardless of path.
+function cdSettleRun(readySettleMs) {
+  const root = sandbox();
+  const stub = startStub();
+  const dest = root; // exists on disk (mkdtemp'd), and is its own ROUTING.md entry below
+  const routingPath = path.join(root, "ROUTING.md");
+  fs.writeFileSync(routingPath, "```json\n" + JSON.stringify({ routes: [{ path: dest, label: "sandbox" }] }) + "\n```\n");
+  const pol = JSON.parse(fs.readFileSync(path.join(root, "policy.json"), "utf8"));
+  pol.tui = { readySettleMs };
+  fs.writeFileSync(path.join(root, "policy.json"), JSON.stringify(pol));
+  try {
+    writeWindow(root, "s-cdsettle", stub.pid);
+    writeRequest(root, "s-cdsettle", { kind: "cd", consolePid: stub.pid, path: dest, clear: false, replay: "" });
+    const t0 = Date.now();
+    const out = runOnce(root, { ACC_ROUTING_MD: routingPath });
+    const elapsed = Date.now() - t0;
+    assert.match(out, /CD .* -> /, "clearbot reports the cd");
+    assert.ok(typed(stub).includes(`/cd ${dest}`), "and /cd actually reached the console");
+    return elapsed;
+  } finally { stub.kill(); }
+}
+
+test("OI-003: the non-clear /cd settle duration comes from policy.json, not a hardcoded constant", () => {
+  // A relative comparison, not an absolute floor: PowerShell's own startup
+  // overhead alone can exceed either configured value, so the only real
+  // proof this is policy-driven (rather than still the old hardcoded
+  // 1200ms) is that a much larger configured settle measurably costs more
+  // wall-clock time than a much smaller one.
+  const fast = cdSettleRun(50);
+  const slow = cdSettleRun(2500);
+  assert.ok(
+    slow - fast > 1500,
+    `a 2500ms settle should take noticeably longer than a 50ms one (fast=${fast}ms, slow=${slow}ms)`
+  );
 });
 
 test("a stale request is discarded, not executed", () => {

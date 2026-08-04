@@ -118,6 +118,21 @@ test("pendingKicks refuses: too soon after binding", async () => {
   assert.equal(m.pendingKicks(Date.now() + 10000).length, 1);
 });
 
+test("pendingKicks: tuiReadySettleMs overrides the default TUI-ready window (guards OI-003)", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(1), consolePid: LIVE, goalId: g.id });
+  const t0 = Date.parse(m.readGoal(g.id).boundAt);
+
+  // Below the default (4000ms) but the override says this is plenty.
+  const early = m.pendingKicks(t0 + 500, { tuiReadySettleMs: 200 });
+  assert.ok(early.find((k) => k.id === g.id), "an explicit override can be shorter than the default");
+
+  // A stricter-than-default override still refuses before its own window.
+  const strict = m.pendingKicks(t0 + 5000, { tuiReadySettleMs: 8000 });
+  assert.equal(strict.find((k) => k.id === g.id), undefined, "an explicit override can be longer than the default");
+});
+
 test("pendingKicks refuses: dead console", async () => {
   const { m } = await loadGoal();
   const g = m.createGoal({ text: "t" });
@@ -459,4 +474,42 @@ test("CLI: main() 'done'/'blocked'/'paused' set status via resolveId, and refuse
 
 test("CLI: main() prints usage for an unrecognized command", () => {
   assert.match(runMain(["frobnicate"]), /^usage: goal\.mjs/);
+});
+
+test("a goal persists correctly after its directory is moved to a new location", async () => {
+  const { m, dir } = await loadGoal();
+
+  // Create a goal in the original directory
+  const g = m.createGoal({ text: "portable goal", cwd: "C:/code" });
+  const originalGoalJson = m.readGoal(g.id);
+  assert.ok(originalGoalJson);
+  assert.equal(originalGoalJson.text, "portable goal");
+
+  // Move the entire goals directory to a new location
+  const newDir = fs.mkdtempSync(path.join(os.tmpdir(), "acc-goal-moved-"));
+  try {
+    // Copy the original directory contents
+    const moveDir = path.join(newDir, "moved-goals");
+    fs.cpSync(dir, moveDir, { recursive: true });
+
+    // Update the environment to point to the new location
+    const savedGoalsDir = process.env.ACC_GOALS_DIR;
+    process.env.ACC_GOALS_DIR = moveDir;
+
+    // Verify the goal can still be read from the new location
+    // goalsDir() resolves from the environment variable on every call
+    const movedGoalJson = m.readGoal(g.id);
+    assert.ok(movedGoalJson, "goal can be read from moved directory");
+    assert.equal(movedGoalJson.text, "portable goal");
+    assert.equal(movedGoalJson.id, g.id);
+
+    // Verify listGoals also finds it in the new location
+    const listedGoals = m.listGoals();
+    assert.ok(listedGoals.some(goal => goal.id === g.id), "goal appears in list after directory move");
+
+    // Restore the original directory reference
+    process.env.ACC_GOALS_DIR = savedGoalsDir;
+  } finally {
+    fs.rmSync(newDir, { recursive: true, force: true });
+  }
 });

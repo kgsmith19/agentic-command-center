@@ -45,8 +45,15 @@ function doneDir() {
 
 // A kick is only sent once the binding has had time to settle. SessionStart runs
 // before the TUI is ready to accept input, so firing the instant a goal binds
-// types into a console that is still starting up.
-const KICK_DELAY_MS = 4000;
+// types into a console that is still starting up. Policy-overridable
+// (`tui.readySettleMs`) and reused verbatim by watcher/clearbot.ps1's
+// Get-TuiReadyMs for the /cd settle (guards OI-003) -- one proven number for
+// "is this session's TUI ready for injected input yet" instead of two
+// independently-guessed ones. Was `KICK_DELAY_MS = 4000` hardcoded here only;
+// clearbot's own /cd settle separately guessed 1200 and that guess failed a
+// real-token repro (OI-003, 2026-08-04) after already failing once with zero
+// settle at all -- so this value now has exactly one source of truth.
+const TUI_READY_MS_DEFAULT = 4000;
 // One kick per goal per minute, whatever happens. A resume loop that somehow
 // re-armed itself must not be able to machine-gun the console.
 const KICK_COOLDOWN_MS = 60000;
@@ -269,6 +276,8 @@ export function setStatus(id, status, why) {
 //   - the binding must have settled (TUI ready)
 //   - the cooldown must have expired
 export function pendingKicks(now = Date.now(), opts = {}) {
+  const tuiReadyMs =
+    opts.tuiReadySettleMs != null ? Number(opts.tuiReadySettleMs) : TUI_READY_MS_DEFAULT;
   const settleMs =
     opts.kickSettleSeconds != null ? Number(opts.kickSettleSeconds) * 1000 : KICK_SETTLE_MS_DEFAULT;
   const holdMs =
@@ -276,7 +285,7 @@ export function pendingKicks(now = Date.now(), opts = {}) {
   return activeGoals()
     .filter((g) => g.needsKick)
     .filter((g) => consoleAlive(g.consolePid))
-    .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= KICK_DELAY_MS)
+    .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= tuiReadyMs)
     // Turn-end settle: the TUI needs a moment after a turn ends, and an instant
     // kick would race the model's own closing tool calls.
     .filter((g) => !g.turnEndedAt || now - Date.parse(g.turnEndedAt) >= settleMs)
@@ -363,6 +372,7 @@ export function main() {
       dials = {
         kickSettleSeconds: pol?.goals?.kickSettleSeconds,
         humanHoldMinutes: pol?.goals?.humanHoldMinutes,
+        tuiReadySettleMs: pol?.tui?.readySettleMs,
       };
     } catch {}
     console.log(JSON.stringify(pendingKicks(Date.now(), dials)));

@@ -24,58 +24,6 @@ line under `## Resolved`.
 ## Open
 
 
-## OI-003 [BLOCKED — runbox] A clearbot-typed /cd does not take effect
-- opened: 2026-07-31, blocked 2026-08-04: needs a real-token e2e run, which
-  only Kyle should trigger deliberately. Script staged:
-  `runbox/oi-003-verify-cd-scenario4.ps1` (runs
-  `node e2e/loop.e2e.mjs --only 4` and reports pass/fail). Run via
-  `/approve-kgs`.
-- where: watcher/clearbot.ps1 Invoke-Cd
-- what: two consecutive cd requests to `C:\code` were typed and replayed
-  (clearbot.log 10:45:13 `CD 130aefc6 → C:\code clear=True`, 10:45:37
-  `CD dde31bdb → C:\code clear=False`) yet the session's cwd stayed
-  `C:\code\guards` — the next prompt fell back to the advisory line (the
-  designed escape hatch, so no deny-loop, but the scope move itself failed
-  twice).
-- root cause (found 2026-08-04): the second log line is the tell — `clear=
-  False`. `Invoke-Cd`'s `$req.clear` branch sleeps 1200ms after the clear
-  before doing anything else; the non-clear branch fell straight through to
-  `/cd $dest` with zero settle delay, typing it before a just-started
-  session's REPL was ready to receive it.
-- fix in place: 4e22e81 — the same 1200ms settle now runs on the non-clear
-  path too, mirroring the clear branch exactly.
-- why open: per AGENTS.md's own doctrine ("verified by injection into a
-  throwaway console — do not test them against a real working session"),
-  the fix needs a real-token repro to close, which this session does not
-  run itself. `e2e/loop.e2e.mjs` scenario 4 is already exactly this
-  reproduction (already named "guards OI-003" in its own comment/report
-  line, already queues a `clear:false` cd request against a real console)
-  — no new script needed.
-- done when: Kyle runs `node e2e/loop.e2e.mjs --only 4` and scenario 4
-  passes (the cwd actually moves), then this entry can close.
-
-
-## OI-011 Re-verify guards self-protection coverage of guards/ paths
-- opened: 2026-07-31
-- where: hooks/engine.mjs guard config
-- what: this branch added gui/PtyHost.cs, gui/term.html, gui/vendor/,
-  gui/ptyhost.e2e.ps1 and watcher/stubpipe.ps1 plus many watcher/ system
-  scripts (clearbot.ps1, launchers, watchdog/ integration). The full post-branch
-  file list is: `gui/PtyHost.cs`, `gui/term.html`, `gui/vendor/`, `gui/*.ps1`
-  (test/e2e), `watcher/clearbot.ps1`, `watcher/*.ps1` (screenshot, sendconsole,
-  stubs), `watcher/*.cmd` (start/stop launchers), `watcher/watchdog/*.ps1`
-  (system integration). All are strategic infrastructure and should be protected.
-- why open: verification task surfaced by the embedded-terminal completion
-  gate. OI-005 (self-protection currently off, docs claiming otherwise) is
-  now closed 2026-08-04 via its docs-accuracy path — AGENTS.md and
-  clearbot.ps1 already state the off-state correctly, so nothing there was
-  actually stale. This entry's own ask (add the paths to `protected`) still
-  requires re-enabling self-protection for `C:/code/guards`, which remains
-  Kyle's call on timing since it would block further agent edits to this
-  repo, including mid-session ones.
-- done when: `protected` list in config.json gains `C:/code/guards/gui/` and
-  `C:/code/guards/watcher/` (or the full `C:/code/guards/` prefix), verified
-  safe to re-enable, documented in AGENTS.md (done 2026-08-03).
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
@@ -208,7 +156,22 @@ line under `## Resolved`.
   tokens spent. Task 7 (`runbox/install-claude-cap-gate.ps1`, prepends the
   shim to the user PATH and registers the watcher's Scheduled Task) is
   written and committed but NOT run — that's real machine-state change
-  outside the repo, for Kyle via `/approve-kgs`. Until he runs it, the gate
+  outside the repo, for Kyle via `/approve-kgs`.
+  UPDATE 2026-08-05: it auto-ran via `autoApprove` (not by anyone deliberately
+  approving it) and only HALF-succeeded — confirmed via
+  `watcher/approvals.log`: "Prepended C:\code\guards\shim to the user PATH"
+  (verified live, `[Environment]::GetEnvironmentVariable('PATH','User')`
+  includes it), but `Register-ScheduledTask` then failed: "The task XML
+  contains a value which is incorrectly formatted or out of range" /
+  "Duration:P99999999DT23H59M59S" — a malformed ISO8601 duration in the
+  script's own trigger definition, not an environment problem. Per the
+  "failed script stays" rule the script is still sitting in
+  `runbox/install-claude-cap-gate.ps1`, untouched, will not auto-retry. So
+  today: the PATH shim IS live and gating every `claude` launch (confirmed:
+  it let a real e2e-spawned launch through under cap), but the
+  `claude-cap-watch.ps1` Scheduled Task is NOT registered — no alert-only
+  breach/fail-open detector is actually running. Needs the trigger duration
+  fixed in the runbox script before a re-run can complete Task 7. Until he runs it, the gate
   and watcher exist in the repo but are not yet live on the machine, so this
   OI-025 entry's own original incident is not yet provably fixed end-to-end.
   Per the plan's own instruction, `e2e/loop.e2e.mjs` (real tokens) is not
@@ -241,34 +204,125 @@ line under `## Resolved`.
   `autoCd.enabled` can be deliberately re-enabled and re-watched for a
   recurrence before this entry closes too.
 
-## OI-030 [URGENT] Repeated red CI on main — pushes land before the coverage gate is checked
+## OI-030 [URGENT] Repeated red CI on main — fold the coverage gate into a local pre-push hook, ACC-style
 - opened: 2026-08-04
-- where: `.github/workflows` (single workflow `CI`), direct pushes to `main`
-- what: at least 6 failed CI runs since 2026-08-03 (verified via `gh run
-  list`/`gh run view --log-failed`), e.g. run 30931491214
-  ("cap guardhook.mjs's stdin read size, closing OI-028") failed on
-  `kernel/guardhook.mjs` branches 85.7% under the 90% floor; run 30929758995
-  ("machine-wide claude launch cap") failed on `hooks/lane.mjs` lines
-  97%/funcs 98% under the 100% floor. Every failure found is a genuine
-  `covgate` (changed-file coverage floor) failure, not flaky infra — each
-  was repaired by an immediate follow-up commit rather than caught before
-  the push that broke it. Current HEAD (run 30931903502) is green.
-- why open: needs a decision. Most recent commits push straight to `main`
-  with no PR (only 1 of the last ~15 runs went through a PR), and this repo
-  has no server-side branch protection (per `C:\code\CLAUDE.md`: "there is
-  no server-side branch protection"), so a red commit can land on `main`
-  itself before anything catches it — the ledger's own doctrine
-  ("merge only on green CI") is being followed in spirit (green is always
-  restored fast) but not in mechanism (red commits DO land, briefly). Two
-  independent levers: (a) run `node hooks/covgate.mjs` +
-  `npm run test:windows` locally before every push to main (discipline, not
-  enforced), (b) enable GitHub branch protection requiring the CI check to
-  pass before merge, forcing a PR-based flow instead of direct pushes.
-  Kyle's call which (or both).
-- done when: a decision is recorded and, if branch protection is chosen,
-  it's enabled and verified (a red PR cannot be merged to main); if
-  local-discipline is chosen, a pre-push hook or documented habit change
-  ensures covgate/tests run before every push to main.
+- where: new file `hooks/pre-push` (tracked source) + `.git/hooks/pre-push`
+  (installed copy, untracked by git itself) + `runbox/install-pre-push-gate.ps1`
+  (or equivalent installer)
+- what (evidence): at least 6 failed CI runs since 2026-08-03 (`gh run
+  list` / `gh run view --log-failed`), e.g. run 30931491214 failed on
+  `kernel/guardhook.mjs` branches 85.7% < 90% floor; run 30929758995 failed
+  on `hooks/lane.mjs` lines 97%/funcs 98% < 100% floor. Every failure found
+  is a genuine `covgate` floor miss, not flaky infra, and each was repaired
+  by an immediate follow-up commit — i.e. red commits DO land on `main`
+  before anything catches them, because nothing runs the gate before the
+  push leaves the machine. Current HEAD is green.
+- standing rule this falls under (Kyle, 2026-08-04): when something can't
+  just be decided/executed unilaterally and would otherwise depend on a
+  human remembering to do it, default to asking whether ACC can enforce it
+  automatically instead of leaving it as a habit or a one-off manual step.
+- decision on scope (Kyle, 2026-08-04): not designing this in full right
+  now — this entry itself IS the spec, written to be picked up and executed
+  without further research. Two candidate approaches were researched;
+  recommendation is Approach A, Approach B is documented but explicitly
+  not started (no GitHub token/API wiring exists in this repo today — see
+  below):
+
+  APPROACH A — local pre-push git hook (RECOMMENDED, no new secrets needed):
+    - Mechanism: mirror the launch-cap shim's gate() contract exactly
+      (`hooks/lane.mjs:403`, `shim/claude.cmd`) — a script that returns one
+      of two outcomes: refuse (block the push) only on an explicit,
+      deliberate negative verdict; on ANY other failure (the gate script
+      itself crashing, node missing, a bug in the gate) FAIL OPEN and allow
+      the push. This asymmetry is the whole point of the existing pattern
+      and must not be diluted: a bug in the gate must never permanently
+      lock Kyle out of pushing.
+    - Trigger scope: only gate pushes where the destination ref is
+      `refs/heads/main` — git passes this via the pre-push hook's stdin as
+      lines of `<local ref> <local sha1> <remote ref> <remote sha1>`; parse
+      that, skip the gate entirely for any other target ref (feature
+      branches stay fast).
+    - What actually runs on a gated push: `node hooks/covgate.mjs` scoped
+      to the commit range about to be pushed (the range between the
+      remote-tracking sha and the local sha being pushed, from the same
+      stdin line) — NOT the working-tree-vs-HEAD diff `covgate.mjs` uses by
+      default. OPEN TECHNICAL GAP, not yet verified: `hooks/covgate.mjs:114-117`
+      computes "changed files" via `git diff --name-only HEAD` (working
+      tree vs. last commit) + `git ls-files --others` (untracked) — that
+      diffs *uncommitted* changes, which on its face does NOT cover commits
+      already made locally but not yet pushed (a pre-push hook's actual
+      job). But real CI runs (e.g. 30931491214) DID correctly catch a
+      coverage failure in an already-pushed commit, so `covgate.mjs` or
+      `.github/workflows/ci.yml`'s invocation of it must do something more
+      than lines 114-117 alone suggest. Read `hooks/covgate.mjs` in full
+      and `.github/workflows/ci.yml`'s exact invocation BEFORE writing the
+      hook script, and reuse/adapt whatever real mechanism CI relies on
+      rather than guessing. If covgate fails, print its exact failure
+      output (same text a human would see in the CI log) and refuse the
+      push (exit nonzero from the hook). Whether to also run
+      `npm run test:windows` synchronously here (thorough but slower) or
+      leave that to CI (covgate already re-runs the relevant test files
+      under `--experimental-test-coverage` per `hooks/covgate.mjs:145`, so
+      it may be redundant) is an open call for implementation time — lean
+      toward covgate-only for pre-push speed, since CI is still the full
+      backstop.
+    - Install mechanism: the hook's actual logic lives in a tracked file
+      (e.g. `hooks/pre-push`), since `.git/hooks/` itself is never
+      committed and would silently not exist on a fresh clone or another
+      machine. An idempotent installer (`runbox/install-pre-push-gate.ps1`,
+      same shape as `runbox/install-claude-cap-gate.ps1`) copies/symlinks
+      the tracked file into `.git/hooks/pre-push` and marks it executable.
+      This is a one-time local action Kyle runs via `/approve-kgs`, same as
+      every other runbox install script — not something Claude should run
+      directly.
+    - Known, accepted bypass: `git push --no-verify` skips all git hooks —
+      standard git behavior, not a gap to close. It's the deliberate
+      emergency escape hatch (requires an explicit, visible flag, not
+      silently on by default).
+    - Use cases this must handle correctly:
+      1. Claude (or Kyle) commits a `.mjs` lib change with insufficient
+         coverage and runs `git push` targeting `main` — hook runs covgate
+         against the pushed commit range, covgate reports FAIL, push is
+         refused with covgate's real output shown, nothing reaches GitHub,
+         CI never even sees the red commit.
+      2. A push from a manual terminal outside Claude Code entirely (same
+         class of gap OI-016 named for the launch cap) — still gated,
+         because this is a plain git hook, not scoped to Claude Code
+         sessions.
+      3. `covgate.mjs` itself crashes, or node is missing/broken — hook
+         fails OPEN, push proceeds; a broken gate must never become a
+         total push lockout.
+      4. Push targets a feature/PR branch, not `main` — hook is a no-op,
+         no added latency.
+      5. A legitimate emergency push needs to bypass a wrongly-failing
+         gate — `git push --no-verify`, logged, not silent-by-default.
+
+  APPROACH B — GitHub-side branch protection (documented, not started):
+    - Would require: (1) a GitHub PAT with repo-admin scope added to the
+      local vault (`hooks/engine.mjs` vault-import — Kyle provides the
+      token himself, never pasted into chat, per the global vault-keys
+      rule), (2) a one-time `gh api repos/kgsmith19/agentic-command-center/branches/main/protection`
+      call requiring the `CI` check to pass before merge, (3) switching
+      from direct-push-to-main to a PR-based flow (branch protection cannot
+      block a direct push by the repo owner unless "include administrators"
+      is also enabled, which has its own tradeoffs worth a separate look).
+    - Advantage over Approach A: enforced server-side regardless of which
+      machine pushes (covers a future second machine, a contributor, etc).
+      Disadvantage: needs new secret plumbing that doesn't exist today, and
+      a workflow-shape change (PRs instead of direct pushes) that touches
+      how nearly every recent commit in this repo's history has landed.
+    - Not being pursued now; revisit if Approach A alone proves
+      insufficient (e.g. once more than one machine/contributor pushes to
+      this repo) or if Kyle decides he wants server-side enforcement
+      regardless.
+- done when: `hooks/pre-push` (tracked) exists and matches the gate()
+  contract above; `runbox/install-pre-push-gate.ps1` exists and is proven
+  idempotent; after Kyle runs it via `/approve-kgs`, a deliberately-red
+  test push to `main` (a throwaway commit with an uncovered branch) is
+  refused locally with covgate's real output shown, and a deliberately
+  clean push proceeds normally; `git push --no-verify` is confirmed to
+  still bypass it (expected, not a bug). Approach B stays undone/unstarted
+  unless separately decided.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
@@ -294,6 +348,68 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-003 [RESOLVED 2026-08-05] A clearbot-typed /cd does not take effect
+- opened: 2026-07-31, resolved: 2026-08-05
+- root cause: the non-clear settle delay (4e22e81, hardcoded 1200ms) was a
+  guess unrelated to the one number in this codebase already empirically
+  proven for "is a session's TUI ready for injected input" -- hooks/goal.mjs's
+  kick delay (4000ms, proven via OI-002). 1200ms was too short: Kyle re-ran
+  `node e2e/loop.e2e.mjs --only 4` for real on 2026-08-04 and scenario 4
+  failed again identically (CD + REPLAY logged, cwd never moved).
+- fix: `policy.json` gained one shared dial, `tui.readySettleMs` (default
+  4000), read by both `hooks/goal.mjs`'s kick delay and
+  `watcher/clearbot.ps1`'s new `Get-TuiReadyMs` (replacing the old hardcoded
+  1200ms on the non-clear /cd path) -- one proven number instead of two
+  independently-guessed ones. Also split `watcher/sendconsole.ps1`'s single
+  WriteConsoleInputW batch (Esc+backspaces+text+Enter) into two calls with an
+  80ms settle between the clear batch and the text batch, mirroring the pty
+  transport's existing TEXT-then-SUBMIT gap (not proven to be the root cause
+  on its own; added because it's cheap and directionally correct).
+- a SEPARATE bug was found and fixed along the way: `e2e/loop.e2e.mjs`
+  scenario 4 itself had a false-negative bug. Claude Code relocates a
+  session's transcript to a NEW project-scoped directory once its cwd
+  changes (confirmed directly: a genuinely-passing run's transcript existed
+  ONLY under `~/.claude/projects/C--code-guards/`, not under the `C--code`
+  directory the session started in). Scenario 4 cached the pre-cd transcript
+  path once and never re-resolved it, so `cwdOf()` silently read ENOENT off a
+  path the successful cd itself had just moved away from -- reporting FAIL at
+  the exact moment the real bug was fixed. Fixed by re-resolving via
+  `findTranscript(sid)` on every poll instead of reusing the cached path.
+- verification: `node e2e/loop.e2e.mjs --only 4` (real tokens) -- SCENARIO 4
+  PASS, cwd before `C:\code`, cwd after `C:\code\guards`, matching `wanted`.
+  Reproduced the failure twice more against the OLD code/harness first (both
+  failed identically) before changing anything, per systematic-debugging
+  doctrine -- this is fix attempt #2 (1200ms flat was #1), not a first guess.
+  Full fast tier `npm run test:windows` 426/427 (1 pre-existing unrelated
+  skip) and `node hooks/covgate.mjs` (goal.mjs 100/100/99.4%) both green. New
+  regression tests: `hooks/goal.test.mjs` ("tuiReadySettleMs overrides the
+  default TUI-ready window") and `hooks/clearbot.test.mjs` ("the non-clear
+  /cd settle duration comes from policy.json, not a hardcoded constant" -- a
+  relative-timing proof: a 50ms configured settle vs. a 2500ms one measurably
+  differ, so the value is genuinely policy-driven, not the old constant).
+- operational gotcha worth keeping: running `e2e/loop.e2e.mjs` nested inside
+  a live Claude Code session (rather than a clean terminal) leaks
+  `CLAUDECODE`/`CLAUDE_CODE_SESSION_ID`/`CLAUDE_CODE_CHILD_SESSION`/
+  `CLAUDE_CODE_BRIDGE_SESSION_ID`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`/
+  `ACC_REAL_CLAUDE` into the child session it spawns, corrupting it a
+  DIFFERENT way each time (once: no transcript ever appeared at all; once:
+  the child picked up unrelated real repo context via a vague goal-kick and
+  went off doing real, unrelated work instead of the toy prompt -- read-only,
+  nothing was actually modified, verified via `git status`). Scrubbing those
+  vars (`env -u ...`) for the child process got a clean, valid repro both
+  times. Not a code bug -- a "run this from a clean terminal" fact, consistent
+  with AGENTS.md's existing real-token-run doctrine; recorded here so a
+  future run doesn't have to re-discover it.
+
+## OI-011 [RETIRED 2026-08-05] Re-verify guards self-protection coverage of guards/ paths
+- opened: 2026-07-31, retired: 2026-08-05 (Kyle) — self-protection for
+  `C:/code/guards` (the `gui/`, `watcher/` paths named in the original
+  entry) remains OFF and re-enabling it is still explicitly Kyle's own
+  timing call, not something to hold open on the ledger. He's aware and
+  will flip it himself when he wants it on. Reopen with a fresh entry if
+  the timing call is ever made and the `protected` list actually needs the
+  paths added.
 
 ## OI-027 [RESOLVED 2026-08-04, accepted ceiling] kernel/guard.mjs's path checks are string-based, not real filesystem canonicalization
 - opened: 2026-08-04, resolved: 2026-08-04 via the decision its own

@@ -73,7 +73,12 @@ $MaxAgeSec = 900
 $KEYS = '/clear'          # invariant 1a.
 $KICK = 'Continue the active ACC goal.'   # invariant 1d.
 $QUEUEKICK = 'Run the queued prompt.'     # invariant 1d: never the prompt itself.
-$RoutingMd = Join-Path (Split-Path $Root -Parent) 'ROUTING.md'
+# ACC_ROUTING_MD mirrors route.mjs's own override (hooks/route.mjs) -- same
+# reason: a sandboxed test's $Root has no real repo-tree parent to find a real
+# ROUTING.md above, so without this override every /cd in a test is refused
+# as off-table regardless of the path given, and the /cd path can never be
+# exercised end to end.
+$RoutingMd = if ($env:ACC_ROUTING_MD) { $env:ACC_ROUTING_MD } else { Join-Path (Split-Path $Root -Parent) 'ROUTING.md' }
 
 # invariant 1b: the set of directories this program may ever type is exactly the
 # route list in ROUTING.md. Read fresh each time so an edit there takes effect
@@ -116,6 +121,19 @@ function Get-HardK {
         if ($v -gt 0) { return $v }
     } catch {}
     return 600
+}
+
+# guards OI-003: how long a just-started (or just-turned) session's TUI needs
+# before injected input actually lands. Single source of truth shared with
+# hooks/goal.mjs's kick delay (policy.json tui.readySettleMs) -- see that
+# dial's _note for why clearbot no longer guesses its own number here.
+function Get-TuiReadyMs {
+    try {
+        $pol = Get-Content (Join-Path $Root 'policy.json') -Raw | ConvertFrom-Json
+        $v = [int]$pol.tui.readySettleMs
+        if ($v -gt 0) { return $v }
+    } catch {}
+    return 4000
 }
 
 # --- pty transport (spec 2026-07-31) --------------------------------------
@@ -255,10 +273,18 @@ function Invoke-Cd($req) {
     # OI-003: the non-clear path used to send /cd with zero settle delay,
     # typing it before a just-started session's REPL was ready to receive it
     # (reproduced: two consecutive cd requests, both logged as sent, neither
-    # took effect -- the second was clear=False). Same 1200ms the clear
-    # branch already gives itself, for the same reason: a just-started
-    # session needs a beat before anything typed into it actually lands.
-    if (-not $req.clear) { Start-Sleep -Milliseconds 1200 }
+    # took effect -- the second was clear=False). A first fix gave it a flat
+    # 1200ms and that ALSO failed a real-token repro (2026-08-04): typed and
+    # replayed exactly as logged, cwd never moved. 1200ms was a guess unrelated
+    # to the one number in this codebase already proven for "is this session's
+    # TUI ready for injected input" -- hooks/goal.mjs's kick delay, empirically
+    # tuned to 4000ms and proven via OI-002. Get-TuiReadyMs now reads the same
+    # policy.json dial (tui.readySettleMs) goal.mjs falls back to, so there is
+    # exactly one number instead of two independently-guessed ones. NOT yet
+    # re-verified against a real session -- that still needs a real-token
+    # `node e2e/loop.e2e.mjs --only 4` run (Kyle's call on timing, same as
+    # every other real-token proof in this repo).
+    if (-not $req.clear) { Start-Sleep -Milliseconds (Get-TuiReadyMs) }
 
     $r = Send-Keys $cpid "/cd $dest" -ClearLineFirst
     if (-not $r.ok) { Log "ABORT cd $($req.sessionId): /cd failed -> $($r.out)"; return $false }

@@ -415,13 +415,21 @@ async function scenario4() {
       clearbotOnce(sb);
       return /CD .* -> /.test(clearbotLog(sb));
     });
+    // A successful /cd moves this session's transcript to a NEW project-scoped
+    // directory (Claude Code namespaces transcripts by cwd) - the OLD path this
+    // scenario cached in `transcript` before the cd stops being written to and
+    // eventually stops existing at all. Re-resolving by session id on every poll
+    // (not reusing the stale path) is what lets this scenario actually OBSERVE
+    // a successful cd instead of reading ENOENT off a path the cd itself moved
+    // away from and reporting a false failure the instant the real bug is fixed.
+    const afterTranscript = () => findTranscript(sid) || transcript;
     const took = typedCd && waitFor("the cwd actually moved", 150000, () => {
-      const now = cwdOf(transcript);
+      const now = cwdOf(afterTranscript());
       return now && path.resolve(now) === path.resolve(REPO) ? now : null;
     });
 
     report(4, "a typed /cd actually changes the session cwd (guards OI-003)", !!took,
-      `cwd before: ${before}\ncwd after : ${cwdOf(transcript)}\nwanted    : ${REPO}\n\n${clearbotLog(sb).trim()}`);
+      `cwd before: ${before}\ncwd after : ${cwdOf(afterTranscript())}\nwanted    : ${REPO}\n\n${clearbotLog(sb).trim()}`);
   } finally { cleanup(consoles); }
 }
 

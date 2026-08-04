@@ -117,43 +117,76 @@ if ($h -eq [IntPtr]::Zero -or $h -eq [IntPtr](-1)) {
     Emit ('FAIL CONIN$ err=' + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) 1
 }
 
-$recs = New-Object System.Collections.ArrayList
-
 if ($Esc) {
     # Interrupt only: ONE Esc down/up, then force the other switches into the
     # shape that guarantees no text and no Enter can follow it.
-    [void]$recs.Add((New-KeyRec ([char]27) 27 1))    # VK_ESCAPE
-    [void]$recs.Add((New-KeyRec ([char]27) 27 0))
     $Text = ''; $NoEnter = $true; $ClearLineFirst = $false
+}
+
+function Write-Records([System.Collections.ArrayList]$Recs) {
+    $arr = New-Object ('SC.Con+INPUT_RECORD[]') $Recs.Count
+    for ($i = 0; $i -lt $Recs.Count; $i++) { $arr[$i] = $Recs[$i] }
+    $written = 0
+    $ok = [SC.Con]::WriteConsoleInputW($h, $arr, [uint32]$arr.Length, [ref]$written)
+    return @{ ok = $ok; written = [int]$written; err = [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+}
+
+$totalWritten = 0
+
+if ($Esc) {
+    $escRecs = New-Object System.Collections.ArrayList
+    [void]$escRecs.Add((New-KeyRec ([char]27) 27 1))    # VK_ESCAPE
+    [void]$escRecs.Add((New-KeyRec ([char]27) 27 0))
+    $r = Write-Records $escRecs
+    $totalWritten += $r.written
+    if (-not $r.ok) { [void][SC.Con]::CloseHandle($h); Emit "FAIL WriteConsoleInput err=$($r.err)" 1 }
 }
 
 if ($ClearLineFirst) {
     # Esc clears the input line in the Claude Code TUI and dismisses any open
     # slash-command menu. The backspaces are belt-and-braces for the case where
     # Esc is swallowed: on an already-empty prompt they are harmless no-ops.
-    [void]$recs.Add((New-KeyRec ([char]27) 27 1))    # VK_ESCAPE
-    [void]$recs.Add((New-KeyRec ([char]27) 27 0))
+    # Written as its OWN WriteConsoleInputW call, with a settle before the text
+    # batch that follows. Raised alongside clearbot.ps1's pre-type settle
+    # (guards OI-003, 2026-08-04) as a second, independent gap the old single-
+    # call batching never covered: the clear and the text landing in the SAME
+    # buffer write, zero beat between them, mirroring exactly the
+    # TEXT-then-SUBMIT race the pty transport already guards against with its
+    # own 80ms gap (clearbot.ps1 Send-Pipe). Not proven to be part of the root
+    # cause on its own -- added because it is cheap and directionally correct,
+    # not because it was isolated as the specific fix.
+    $clearRecs = New-Object System.Collections.ArrayList
+    [void]$clearRecs.Add((New-KeyRec ([char]27) 27 1))    # VK_ESCAPE
+    [void]$clearRecs.Add((New-KeyRec ([char]27) 27 0))
     for ($b = 0; $b -lt 120; $b++) {
-        [void]$recs.Add((New-KeyRec ([char]8) 8 1))  # VK_BACK
-        [void]$recs.Add((New-KeyRec ([char]8) 8 0))
+        [void]$clearRecs.Add((New-KeyRec ([char]8) 8 1))  # VK_BACK
+        [void]$clearRecs.Add((New-KeyRec ([char]8) 8 0))
     }
+    $r = Write-Records $clearRecs
+    $totalWritten += $r.written
+    if (-not $r.ok) { [void][SC.Con]::CloseHandle($h); Emit "FAIL WriteConsoleInput err=$($r.err)" 1 }
+    Start-Sleep -Milliseconds 80
 }
 
+$textRecs = New-Object System.Collections.ArrayList
 foreach ($c in $Text.ToCharArray()) {
-    [void]$recs.Add((New-KeyRec $c 0 1))
-    [void]$recs.Add((New-KeyRec $c 0 0))
+    [void]$textRecs.Add((New-KeyRec $c 0 1))
+    [void]$textRecs.Add((New-KeyRec $c 0 0))
 }
 if (-not $NoEnter) {
-    [void]$recs.Add((New-KeyRec ([char]13) 13 1))   # VK_RETURN
-    [void]$recs.Add((New-KeyRec ([char]13) 13 0))
+    [void]$textRecs.Add((New-KeyRec ([char]13) 13 1))   # VK_RETURN
+    [void]$textRecs.Add((New-KeyRec ([char]13) 13 0))
 }
 
-$arr = New-Object ('SC.Con+INPUT_RECORD[]') $recs.Count
-for ($i = 0; $i -lt $recs.Count; $i++) { $arr[$i] = $recs[$i] }
-$written = 0
-$ok = [SC.Con]::WriteConsoleInputW($h, $arr, [uint32]$arr.Length, [ref]$written)
-$err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+$ok = $true
+$err = 0
+if ($textRecs.Count -gt 0) {
+    $r = Write-Records $textRecs
+    $totalWritten += $r.written
+    $ok = $r.ok
+    $err = $r.err
+}
 [void][SC.Con]::CloseHandle($h)
 
-if ($ok) { Emit "OK wrote=$written records to pid=$TargetPid" 0 }
+if ($ok) { Emit "OK wrote=$totalWritten records to pid=$TargetPid" 0 }
 else     { Emit "FAIL WriteConsoleInput err=$err" 1 }

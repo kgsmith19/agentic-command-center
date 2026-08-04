@@ -96,6 +96,10 @@
                    "clearOnRescope":  true,
                    "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing. Set false 2026-08-04 (Kyle, guards OI-029) after repeated real prompts got blocked/eaten by stalled rescope cycles -- re-enable once OI-003's real-token verification confirms the replay actually lands."
                },
+    "tui":  {
+                "readySettleMs":  4000,
+                "_note":  "Single source of truth for 'how long after a session event until its Claude Code TUI is actually ready to accept injected input' -- shared by hooks/goal.mjs's kick (boundAt + this) and watcher/clearbot.ps1's Get-TuiReadyMs (the non-clear /cd settle, guards OI-003). Before 2026-08-05 these were two independently-guessed numbers (goal.mjs: 4000, proven via OI-002; clearbot.ps1: 1200, added for OI-003 and then failed a real-token repro on 2026-08-04) -- 4000 is the one with a track record, so it is now the only number and the default both readers fall back to. Lower it only with a real-token repro proving it still holds; clearbot's clear-branch settle and its post-cd replay/queuekick settles are deliberately NOT wired to this dial yet (unexamined, not proven broken -- see OI-003)."
+            },
     "lane":  {
                  "slots":  1,
                  "minGapMs":  3000,
