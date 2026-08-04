@@ -9,10 +9,19 @@
 // Documented ceilings, honestly: an ALLOWED Bash command can still do
 // something unintended inside its allowance, and WebSearch has no host to
 // scope. This is a deterministic process-level boundary, not an OS sandbox.
+import path from "node:path";
+
 const WRITE_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
 const READ_TOOLS = new Set(["Read", "Glob", "Grep", "NotebookRead"]);
 
-const norm = (p) => String(p).replaceAll("\\", "/").toLowerCase().replace(/\/+$/, "");
+// path.posix.normalize collapses ".."/"." segments (pure string manipulation,
+// no filesystem I/O — still safe for this module's "pure" contract). Without
+// it, a harness-supplied file_path like "C:/work/src/../../code/guards/x"
+// textually starts with the writeRoot "C:/work/src" and would be ALLOWED,
+// while the real filesystem write actually lands in C:/code/guards (a
+// denyRoot) once the OS resolves the ".." segments — a live path-traversal
+// bypass of the deny-by-default boundary, found and closed 2026-08-04.
+const norm = (p) => path.posix.normalize(String(p).replaceAll("\\", "/")).toLowerCase().replace(/\/+$/, "");
 const under = (target, root) => target === root || target.startsWith(root + "/");
 const underAny = (target, roots) => roots.some((r) => under(target, norm(r)));
 

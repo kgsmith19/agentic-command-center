@@ -8,7 +8,7 @@ Append an entry whenever something is raised and not fixed. `/resolve-issues`
 works this list to zero. Entry format:
 
 ```
-## OI-001 Short title
+## OI-NNN Short title
 - opened: 2026-07-31
 - where: path/or/area
 - what: the actual problem in one line, not the symptom
@@ -120,15 +120,37 @@ line under `## Resolved`.
   must lock it and harden it as much as possible... we don't want to trick
   the tests, we truly want to be objective."
 - why open: raised as a standing concern for the rest of the kernel effort
-  (T17-T22), not a defect in any one file today; needs a deliberate scenario-
-  enumeration pass (or a new task inserted into the plan) rather than being
-  folded piecemeal into whichever task happens to touch a given module.
+  (T17-T22); needs a deliberate scenario-enumeration pass across all ~12
+  kernel modules, which is real, multi-session work, not something to rush
+  through in one ledger sweep. Started 2026-08-04 on the highest-risk module
+  first: `kernel/guard.mjs` (the deny-by-default boundary itself). The pass
+  found a REAL, live bypass, not a hypothetical — `norm()` did a raw string-
+  prefix match with no `..`-segment resolution, so a harness-supplied
+  `file_path` like `C:/work/src/../../code/guards/policy.json` textually
+  started with an allowed `writeRoots` entry and was ALLOWED, while the
+  actual OS-resolved write lands in `denyRoots`-protected guard machinery.
+  Fixed: `norm()` now runs the path through `path.posix.normalize` (pure
+  string collapsing of `.`/`..` segments, no I/O, keeps the module's "pure"
+  contract) before the prefix comparison. 4 new regression tests in
+  `kernel/guard.test.mjs` prove: the exact bypass is now denied (and
+  re-classified correctly as `alwaysDeny`, target shown resolved not raw);
+  the same class of bypass on a READ path; a `..` that resolves BACK inside
+  an allowed root is still correctly allowed (normalization isn't itself a
+  deny); and a mixed backslash/forward-slash traversal is caught identically.
+  Verified: `node --test kernel/guard.test.mjs` (21/21), full
+  `npm run test:windows` (422/423, 1 pre-existing unrelated skip),
+  `node hooks/covgate.mjs` (guard.mjs 100%/100%/97.5%).
 - done when: for each kernel module, a documented pass has enumerated
   standard / non-standard / edge / rare / error / fault-tolerance scenarios
   (beyond AC-ID traceability) and either added a real test or recorded an
   explicit, ledgered reason none is needed. No test may be added or loosened
   just to turn red green — every test must be able to fail against a genuine
   regression, never tuned to the current implementation's behavior.
+  Progress: 1/12 modules done (`kernel/guard.mjs`). Remaining, in rough
+  risk order: `kernel/guardhook.mjs`, `kernel/run.mjs`, `kernel/ledger.mjs`,
+  `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
+  `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
+  `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
@@ -194,6 +216,40 @@ line under `## Resolved`.
   either `node e2e/loop.e2e.mjs` is re-run and scenarios 1-5 pass, or he's
   satisfied the launch cap being live is sufficient credit per the plan's
   own verification step.
+
+## OI-027 kernel/guard.mjs's path checks are string-based, not real filesystem canonicalization — two residual bypass classes
+- opened: 2026-08-04 (surfaced by /security-review-kgs during the OI-019
+  guard.mjs scenario-enumeration pass, after fixing the `..`-traversal bypass
+  that pass found — see OI-019's entry and the fix in kernel/guard.mjs)
+- where: kernel/guard.mjs `norm()`/`under()`/`underAny()`
+- what: `norm()` now collapses `.`/`..` segments (OI-019's fix), but it is
+  still pure string manipulation, not real OS-level path canonicalization —
+  by design, per the module's own header ("Pure: ... All I/O lives in
+  kernel/guardhook.mjs"). Two classes of bypass this cannot see:
+  1. **Symlinks**: a symlink created inside an allowed `writeRoots` entry,
+     pointing outside every granted root, would let a write "under" the
+     symlink land wherever the symlink actually points once the OS resolves
+     it — guard.mjs has no way to know the symlink exists. Requires a
+     precursor write capability to create the symlink in the first place
+     (not exploitable from a single decide() call in isolation).
+  2. **Exotic Windows path forms**: UNC paths (`\\server\share\..`), 8.3
+     short names (`PROGRA~1`), and NTFS alternate data streams
+     (`file.txt::$DATA`) could alias a real filesystem location the string
+     comparison never recognizes as matching (or not matching) a configured
+     root. Lower practical likelihood on this single-user local machine, but
+     a real theoretical gap given the deliberately I/O-free design.
+- why open: closing either fully needs real filesystem resolution
+  (`fs.realpathSync` or equivalent), which is I/O — meaning either the
+  "pure" module gains I/O (a design change, not a quick fix) or
+  canonicalization moves to the I/O layer (kernel/guardhook.mjs) before
+  `decide()` is ever called. Both are real architecture decisions, not
+  something to bolt on inside this ledger sweep.
+- done when: a decision is made and recorded on where canonicalization
+  belongs (guard.mjs directly, or resolved upstream in guardhook.mjs before
+  the payload reaches decide()), then either implemented with tests proving
+  a symlink/UNC/ADS bypass attempt is denied, or explicitly accepted as a
+  documented ceiling alongside the module's existing Bash/WebSearch ceiling
+  notes.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03

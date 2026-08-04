@@ -146,3 +146,34 @@ test("a contract with no pinnedPaths field at all is tolerated", () => {
   delete c.contract.pinnedPaths;
   assert.equal(decide(ev("Write", { file_path: "C:/work/src/a.js" }), c).allow, true);
 });
+
+// --- OI-019 scenario-enumeration pass (2026-08-04): adversarial path input --
+// Found live: a file_path with ".." segments textually starts with an
+// allowed writeRoot while resolving elsewhere once the OS honors the ".."s -
+// a real bypass of the deny-by-default boundary (alwaysDeny/denyRoots
+// included), not a hypothetical.
+
+test("a '..'-traversal path that textually starts with an allowed writeRoot but resolves into denyRoots is still denied", () => {
+  const d = decide(ev("Write", { file_path: "C:/work/src/../../code/guards/policy.json" }), ctx());
+  assert.equal(d.allow, false, "must not be allowed just because the raw string starts with an allowed writeRoot");
+  assert.equal(d.rule, "alwaysDeny");
+  assert.equal(d.target, "c:/code/guards/policy.json", "target must be the RESOLVED path, not the raw traversal string");
+});
+
+test("a '..'-traversal read path resolving outside every granted root is denied, not matched by accident", () => {
+  const d = decide(ev("Read", { file_path: "C:/work/src/../../elsewhere/secret.txt" }), ctx());
+  assert.equal(d.allow, false);
+  assert.equal(d.target, "c:/elsewhere/secret.txt");
+});
+
+test("a '..'-traversal path that resolves BACK inside an allowed root is allowed (normalization is not itself a deny)", () => {
+  const d = decide(ev("Write", { file_path: "C:/work/src/sub/../a.js" }), ctx());
+  assert.equal(d.allow, true);
+  assert.equal(d.target, "c:/work/src/a.js");
+});
+
+test("a mixed-separator traversal path (backslash and forward-slash) is normalized before the deny check, not bypassed by slash style", () => {
+  const d = decide(ev("Write", { file_path: "C:\\work\\src\\..\\..\\code\\guards\\policy.json" }), ctx());
+  assert.equal(d.allow, false);
+  assert.equal(d.rule, "alwaysDeny");
+});
