@@ -424,15 +424,16 @@ test("integration: a hung run is killed PROMPTLY at its timeout, not merely even
   assert.ok(elapsed < 5000, `kill took ${elapsed}ms — the process was orphaned, not killed (see killTree)`);
   // Direct proof, not just timing: the fake binary's own pid (written before
   // it ever blocks on the hang timer) must actually be dead, not merely
-  // detached from our stdio pipes. POSIX only — cannot verify taskkill /t
-  // from this sandbox (OI-014, Kyle's machine confirms the Windows branch).
-  if (process.platform !== "win32") {
-    await new Promise((res) => setTimeout(res, 300));
-    const pid = Number(fs.readFileSync(path.join(dir, "pid.txt"), "utf8"));
-    let alive = true;
-    try { process.kill(pid, 0); } catch { alive = false; }
-    assert.equal(alive, false, `fake claude pid ${pid} is still alive — orphaned, not killed`);
-  }
+  // detached from our stdio pipes. process.kill(pid, 0) is a liveness probe
+  // on every platform Node supports (throws ESRCH once the pid is gone), so
+  // this runs on Windows too (OI-014) — proving killTreeWin32's real
+  // `taskkill /pid <pid> /t /f` actually kills the fake claude's process
+  // tree, not just detaches from it, on the windows-integration CI job.
+  await new Promise((res) => setTimeout(res, 300));
+  const pid = Number(fs.readFileSync(path.join(dir, "pid.txt"), "utf8"));
+  let alive = true;
+  try { process.kill(pid, 0); } catch { alive = false; }
+  assert.equal(alive, false, `fake claude pid ${pid} is still alive — orphaned, not killed`);
 });
 
 test("integration: runOnce retries a transport failure through the real lane and recovers", async () => {
