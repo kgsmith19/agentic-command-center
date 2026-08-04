@@ -9,6 +9,13 @@
 // Documented ceilings, honestly: an ALLOWED Bash command can still do
 // something unintended inside its allowance, and WebSearch has no host to
 // scope. This is a deterministic process-level boundary, not an OS sandbox.
+// OI-027 (accepted 2026-08-04): path checks are string-based, not real OS
+// canonicalization — a symlink inside an allowed writeRoot pointing outside
+// it, or an exotic Windows path form (UNC, 8.3 short names, NTFS alternate
+// data streams), could alias a location the string comparison can't see.
+// Closing either needs fs.realpathSync (real I/O), which this module
+// deliberately does not do (see line 1) — accepted as a ceiling rather than
+// changing that design, same as the Bash/WebSearch ceilings above.
 import path from "node:path";
 
 const WRITE_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);

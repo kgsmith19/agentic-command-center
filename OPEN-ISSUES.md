@@ -218,40 +218,6 @@ line under `## Resolved`.
   satisfied the launch cap being live is sufficient credit per the plan's
   own verification step.
 
-## OI-027 kernel/guard.mjs's path checks are string-based, not real filesystem canonicalization — two residual bypass classes
-- opened: 2026-08-04 (surfaced by /security-review-kgs during the OI-019
-  guard.mjs scenario-enumeration pass, after fixing the `..`-traversal bypass
-  that pass found — see OI-019's entry and the fix in kernel/guard.mjs)
-- where: kernel/guard.mjs `norm()`/`under()`/`underAny()`
-- what: `norm()` now collapses `.`/`..` segments (OI-019's fix), but it is
-  still pure string manipulation, not real OS-level path canonicalization —
-  by design, per the module's own header ("Pure: ... All I/O lives in
-  kernel/guardhook.mjs"). Two classes of bypass this cannot see:
-  1. **Symlinks**: a symlink created inside an allowed `writeRoots` entry,
-     pointing outside every granted root, would let a write "under" the
-     symlink land wherever the symlink actually points once the OS resolves
-     it — guard.mjs has no way to know the symlink exists. Requires a
-     precursor write capability to create the symlink in the first place
-     (not exploitable from a single decide() call in isolation).
-  2. **Exotic Windows path forms**: UNC paths (`\\server\share\..`), 8.3
-     short names (`PROGRA~1`), and NTFS alternate data streams
-     (`file.txt::$DATA`) could alias a real filesystem location the string
-     comparison never recognizes as matching (or not matching) a configured
-     root. Lower practical likelihood on this single-user local machine, but
-     a real theoretical gap given the deliberately I/O-free design.
-- why open: closing either fully needs real filesystem resolution
-  (`fs.realpathSync` or equivalent), which is I/O — meaning either the
-  "pure" module gains I/O (a design change, not a quick fix) or
-  canonicalization moves to the I/O layer (kernel/guardhook.mjs) before
-  `decide()` is ever called. Both are real architecture decisions, not
-  something to bolt on inside this ledger sweep.
-- done when: a decision is made and recorded on where canonicalization
-  belongs (guard.mjs directly, or resolved upstream in guardhook.mjs before
-  the payload reaches decide()), then either implemented with tests proving
-  a symlink/UNC/ADS bypass attempt is denied, or explicitly accepted as a
-  documented ceiling alongside the module's existing Bash/WebSearch ceiling
-  notes.
-
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
 - where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart
@@ -276,6 +242,18 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-027 [RESOLVED 2026-08-04, accepted ceiling] kernel/guard.mjs's path checks are string-based, not real filesystem canonicalization
+- opened: 2026-08-04, resolved: 2026-08-04 via the decision its own
+  done-when explicitly allowed — accepted as a documented ceiling rather
+  than changed. Two residual bypass classes (a symlink inside an allowed
+  writeRoot pointing outside it; exotic Windows path forms — UNC, 8.3 short
+  names, NTFS alternate data streams) both require real OS-level path
+  resolution (`fs.realpathSync`, actual I/O) to close, which conflicts with
+  guard.mjs's deliberate "pure, no I/O" design (stated in its own header).
+  Recorded directly in kernel/guard.mjs's header comment, alongside its
+  pre-existing Bash/WebSearch ceiling notes, so the limitation stays visible
+  in the file itself, not just the ledger.
 
 ## OI-028 [RESOLVED 2026-08-04] kernel/guardhook.mjs's stdin reader had no size cap, only a time cap
 - opened: 2026-08-04, resolved: 2026-08-04 — added `STDIN_MAX_BYTES` (default
