@@ -215,6 +215,19 @@ branches (a trailing `return` and a bounded loop condition that could never
 be false) which covgate's own branch floor caught and forced a real fix
 rather than a manufactured test.
 
+## Worktrees — isolating large parallel work
+
+Kyle, 2026-08-04: worktrees are approved standing guidance for large,
+independent chunks of work — no prior rule here forbade them, this section
+just makes the approval explicit and discoverable. Use `git worktree add`
+(sibling directory, not nested inside this repo) to isolate a chunk from the
+main working tree, do the full implement-test-verify cycle there on its own
+branch, then merge back into `main` once its own fast tier + `covgate` are
+green. Don't reach for a worktree by default — one isolated tree per small
+fix is bloat; it earns its keep when two or more chunks would otherwise
+collide on the same files/branch at once, or a chunk is large enough that
+keeping the main tree clean for other work matters.
+
 ## Goals — how a session survives its own context limit
 
 A **goal** is a piece of work that outlives the session doing it. The GUI's GO
