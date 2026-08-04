@@ -92,9 +92,9 @@
                                }
                  },
     "autoCd":  {
-                   "enabled":  false,
+                   "enabled":  true,
                    "clearOnRescope":  true,
-                   "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing. Set false 2026-08-04 (Kyle, guards OI-029) after repeated real prompts got blocked/eaten by stalled rescope cycles -- re-enable once OI-003's real-token verification confirms the replay actually lands."
+                   "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing. Set false 2026-08-04 (Kyle, guards OI-029) after repeated real prompts got blocked/eaten by stalled rescope cycles. Re-enabled 2026-08-04 (closing OI-029) now that OI-003 is RESOLVED: the root cause (clearbot's non-clear /cd settle delay, 1200ms hardcoded, too short) is fixed via the shared tui.readySettleMs dial above, real-token-verified (`node e2e/loop.e2e.mjs --only 4` PASS, cwd moved as expected). Watch for a recurrence before trusting this long-term."
                },
     "tui":  {
                 "readySettleMs":  4000,
