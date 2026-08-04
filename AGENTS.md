@@ -67,6 +67,17 @@ Rules for scripts:
   are run deliberately. Auto-approve's directory order guarantee can cancel
   conflicting scripts (`install` + `uninstall` in the same folder), making
   the net effect undefined.
+- **If the operation needs Windows-level elevation, the script should
+  self-elevate, not fail and wait.** Kyle, 2026-08-04 (guards OI-025): the
+  user typing `/approve` or `/approve-kgs` IS the authorization for whatever
+  the script's leading comment says it does, including elevated work — that
+  is the entire point of the runbox handoff, not something to route around
+  it for. A script that needs admin rights (e.g. `Register-ScheduledTask`)
+  should check `[Security.Principal.WindowsPrincipal]` and, if not already
+  elevated, relaunch itself once via `Start-Process -Verb RunAs -Wait
+  -PassThru` and propagate the child's exit code — this pops a real UAC
+  prompt on Kyle's own desktop, which is his moment-of-use confirmation, not
+  a bypass. See `runbox/install-claude-cap-gate.ps1` for the pattern.
 
 Lifecycle (engine-owned):
 - `run <name | label:name>` executes a script with the project folder as cwd.

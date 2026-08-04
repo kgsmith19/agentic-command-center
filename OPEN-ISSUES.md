@@ -193,10 +193,27 @@ line under `## Resolved`.
   this entry's own done-when (a live, running watcher) is satisfied.
   Per the plan's own instruction, `e2e/loop.e2e.mjs` (real tokens) is not
   run as part of this — Kyle's call on timing.
-- done when: Kyle runs `/approve-kgs` on the runbox install script, then
-  either `node e2e/loop.e2e.mjs` is re-run and scenarios 1-5 pass, or he's
-  satisfied the launch cap being live is sufficient credit per the plan's
-  own verification step.
+  UPDATE 2026-08-04: Kyle ran `/approve-kgs`. First attempt hit a NEW,
+  different blocker than the TimeSpan bug: `Register-ScheduledTask` failed
+  non-elevated with "Access is denied" — a real Windows permission wall, not
+  a script bug. Per Kyle's explicit direction ("the entire point of the
+  runbox stuff is to alter the script so that when I approve they have the
+  correct permissions... this is not a workaround, it's me confirming and
+  approving behavior"), `install-claude-cap-gate.ps1` was updated to
+  self-elevate via `Start-Process -Verb RunAs` when not already running as
+  Administrator, since `/approve-kgs` IS the authorization to do so. Re-run
+  triggered a real UAC prompt, Kyle accepted it, script completed. Verified
+  live, not just a clean exit code: `Get-ScheduledTask -TaskName
+  'ACC-ClaudeCapWatch'` returns state `Ready`, and the PATH shim is
+  confirmed present (`[Environment]::GetEnvironmentVariable('Path','User')`
+  includes `C:\code\guards\shim`). Standing pattern worth reusing: a runbox
+  script that needs elevated rights should self-elevate on
+  `/approve-kgs`, not fail and wait for Kyle to notice.
+- done when: Kyle runs `/approve-kgs` on the runbox install script — DONE,
+  both halves (PATH shim + Scheduled Task) confirmed live. Remaining, his
+  call per the original plan: either `node e2e/loop.e2e.mjs` is re-run and
+  scenarios 1-5 pass, or he's satisfied the launch cap being live end-to-end
+  is sufficient credit.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
