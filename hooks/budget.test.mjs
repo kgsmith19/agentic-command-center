@@ -115,8 +115,26 @@ function runStop(sb, { sid, transcript, active, profile }) {
   });
 }
 
+// Imported ONCE, without a cachebusting query. Re-importing it per test used
+// to be necessary (goal.mjs resolved its store at module load) and is now
+// actively harmful: node reports one instance per file, so this file's sparse
+// instances could clobber goal.test.mjs's full one in the merged coverage
+// report and fail covgate at random (OI-022).
+const goalMod = await import("./goal.mjs");
+
 const clearReq = (sb, sid) => path.join(sb.root, "runner", "clear-requests", `${sid}.json`);
 const statePath = (sb, sid, suffix) => path.join(sb.root, "runner", "state", `${sid}.${suffix}`);
+
+// Session ids for the tests that bind a GOAL (or drive a real SessionStart
+// payload) are UUID-shaped on purpose: bindSession only adopts UUID-shaped
+// ids since OI-006. The short mnemonic ids elsewhere in this file never reach
+// bindSession — they are only filenames for transcripts and state records —
+// so they stay readable. If a new test here binds a goal, it needs one of
+// these shapes, not "s-whatever".
+const SID_GOAL = "b0d9e7a1-0001-4000-8000-00000000c0a1";
+const SID_LIVE_MACHINE = "b0d9e7a1-0002-4000-8000-00000000c0a2";
+const SID_LIVE_HUMAN = "b0d9e7a1-0003-4000-8000-00000000c0a3";
+const SID_PTY = "b0d9e7a1-0004-4000-8000-00000000c0a4";
 
 test("over hard, no latch: blocks once to force the checkpoint", () => {
   const sb = sandbox();
@@ -142,15 +160,16 @@ test("latched + stop_hook_active: clear request still fires (the OI-011 deadlock
 
 test("further over-budget stops re-request the clear; the goal cycle is one-shot", async () => {
   const sb = sandbox();
-  const sid = "s-goal";
+  const sid = SID_GOAL;
   seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
 
   // Seed a goal in the sandbox tree and bind this session to it, the same way
-  // SessionStart would. goal.mjs resolves its store from ACC_ROOT at import.
+  // SessionStart would. goal.mjs resolves its store per call, so redirecting
+  // the env is enough and the module is imported once (see goalMod above).
   process.env.ACC_ROOT = sb.root;
   process.env.ACC_GOALS_DIR = "";
-  const gm = await import(`./goal.mjs?t=budget-${Math.floor(Math.random() * 1e9)}`);
+  const gm = goalMod;
   const g = gm.createGoal({ text: "finish the thing", cwd: sb.root });
   gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
 
@@ -217,7 +236,7 @@ function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
 async function seedGoal(sb, sid) {
   process.env.ACC_ROOT = sb.root;
   process.env.ACC_GOALS_DIR = "";
-  const gm = await import(`./goal.mjs?t=live-${Math.floor(Math.random() * 1e9)}`);
+  const gm = goalMod;
   const g = gm.createGoal({ text: "keep going", cwd: sb.root });
   gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
   gm.markKicked(g.id); // a kick already fired; needsKick is false
@@ -226,7 +245,7 @@ async function seedGoal(sb, sid) {
 
 test("under budget with an active goal: the turn end re-arms the kick", async () => {
   const sb = sandbox();
-  const sid = "s-live-machine";
+  const sid = SID_LIVE_MACHINE;
   const { gm, g } = await seedGoal(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC goal.");
 
@@ -241,7 +260,7 @@ test("under budget with an active goal: the turn end re-arms the kick", async ()
 
 test("a human-prompted turn end is classified as human", async () => {
   const sb = sandbox();
-  const sid = "s-live-human";
+  const sid = SID_LIVE_HUMAN;
   const { gm, g } = await seedGoal(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
 
@@ -331,7 +350,7 @@ test("no goal: an under-budget stop still does nothing at all", () => {
 // (the claude process, which survives /clear; here, this test process).
 test("SessionStart with ACC_PTY records a pty window bound to the parent pid", () => {
   const sb = sandbox({ autoClear: { enabled: false } });
-  const sid = "sid-pty";
+  const sid = SID_PTY;
   execFileSync("node", [HOOK], {
     input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
     env: {

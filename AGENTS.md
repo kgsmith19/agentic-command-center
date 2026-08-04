@@ -125,7 +125,9 @@ node e2e/loop.e2e.mjs [--only N]
        behind by — every other automated launch on the machine.
 powershell -File gui/ptyhost.test.ps1
     -> INTEGRATION. Acc.PtyHost against a real cmd.exe on a ConPTY - pipe
-       protocol accepts/refuses, dispose kills the child. No claude, no GUI.
+       protocol accepts/refuses (TEXT and TEXTB64, including a two-line
+       payload that must EXECUTE both lines), dispose kills the child. No
+       claude, no GUI. Hermetic and free: CI runs it on windows-latest.
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
 powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
 ```
@@ -160,6 +162,32 @@ bypass the lane on purpose** — a human must never queue behind a 3-hour
 runner hold. Never spawn a real claude from automation without the lane.
 Tests: `node --test hooks/lane.test.mjs` (14).
 
+### A hang is bounded whether or not the harness ever says anything (OI-021)
+
+The obvious worry about running claude from automation is the silent failure:
+the upstream API is overloaded, the CLI stops making progress, and it never
+prints an error anyone could react to. Nothing in this repo watches for that,
+and nothing needs to — **no timeout decision anywhere reads the harness's own
+error reporting.**
+
+`runClaudeOnce` (`runner/runner.mjs`) arms a `setTimeout` for
+`job.runTimeoutMin` at spawn and calls `killTree(child)` when it fires. That
+timer is wall-clock only: it never inspects stdout, stderr, or an exit code,
+so a CLI wedged on an overloaded API is not a case it has to recognise — it is
+indistinguishable from every other hang, and bounded by exactly the same
+ceiling. `retryTransport` is the deliberate complement: it retries only
+failures a harness DID report and classified as transport (econnreset/429/5xx),
+because those are the ones where retrying is the right answer. The two cover
+different halves, and the wall-clock half needs no cooperation from the thing
+it is bounding.
+
+The proof is `runner/runner.test.mjs`'s "a hung run is killed PROMPTLY at its
+timeout" — a fake claude that writes its pid, then blocks for 15s and reports
+nothing at all, which is structurally the silent-overload case. It asserts
+both the timing and, since 2026-08-04 on every platform, that the process is
+genuinely dead (OI-014). A harness that reports nothing is the case that test
+runs by construction; there is no reporting path for it to depend on.
+
 ## Testing doctrine — the contract every implementation carries
 
 `hooks/testplan.mjs` (UserPromptSubmit, advisory like route.mjs — blocking
@@ -177,6 +205,15 @@ floors — lines 100 / functions 100 / branches 90 — three floors because line
 coverage alone lies (a never-called function still shows covered declaration
 lines). Coverage is a floor, not the goal: assert observable behavior, one
 behavior per test, no sleeps outside the lane's own pacing.
+**A suite must not re-import its own subject per test** (`import("./x.mjs?t=N")`):
+node reports ONE module instance per file rather than the union across them, so
+a cachebusting suite has its coverage read off whichever instance loaded last
+and can report functions as untested that provably ran (OI-022 — it reported
+`createGoal` uncovered in a run that called it dozens of times, and ADDING 21
+real tests to `goal.test.mjs` lowered the number from 65% to 50%). If a module
+needs redirecting for a sandbox, it resolves its paths PER CALL, not at module
+load — that is why `goal.mjs`'s `GOALS` is a function. A suite that cachebusts
+its import is not measuring itself.
 Tests: `node --test hooks/testplan.test.mjs` (11), `hooks/covgate.test.mjs` (14),
 `runner/runner.test.mjs` (39, closes OI-013 — the first hermetic suite for
 runner.mjs, built via an in-process spawn seam and a fake `claude` binary on
@@ -214,9 +251,23 @@ Two decisions carry the whole design:
 button spawns claude via `Acc.PtyHost` (gui/PtyHost.cs), renders it in an
 xterm.js/WebView2 Terminal tab, and records a `transport:"pty"` window with a
 pipe name (`hooks/budget.mjs`, env `ACC_PTY`). clearbot then drives the session
-with pipe writes (`TEXT`/`SUBMIT`/`ESC` — guaranteed Enter) instead of
+with pipe writes (`TEXT`/`TEXTB64`/`SUBMIT`/`ESC` — guaranteed Enter) instead of
 keystroke injection; `sendconsole.ps1` remains the transport for external
-sessions and the fallback when the pipe is dead. Without the WebView2 runtime
+sessions and the fallback when the pipe is dead.
+
+The wire is line-based (`ReadLine`/`WriteLine`), so a payload containing a real
+newline would truncate the request itself, not merely fail the content check —
+which is why multi-line text travels base64'd as **`TEXTB64`** (OI-010) rather
+than as a relaxed `TEXT`. Its content policy is `TEXT`'s with one exception:
+`\n` is allowed as the line separator, and `PtyHost` converts it to `\r` on the
+way to the console, because a carriage return is what the Enter key actually
+transmits and is what `SUBMIT` already writes. `Send-MultilineKeys`
+(`watcher/clearbot.ps1`) is the sender. It has **no keystroke fallback on
+purpose** — `sendconsole.ps1` refuses multi-line text outright, so a pty-less
+console gets an honest `ok=$false` instead of a silent single-line
+approximation. Nothing calls it yet: it exists so a multi-line replay HAS a
+transport, and whether clearbot should ever auto-replay one is an invariant-1
+question that is deliberately still open. Without the WebView2 runtime
 the Go button falls back to the legacy `cmd /k claude` console launch.
 
 State: `runner\goals\<id>.json` plus a running `<id>.log.md`, archived to

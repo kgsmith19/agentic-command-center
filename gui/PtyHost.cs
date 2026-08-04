@@ -168,8 +168,13 @@ namespace Acc
             ResizePseudoConsole(_hPC, size);
         }
 
-        // Line protocol on \\.\pipe\<name>: "TEXT <payload>" | "SUBMIT" | "ESC".
+        // Line protocol on \\.\pipe\<name>:
+        //   "TEXT <payload>" | "TEXTB64 <base64>" | "SUBMIT" | "ESC".
         // One request per connection; reply "OK" or "FAIL <reason>".
+        // The framing is strictly line-based (ReadLine/WriteLine), which is why
+        // multi-line payloads need TEXTB64 and not a relaxed TEXT: a raw newline
+        // in a TEXT payload would not merely fail the content check, it would
+        // truncate the wire message itself (OI-010).
         public void ServePipe(string pipeName)
         {
             Thread t = new Thread(delegate ()
@@ -203,6 +208,40 @@ namespace Acc
             if (line == null) return "FAIL empty";
             if (line == "SUBMIT") { WriteText("\r"); return "OK"; }
             if (line == "ESC") { WriteText("\x1b"); return "OK"; }
+            if (line.StartsWith("TEXTB64 ", StringComparison.Ordinal))
+            {
+                string b64 = line.Substring(8);
+                // Bound the ENCODED form first, so an oversized request costs a
+                // length check rather than the allocation. The bound has to
+                // allow for the worst case rather than assuming one byte per
+                // char: 2100 chars of astral-plane UTF-8 is 8400 bytes, which
+                // is 11200 base64 chars, so anything tighter would refuse a
+                // legal non-ASCII payload and blame its length for it. The
+                // decoded length check below is the real limit; this one only
+                // stops an unbounded allocation.
+                if (b64.Length > 12288) return "FAIL unsafe TEXTB64: exceeds 2100 chars";
+                string payload;
+                try { payload = Encoding.UTF8.GetString(Convert.FromBase64String(b64)); }
+                catch (Exception) { return "FAIL unsafe TEXTB64: not valid base64"; }
+                // Same content policy as TEXT with exactly one exception: \n is
+                // the intentional line separator. \r stays refused — the sender
+                // says what it means with \n and this method decides what the
+                // console receives, so a payload carrying its own carriage
+                // returns is malformed, not merely redundant.
+                foreach (char c in payload)
+                    if (c != '\n' && (c < 0x20 || c == 0x7f)) return "FAIL unsafe TEXTB64: control characters";
+                if (payload.Length > 2100) return "FAIL unsafe TEXTB64: exceeds 2100 chars";
+                // \n -> \r on the way out. A terminal's Enter key transmits a
+                // carriage return, which is precisely what SUBMIT writes and
+                // what this console is already proven to accept; LF is the
+                // portable convention for the wire, not for a tty. Writing the
+                // whole thing in one WriteText keeps the existing timing
+                // contract intact: a fast batch write reads as a paste, and a
+                // separately-timed SUBMIT afterward is what registers as a
+                // real Enter.
+                WriteText(payload.Replace("\n", "\r"));
+                return "OK";
+            }
             if (line.StartsWith("TEXT ", StringComparison.Ordinal))
             {
                 string payload = line.Substring(5);

@@ -368,21 +368,27 @@ test("laneStatusAll() reports both categories plus breaker state in one call", a
 
 // ================================================================= jitter
 test("retry backoff is full jitter — delay can land anywhere from 0 up to the exponential ceiling, not just the top half", async () => {
-  setPolicy({ slots: 1, minGapMs: 0, retries: 6, backoffBaseMs: 1000, backoffCapMs: 1000, pollMs: 20 });
+  setPolicy({ slots: 1, minGapMs: 0, retries: 20, backoffBaseMs: 1000, backoffCapMs: 1000, pollMs: 20 });
   const delays = [];
   let calls = 0;
   await retryTransport("jitter-spread", async () => {
     calls++;
     if (calls > 1) delays.push(Date.now() - delays._last);
     delays._last = Date.now();
-    return calls <= 5 ? { code: 1, err: "econnreset" } : { code: 0 };
+    // retries:20 -> 21 attempts; 20 failures then success = exactly 20 delays.
+    return calls <= 20 ? { code: 1, err: "econnreset" } : { code: 0 };
   });
   // With base=1000, cap=1000, every ceiling is 1000ms — full jitter means
   // U(0, 1000). Equal jitter (the old formula) never goes below 500. At
-  // least one of 4 samples landing under 400ms is what distinguishes them;
-  // this is probabilistic but the odds of ALL 4 landing >=500 under true
-  // full jitter are (0.5)^4 ~= 6% — acceptable flake budget for what this
-  // proves (nobody can accidentally revert to equal jitter unnoticed).
+  // least one sample landing under 400ms is what distinguishes them; this is
+  // probabilistic, so the sample count is what sets the false-failure rate.
+  // It was 4 samples ((0.5)^4 ~= 6%, and that 6% was observed firing for
+  // real, twice) — 20 samples proves exactly the same thing at (0.5)^20
+  // ~= 0.0001%, which is no longer a flake budget anyone has to live with.
+  // Assert the sample count too: the false-failure rate above is a claim
+  // about how many draws this test takes, so a future edit that quietly
+  // shrinks it should fail here rather than restore the old flake silently.
+  assert.equal(delays.length, 20, `expected 20 jitter samples, got ${delays.length}`);
   assert.ok(delays.some((d) => d < 400), `expected at least one sub-400ms delay under full jitter, got: ${delays.join(",")}`);
   setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
 });

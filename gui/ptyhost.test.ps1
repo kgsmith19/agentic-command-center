@@ -70,6 +70,45 @@ try {
     Check 'unknown op refused'   ((Send-Pipe $pipe 'BOGUS') -like 'FAIL*')
     Check 'ESC accepted'         ((Send-Pipe $pipe 'ESC') -eq 'OK')
 
+    # OI-010: the same promise as PTYPROOF-73 above, but for a payload the
+    # line-based wire protocol cannot carry as TEXT at all. Two lines joined by
+    # \n, base64'd; PtyHost converts \n to \r on the way to the console because
+    # a carriage return is what Enter transmits. Both lines must EXECUTE, which
+    # is what distinguishes a real multi-line submit from one long typed line.
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("echo PTYPROOF-A`necho PTYPROOF-B"))
+    Check 'TEXTB64 accepted' ((Send-Pipe $pipe ('TEXTB64 ' + $b64)) -eq 'OK')
+    Start-Sleep -Milliseconds 80
+    Check 'TEXTB64 SUBMIT accepted' ((Send-Pipe $pipe 'SUBMIT') -eq 'OK')
+    $deadline = (Get-Date).AddSeconds(10); $both = $false
+    while ((Get-Date) -lt $deadline -and -not $both) {
+        Start-Sleep -Milliseconds 250
+        # Same >=2 rule as PTYPROOF-73 and for the same reason: cmd echoes the
+        # typed line and then prints the output, so >=2 of EACH marker proves
+        # both lines were submitted, not merely typed.
+        $snap = $pty.Snapshot()
+        $both = ([regex]::Matches($snap, 'PTYPROOF-A').Count -ge 2) -and ([regex]::Matches($snap, 'PTYPROOF-B').Count -ge 2)
+    }
+    Check 'both TEXTB64 lines executed' $both
+
+    Check 'TEXTB64 bad base64 refused' ((Send-Pipe $pipe 'TEXTB64 not!base64') -like 'FAIL*')
+    # \r is refused even though \n is allowed: the sender declares intent with
+    # \n and PtyHost decides what reaches the console.
+    Check 'TEXTB64 carriage return refused' `
+        ((Send-Pipe $pipe ('TEXTB64 ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("a`r`nb")))) -like 'FAIL*')
+    Check 'TEXTB64 control char refused' `
+        ((Send-Pipe $pipe ('TEXTB64 ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("a`tb")))) -like 'FAIL*')
+    Check 'TEXTB64 over-length refused' `
+        ((Send-Pipe $pipe ('TEXTB64 ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('x' * 2101)))) -like 'FAIL*')
+    # The length limit is on DECODED CHARS, not encoded bytes. A payload of
+    # multi-byte characters encodes to several times its char count, so a bound
+    # applied to the base64 string would refuse a legal payload and blame its
+    # length — this is the case that catches that mistake. Accepted, not
+    # executed: what matters is the verdict, and cmd.exe's codepage makes
+    # rendering a poor thing to assert on.
+    Check 'TEXTB64 multi-byte payload under the char limit accepted' `
+        ((Send-Pipe $pipe ('TEXTB64 ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]([char]0x4E2D) * 2000)))) -eq 'OK')
+    [void](Send-Pipe $pipe 'ESC')   # discard it rather than leave it on the line
+
     $pty.Resize(100, 40)   # must not throw
     $cpid = $pty.ChildPid
     $pty.Dispose()

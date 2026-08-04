@@ -137,8 +137,8 @@ function Get-TermPipe([int]$ConsolePid) {
     return $null
 }
 
-# Ops entries: 'ESC', 'SUBMIT', or 'TEXT <payload>'. One op per connection,
-# matching the server. The server enforces the same refusals as
+# Ops entries: 'ESC', 'SUBMIT', 'TEXT <payload>', or 'TEXTB64 <base64>'. One op
+# per connection, matching the server. The server enforces the same refusals as
 # sendconsole.ps1 (control chars, length); content policy stays here.
 function Send-Pipe([string]$PipeName, [string[]]$Ops) {
     foreach ($op in $Ops) {
@@ -154,7 +154,9 @@ function Send-Pipe([string]$PipeName, [string[]]$Ops) {
         } catch { return @{ ok = $false; out = "$op -> $($_.Exception.Message)" } }
         # The paste heuristic is exactly what broke injection: give the TUI a
         # beat between the text and the Enter so the CR is its own keypress.
-        if ($op -like 'TEXT *') { Start-Sleep -Milliseconds 80 }
+        # TEXTB64 needs it for the same reason and more so — its payload
+        # already contains carriage returns of its own (OI-010).
+        if ($op -like 'TEXT *' -or $op -like 'TEXTB64 *') { Start-Sleep -Milliseconds 80 }
     }
     return @{ ok = $true; out = 'OK' }
 }
@@ -174,6 +176,36 @@ function Send-Keys($cpid, [string]$text, [switch]$ClearLineFirst) {
     if ($ClearLineFirst) { $a += '-ClearLineFirst' }
     $out = & powershell @a 2>&1 | Out-String
     return @{ ok = ($out -match 'OK wrote='); out = $out.Trim() }
+}
+
+# Multi-line sibling of Send-Keys (OI-010). The wire protocol is line-based, so
+# a payload with real newlines has to travel base64'd as TEXTB64 or it would
+# truncate the request itself; PtyHost turns the \n separators into carriage
+# returns, since that is what Enter transmits.
+#
+# There is NO keystroke fallback on purpose: sendconsole.ps1 refuses multi-line
+# text outright, so a pty-less console has nowhere for this to go. The caller
+# gets ok=$false naming that, rather than a silent single-line approximation of
+# what it asked for.
+#
+# Nothing calls this yet. It exists so a multi-line replay HAS a transport;
+# whether clearbot should ever auto-replay a multi-line prompt is an invariant-1
+# question this does not answer, and Invoke-Cd's replay wiring is deliberately
+# left on Send-Keys/Test-Replayable.
+function Send-MultilineKeys($cpid, [string[]]$lines, [switch]$ClearLineFirst) {
+    $pipe = Get-TermPipe $cpid
+    if (-not $pipe) {
+        return @{ ok = $false; out = 'no pty pipe for this console - multi-line has no keystroke fallback' }
+    }
+    $text = ($lines -join "`n")
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($text))
+    $ops = @()
+    if ($ClearLineFirst) { $ops += 'ESC' }
+    $ops += ('TEXTB64 ' + $b64)
+    $ops += 'SUBMIT'
+    $r = Send-Pipe $pipe $ops
+    if ($r.ok) { return @{ ok = $true; out = "pty OK pipe=$pipe lines=$($lines.Count)" } }
+    return @{ ok = $false; out = $r.out }
 }
 
 # invariant 1e: the only non-text injection. One Esc, nothing else.
@@ -217,8 +249,18 @@ function Invoke-Cd($req) {
     if ($req.clear) {
         $r = Send-Keys $cpid $KEYS -ClearLineFirst
         if (-not $r.ok) { Log "ABORT cd $($req.sessionId): clear failed -> $($r.out)"; return $false }
-        Start-Sleep -Milliseconds 1200
     }
+
+    # OI-003: this settle used to live inside the clear branch, so a
+    # clear=$false request typed /cd with no delay at all — and that is the
+    # shape that was observed failing twice (clearbot.log 10:45:37
+    # `CD dde31bdb -> C:\code clear=False`, cwd unchanged). A cd request
+    # arrives when a session is FRESH, and a fresh session's REPL is not
+    # necessarily ready to receive a slash command the instant the process
+    # exists: a later repro logged the CD at :55 and the goal only actually
+    # becoming ready at :59. Typing into a TUI that is not listening yet is
+    # indistinguishable, afterwards, from typing nothing. Both paths wait.
+    Start-Sleep -Milliseconds 1200
 
     $r = Send-Keys $cpid "/cd $dest" -ClearLineFirst
     if (-not $r.ok) { Log "ABORT cd $($req.sessionId): /cd failed -> $($r.out)"; return $false }

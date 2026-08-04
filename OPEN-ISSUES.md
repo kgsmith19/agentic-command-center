@@ -33,10 +33,22 @@ line under `## Resolved`.
   designed escape hatch, so no deny-loop, but the scope move itself failed
   twice). Suspect timing (typed while the fresh session was still starting)
   or /cd needing different input than a plain typed line.
-- why open: found in the same cycle-3 timeline reconstruction; needs the
-  throwaway-console injection rig to reproduce safely, per AGENTS.md.
+- why open: the fix has landed but is UNVERIFIED. Root cause identified
+  2026-08-04: `Invoke-Cd`'s 1200ms settle lived inside the `$req.clear`
+  branch, so a `clear=$false` request typed `/cd` with no delay at all — and
+  `hooks/route.mjs` sets `clear = midSession`, which means a `clear=$false`
+  request is BY DEFINITION a session's first scope, i.e. always the freshest
+  possible REPL. "Typed into a session that was not listening yet" and "no
+  settle" were therefore the same request every time. The settle now runs on
+  both paths (no new constant, no new dial). Verification needs a real
+  claude in a throwaway console, which is Kyle's to run, not the fast tier's.
 - done when: a clearbot-typed /cd verifiably changes the session cwd in a
   throwaway console (route verdict matches cwd on the replayed prompt).
+  `runbox/verify-oi003-cd.ps1` is that repro — run it via `/approve`, then
+  again with `-Control` (types the identical /cd with no settle, reproducing
+  the old behaviour). Fix run PASS + control run FAIL closes this. Both
+  passing means the race did not reproduce on that machine and proves
+  nothing either way; read the transcript the script prints.
 
 ## OI-005 Guard self-protection is off while the docs still claim it
 - opened: 2026-07-31 (pre-commit security review)
@@ -52,31 +64,6 @@ line under `## Resolved`.
 - done when: after the ACC goal closes, `C:/code/guards` is back in
   `protected` (ideally with `C:/code/ROUTING.md` added), or the AGENTS.md /
   clearbot wording is changed to match reality.
-
-## OI-006 Running budget.mjs SessionStart by hand hijacks the live goal binding
-- opened: 2026-07-31 (hit while verifying the heartbeat work — self-inflicted,
-  which is exactly why it is worth recording)
-- where: hooks/budget.mjs onSessionStart → hooks/goal.mjs bindSession
-- what: `bindSession` adopts an active goal by CONSOLE PID (that is the
-  mechanism that survives a /clear, and it must stay). So piping a synthetic
-  SessionStart payload into the live hook from a console that owns a goal
-  rebinds that goal to whatever `session_id` the payload carried. Observed:
-  a smoke test with `session_id:"hbtest"` moved the live goal's sessionId to
-  "hbtest" and armed a kick, which clearbot then typed into the real console.
-  The damage is silent: the real session's Stop hook can no longer find its
-  own goal (`goalForSession` misses), so cycle logging and the new turn-end
-  liveness stop working for that session.
-- why open: the obvious guard (require a UUID-shaped session id) risks
-  breaking legitimate post-clear adoption for a hazard only reachable by
-  hand-running the hook, and AGENTS.md is explicit that guards is a
-  convention enforcer, not a security boundary. Recovery is cheap and known:
-  re-run SessionStart with the true session id, then `goal.mjs kicked <id>`.
-- mitigation in place: every verification recipe in the plan (and AGENTS.md,
-  Task 11) now sets `ACC_ROOT` to a throwaway tree, so a hand-run hook cannot
-  reach live goal state.
-- done when: either a binding guard exists that cannot break legitimate
-  post-clear adoption, or hand-running hooks against live state is impossible
-  by construction.
 
 ## OI-007 External (Scheduled Task) watcher supervision needs elevation
 - opened: 2026-07-31
@@ -101,22 +88,6 @@ line under `## Resolved`.
 - done when: either the task is registered from an elevated shell, or the
   spec is amended to make in-process revive + Startup launcher the design.
 
-## OI-008 Two related runbox scripts can auto-run in an order that cancels them
-- opened: 2026-07-31
-- where: watcher/clearbot.ps1 Invoke-AutoApprove + the runbox
-- what: auto-approve runs every pending script in directory order, so shipping
-  an install script and its uninstall script together makes the net effect
-  depend on that order. Observed: `acc-watchdog-unregister.ps1` ran first and
-  reported "not registered", and had the order been reversed it would have
-  silently undone the registration seconds after it happened.
-- why open: the mechanism is working as designed (Kyle enabled auto-approve
-  deliberately); this is about how scripts are AUTHORED. Convention fix for
-  now: never leave an undo script in the runbox — undo scripts live tracked
-  under `watcher/watchdog/` and are run deliberately.
-- done when: either the convention is documented in AGENTS.md's runbox rules
-  (a `# guards: manual` marker, or "no undo scripts in the runbox"), or
-  auto-approve refuses a script whose name pairs with another pending one.
-
 ## OI-009 GUI process is a single point of failure for hosted sessions
 - opened: 2026-07-31
 - where: guards-gui.ps1 / gui/PtyHost.cs
@@ -137,10 +108,36 @@ line under `## Resolved`.
   multi-line replay payload cannot travel the pty path and drops to keystroke
   injection, which refuses it too (sendconsole multi-line refusal) — multi-line
   replays silently do not happen on any transport.
-- why open: no current caller sends multi-line replays (clearbot types only
-  closed-set constants); framing is protocol design work, not a patch.
+- why open: BUILT 2026-08-04, awaiting its first green Windows run. The op is
+  `TEXTB64 <base64>` (gui/PtyHost.cs `Handle`), sender is
+  `Send-MultilineKeys` (watcher/clearbot.ps1). Root cause was worse than the
+  content check the entry describes: the wire is line-based
+  (`ReadLine`/`WriteLine`), so a raw newline would truncate the REQUEST, not
+  just fail validation — hence base64 rather than a relaxed TEXT. Content
+  policy is TEXT's with one exception, `\n` as the separator, which PtyHost
+  converts to `\r` because a carriage return is what Enter transmits and what
+  SUBMIT already writes. That also retired the entry's one open empirical
+  question (does a bare `\n` submit on ConPTY?) rather than answering it: the
+  console never receives an LF. No keystroke fallback, deliberately —
+  sendconsole.ps1 refuses multi-line outright, so the caller gets ok=$false
+  instead of a silent single-line approximation.
 - done when: a framed multi-line op exists with the same content policy, with a
   clearbot test proving a two-line replay lands via the pipe.
+  `gui/ptyhost.test.ps1` now carries that test (two-line TEXTB64 + SUBMIT
+  against a real cmd.exe on a real ConPTY, asserting BOTH lines execute, plus
+  refusals for bad base64 / `\r` / control chars / over-length). It is
+  hermetic and free — no claude, no API — and CI's windows-latest job runs
+  it. Close this when that job is green; nothing here can run PowerShell.
+- what this widens, stated plainly (pre-commit security review 2026-08-04):
+  before TEXTB64 one pipe write could type ONE line, and submitting it needed
+  a separate SUBMIT op. A TEXTB64 write can now submit N lines by itself,
+  because every `\n` becomes a real carriage return. It does not change WHO
+  can write to the pipe — that channel is unchanged, still local, still
+  unauthenticated, and still the class OI-004 left open — only how much one
+  accepted write can do. The content policy is otherwise identical to TEXT
+  (printable only, `\r` refused, 2100 chars), and the decoded-length cap is
+  what bounds it. Worth re-reading if the pipe ever gains a remote or
+  cross-user path, because that is the assumption this rests on.
 
 ## OI-011 Re-verify guards self-protection coverage of guards/ paths
 - opened: 2026-07-31
@@ -190,11 +187,21 @@ line under `## Resolved`.
   injected-exec test confirms runner.mjs ISSUES that exact command, but no
   POSIX sandbox can confirm taskkill actually kills the tree the way the
   POSIX test confirms process-group SIGTERM does.
-- why open: needs a real Windows run to close, which this environment cannot
-  produce.
+- why open: the test gap is closed as of 2026-08-04 and now needs one green
+  Windows CI run to confirm. `runner/runner.test.mjs`'s hung-run test had its
+  `if (process.platform !== "win32")` guard removed, so the direct
+  pid-liveness proof (`process.kill(pid, 0)`, which is a real liveness probe
+  on Windows too) runs natively in CI's windows-latest job. The same change
+  turned the proof's single 300ms settle into a bounded poll: termination is
+  asynchronous on both platforms and `taskkill /t` walks a tree, so a fixed
+  sleep would have handed CI a flake instead of a proof. (Verified while
+  making the change: that 300ms genuinely raced the reap under load on Linux,
+  failing while `ps` showed no surviving process at all. 3/3 green after.)
 - done when: Kyle (or a Windows CI run) reproduces the same proof the POSIX
   test already gives — spawn a real hung `claude -p` (or a stand-in), let
   runner.mjs's timeout fire, and confirm no orphaned claude.exe survives it.
+  Close this when CI's windows-latest `npm run test:windows` step is green
+  with the guard gone.
 
 ## OI-015 guards-gui.ps1 interactive-lane wiring is unverified — this sandbox has no PowerShell at all
 - opened: 2026-08-01
@@ -241,6 +248,105 @@ line under `## Resolved`.
   actually visible and a real double-Go-press. Still open — needs Kyle.
 
 ## Resolved
+
+## OI-022 [RESOLVED 2026-08-04] node's coverage reports ONE module instance per file, so a re-importing suite's number is arbitrary
+- opened: 2026-08-04, resolved: 2026-08-04 (found while clearing covgate for OI-006)
+- where: hooks/goal.mjs store resolution, hooks/goal.test.mjs, hooks/covgate.mjs
+- what: `hooks/goal.mjs` resolved its store path at MODULE LOAD, so
+  goal.test.mjs had to re-import it under a fresh `?t=N` URL for every test to
+  point it at a sandbox. node's `--experimental-test-coverage` does not union
+  coverage across those instances — it reports one of them — so goal.mjs's
+  number was read off whichever instance happened to load last. The gate was
+  not merely pessimistic, it was ARBITRARY: it reported `createGoal` and
+  `bindSession` as never executed in a run that called both dozens of times.
+- evidence (isolated, non-root, node v22.22.2): a probe importing goal.mjs 1,
+  5 and 20 times where every instance did identical work reported an identical
+  66.08% — first suggesting the merge was fine. The decisive probe made the
+  FIRST instance do heavy work and the LAST do almost none: coverage collapsed
+  to 36.43%, with createGoal (129-163) and bindSession (180-204) listed as
+  uncovered. Nothing about the executed code changed, only which instance
+  loaded last. Adding 21 genuine tests to goal.test.mjs had, for the same
+  reason, DROPPED the reported number from 65.3% to 50.5%.
+- resolution: goal.mjs resolves `GOALS`/`ROOT` per call instead of at load, so
+  the whole suite shares one instance and the measurement means something.
+  goal.mjs went 65.3% → **lines 100% / funcs 100% / branches 94.5%**, clearing
+  the 100/100/90 floors — most of that is genuinely new tests (the CLI
+  dispatcher, appendCycle/logTail/setStatus, the fail-open paths, consoleAlive's
+  EPERM branch), not a measurement artifact, but the artifact is what had made
+  the gap invisible. Related to but distinct from OI-017: that one is node
+  under-reporting BRANCHES as the file count rises, this one is node discarding
+  whole instances.
+- the rule this leaves behind: a fast-tier suite must not re-import its subject
+  per test. If a module needs redirecting, it resolves that per call. A suite
+  that cachebusts its import is not measuring itself. (`hooks/budget.test.mjs`
+  still re-imports goal.mjs twice; harmless, because budget.test.mjs gates
+  budget.mjs, which it drives as a subprocess.)
+
+## OI-006 [RESOLVED 2026-08-04] Running budget.mjs SessionStart by hand hijacks the live goal binding
+- opened: 2026-07-31, resolved: 2026-08-04
+- resolution: `bindSession` (hooks/goal.mjs) now only adopts a UUID-shaped
+  `sessionId`. Adoption by CONSOLE PID is untouched — it is what survives a
+  /clear and had to stay — so the guard is not "stop adopting": a non-UUID id
+  is treated exactly as if none were passed. The goal is still found, its
+  consolePid/cwd still refresh, and `sessionId`/`needsKick`/`boundAt` are left
+  alone, so the hand-run payload cannot arm a kick for clearbot to type. This
+  satisfies the entry's own first option (a guard that cannot break legitimate
+  post-clear adoption), and the feared cost does not exist: a real Claude Code
+  session id is always a UUID.
+- what the fix surfaced: several existing tests had been binding goals with
+  ids like `"s1"` and `"s-goal"` — i.e. silently exercising a path production
+  never takes. Those are now real UUID shapes in both hooks/goal.test.mjs and
+  hooks/budget.test.mjs, with a note saying why, so the suite tests the rule
+  it ships. Two regression tests added: the `"hbtest"` hijack is refused (goal
+  still found, sessionId/needsKick/boundAt unchanged, and `goalForSession`
+  still resolves for the REAL session), and an uppercase UUID still adopts and
+  still arms its kick. Verified: 22/22 hooks/goal.test.mjs, 16/16
+  hooks/budget.test.mjs.
+
+## OI-008 [RESOLVED 2026-08-04] Two related runbox scripts can auto-run in an order that cancels them
+- opened: 2026-07-31, resolved: 2026-08-04 (ledger-only — the fix already
+  shipped in 2b09f24 "docs: fix OI-005/OI-008/OI-011")
+- resolution: this entry's own first option was already satisfied and the
+  ledger just never caught up. AGENTS.md's runbox rules carry it verbatim:
+  "**Never leave undo/uninstall scripts in the runbox** (guards OI-008). Undo
+  scripts live tracked in their own directory (e.g. `watcher/watchdog/`) and
+  are run deliberately. Auto-approve's directory order guarantee can cancel
+  conflicting scripts (`install` + `uninstall` in the same folder), making the
+  net effect undefined." Re-read and confirmed present before closing. Third
+  time a resolved item has sat under `## Open` (see OI-001, OI-002) — the
+  ledger needs cross-checking against git log, not append-only trust.
+
+## OI-018 [RESOLVED 2026-08-04] lane.test.mjs's full-jitter test carries a ~6% false-failure rate by design
+- opened: 2026-08-04, resolved: 2026-08-04
+- where: hooks/lane.test.mjs, "retry backoff is full jitter"
+- what: the test drew 4 backoff samples and asserted at least one landed under
+  400ms — with base=cap=1000ms that is a coin flip per sample, and the test's
+  own comment did the math and accepted it: "(0.5)^4 ~= 6%". A documented
+  flake budget is still a flake, and it fired for real twice.
+- resolution: same assertion, same thing proven (nobody can revert to equal
+  jitter unnoticed), 20 draws instead of 4 — (0.5)^20 ~= 0.0001%. The sample
+  count is now asserted too, so a future edit that quietly shrinks it fails
+  loudly rather than restoring the flake. No production code touched;
+  lane.mjs's jitter formula is untouched. Verified green.
+
+## OI-021 [RESOLVED 2026-08-04] No explicit handling for upstream API-overload / silent harness hangs
+- opened: 2026-08-04, resolved: 2026-08-04
+- where: runner/runner.mjs runClaudeOnce, AGENTS.md
+- what: if the Anthropic API is overloaded and the CLI wedges without ever
+  printing an error, nothing in the ACC is watching for that specific failure.
+- resolution: resolves via the entry's "or" clause — documented, no new code,
+  because the guarantee already holds by construction. `runClaudeOnce` arms a
+  wall-clock `setTimeout` at spawn and calls `killTree` when it fires; that
+  decision never reads stdout, stderr, or an exit code, so a silently-wedged
+  CLI is not a case the supervisor has to RECOGNISE — it is indistinguishable
+  from any other hang and bounded by the identical ceiling. `retryTransport`
+  is the deliberate complement, covering failures the harness DID report and
+  classified as transport. AGENTS.md's launch-lane section now states this
+  explicitly ("A hang is bounded whether or not the harness ever says
+  anything") and names the existing proof: runner.test.mjs's "a hung run is
+  killed PROMPTLY at its timeout", whose fake claude blocks for 15s and
+  reports nothing at all — structurally the silent-overload case, run every
+  fast tier.
 
 ## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process
 - opened: 2026-07-31, resolved: 416e9ab "fix: stop-clearbot kill query

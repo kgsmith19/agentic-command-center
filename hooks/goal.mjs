@@ -29,9 +29,18 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT: see budget.mjs. Both must honour it or a test would split its state
 // across two trees.
-const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
-export const GOALS = process.env.ACC_GOALS_DIR || path.join(ROOT, "runner", "goals");
-const DONE = path.join(GOALS, "done");
+// Resolved per CALL, not once at module load. That is not a style preference:
+// resolving at load meant a test could only change the store by re-importing
+// the module under a fresh URL, and node's coverage reports exactly ONE
+// instance per file rather than the union across them — so a suite built on
+// per-test re-imports had its coverage read off whichever instance happened to
+// load last, reporting functions as untested that provably ran (measured
+// 2026-08-04: identical work reported 66% or 36% depending only on what the
+// LAST instance did). Same family as OI-017. Lazy resolution lets the whole
+// suite share one instance, which is what makes the number mean anything.
+const ROOT = () => (process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, ".."));
+export const GOALS = () => process.env.ACC_GOALS_DIR || path.join(ROOT(), "runner", "goals");
+const DONE = () => path.join(GOALS(), "done");
 
 // A kick is only sent once the binding has had time to settle. SessionStart runs
 // before the TUI is ready to accept input, so firing the instant a goal binds
@@ -53,8 +62,8 @@ const HUMAN_HOLD_MS_DEFAULT = 10 * 60_000;
 const nowIso = () => new Date().toISOString();
 
 function ensureDirs() {
-  fs.mkdirSync(GOALS, { recursive: true });
-  fs.mkdirSync(DONE, { recursive: true });
+  fs.mkdirSync(GOALS(), { recursive: true });
+  fs.mkdirSync(DONE(), { recursive: true });
 }
 
 function readJson(p, dflt) {
@@ -66,11 +75,11 @@ function readJson(p, dflt) {
 }
 
 function goalPath(id) {
-  return path.join(GOALS, `${safeId(id)}.json`);
+  return path.join(GOALS(), `${safeId(id)}.json`);
 }
 
 export function logPath(id) {
-  return path.join(GOALS, `${safeId(id)}.log.md`);
+  return path.join(GOALS(), `${safeId(id)}.log.md`);
 }
 
 // Ids are used to build file paths and are echoed into injected context, so they
@@ -93,9 +102,9 @@ export function readGoal(id) {
 export function listGoals() {
   try {
     return fs
-      .readdirSync(GOALS)
+      .readdirSync(GOALS())
       .filter((f) => f.endsWith(".json"))
-      .map((f) => readJson(path.join(GOALS, f), null))
+      .map((f) => readJson(path.join(GOALS(), f), null))
       .filter((g) => g && g.id);
   } catch {
     return [];
@@ -168,6 +177,14 @@ export function createGoal({ text, cwd, profile }) {
 // The second case is the one that survives a /clear, and it is deliberately not
 // conditional on how the clear happened: a goal Kyle cleared by hand resumes the
 // same way an auto-clear does.
+// Claude Code session ids are always UUIDs. A payload carrying anything else
+// did not come from a real SessionStart — it came from someone hand-running
+// the hook (a smoke test with session_id:"hbtest" is the case that cost us a
+// live goal binding, OI-006). Adoption is by CONSOLE PID and must stay that
+// way (it is what survives a /clear), so the fix cannot be "stop adopting" —
+// it is to refuse to overwrite a real binding with a synthetic id.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   ensureDirs();
   let goal = goalId ? readGoal(goalId) : null;
@@ -177,8 +194,13 @@ export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   }
   if (!goal) return null;
 
-  const fresh = goal.sessionId !== sessionId;
-  goal.sessionId = sessionId || goal.sessionId;
+  // A non-UUID session id is treated exactly like none being passed: the goal
+  // is still found and its consolePid/cwd still refreshed, but sessionId,
+  // needsKick and boundAt are left alone. Legitimate post-clear adoption is
+  // untouched — a real session always carries a real UUID.
+  const bindable = UUID_RE.test(String(sessionId || "")) ? sessionId : null;
+  const fresh = bindable !== null && goal.sessionId !== bindable;
+  goal.sessionId = bindable || goal.sessionId;
   if (consolePid) goal.consolePid = Number(consolePid);
   if (!goal.cwd && cwd) goal.cwd = cwd;
   if (fresh) {
@@ -235,8 +257,8 @@ export function setStatus(id, status, why) {
     // Archive so the live directory only ever holds work in flight.
     try {
       ensureDirs();
-      fs.renameSync(goalPath(id), path.join(DONE, `${safeId(id)}.json`));
-      fs.renameSync(logPath(id), path.join(DONE, `${safeId(id)}.log.md`));
+      fs.renameSync(goalPath(id), path.join(DONE(), `${safeId(id)}.json`));
+      fs.renameSync(logPath(id), path.join(DONE(), `${safeId(id)}.log.md`));
     } catch {}
   }
   return goal;
@@ -315,7 +337,12 @@ function resolveId(argv) {
   return act.length === 1 ? act[0].id : "";
 }
 
-function main() {
+// Exported so the test suite can drive the CLI in-process. Spawning a node
+// subprocess per case would be the obvious alternative and is strictly worse
+// here: it measures no coverage this suite can read (see the store-resolution
+// note at the top) and buys nothing, since argv and stdout are both
+// substitutable in-process.
+export function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0] || "list";
 

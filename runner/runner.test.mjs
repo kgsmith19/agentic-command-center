@@ -407,15 +407,29 @@ test("integration: a hung run is killed PROMPTLY at its timeout, not merely even
   assert.ok(elapsed < 5000, `kill took ${elapsed}ms — the process was orphaned, not killed (see killTree)`);
   // Direct proof, not just timing: the fake binary's own pid (written before
   // it ever blocks on the hang timer) must actually be dead, not merely
-  // detached from our stdio pipes. POSIX only — cannot verify taskkill /t
-  // from this sandbox (OI-014, Kyle's machine confirms the Windows branch).
-  if (process.platform !== "win32") {
-    await new Promise((res) => setTimeout(res, 300));
-    const pid = Number(fs.readFileSync(path.join(dir, "pid.txt"), "utf8"));
-    let alive = true;
-    try { process.kill(pid, 0); } catch { alive = false; }
-    assert.equal(alive, false, `fake claude pid ${pid} is still alive — orphaned, not killed`);
+  // detached from our stdio pipes. This ran POSIX-only until 2026-08-04
+  // (OI-014) — the Windows branch of killTree issues `taskkill /pid <pid> /t
+  // /f`, and an injected-exec test proved only that runner.mjs ISSUES that
+  // command, never that it kills the tree. The guard is gone because
+  // `process.kill(pid, 0)` is a liveness probe on Windows too (node maps it
+  // to an OpenProcess check, throwing ESRCH once the pid is gone), so the
+  // same assertion is what CI's windows-latest job now runs natively.
+  // Poll rather than sleep once. Termination is asynchronous on both
+  // platforms — a signalled process is not reaped the instant kill() returns,
+  // and `taskkill /t` walks the tree, so it is slower still. A single 300ms
+  // settle was enough on an idle POSIX box and genuinely wasn't under load
+  // (observed failing on a loaded container while `ps` showed no surviving
+  // process at all, i.e. the assert raced the reap, not the kill). Bounding
+  // the wait at 5s keeps the claim identical — dead long before the fake
+  // binary's own 15s hang timer — without turning it into a flake.
+  const pid = Number(fs.readFileSync(path.join(dir, "pid.txt"), "utf8"));
+  const deadline = Date.now() + 5000;
+  let alive = true;
+  while (alive && Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch { alive = false; break; }
+    await new Promise((res) => setTimeout(res, 50));
   }
+  assert.equal(alive, false, `fake claude pid ${pid} is still alive — orphaned, not killed`);
 });
 
 test("integration: runOnce retries a transport failure through the real lane and recovers", async () => {
