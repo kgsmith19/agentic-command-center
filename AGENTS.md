@@ -115,14 +115,15 @@ file under `kernel/adapters/`), and the honest guard ceilings.
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
     -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
-       list (everything except hooks/clearbot.test.mjs, which spawns real
-       cmd.exe/powershell consoles and only runs on Windows) — that's what
-       CI runs on Linux; `package.json` is the single source of truth for
-       both lists so this block and CI cannot drift apart silently again.
+       list (everything except hooks/clearbot.test.mjs and
+       gui/guards-gui.test.mjs, both of which spawn real cmd.exe/powershell
+       processes and only run on Windows) — that's what CI runs on Linux;
+       `package.json` is the single source of truth for both lists so this
+       block and CI cannot drift apart silently again.
 node hooks/covgate.mjs
     -> COVERAGE GATE. Runs the fast tier under node's built-in coverage and
        fails any CHANGED lib file under the policy floors (lines/funcs 100,

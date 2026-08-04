@@ -1,6 +1,6 @@
 ﻿# Guards Control — GUI over hooks/engine.mjs. The engine owns all state changes;
 # this file only renders and shells out. PS 5.1 compatible.
-param([switch]$SmokeTest, [string]$ShowTab) # -ShowTab <tab caption>: open on the advanced tabs, selecting one by name (screenshot proof — no coordinates to drift)
+param([switch]$SmokeTest, [string]$ShowTab, [switch]$TestInteractiveLane) # -ShowTab <tab caption>: open on the advanced tabs, selecting one by name (screenshot proof — no coordinates to drift); -TestInteractiveLane (OI-015): headlessly exercise the reserve/reown/release handshake against a real hooks/lane.mjs and exit, no form
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wp, string lp);' -Namespace Win32 -Name Cue
@@ -136,6 +136,34 @@ function Exit-InteractiveLane {
     param([int]$Slot)
     if ($null -eq $Slot) { return }
     Invoke-LaneCli -LaneArgs @('release', 'interactive', "$Slot") | Out-Null
+}
+
+# OI-015: this exercises the exact reserve -> reown -> release handshake every
+# real Go-button launch drives, against the real hooks/lane.mjs (already
+# proven 44/44 in hooks/lane.test.mjs) - only the CALLER side (this file) was
+# unverified. No WinForms window is built or shown; -TestInteractiveLane exits
+# before the "form" section below runs at all.
+if ($TestInteractiveLane) {
+    $busy1 = [ref]$null
+    $slot1 = Enter-InteractiveLane -BusyMessage $busy1
+
+    $busy2 = [ref]$null
+    $slot2 = $null
+    if ($null -ne $slot1) { $slot2 = Enter-InteractiveLane -BusyMessage $busy2 } # must be refused: lane already held
+
+    if ($null -ne $slot1) { Complete-InteractiveLaneHandoff -Slot $slot1 -ChildPid $PID }
+    if ($null -ne $slot1) { Exit-InteractiveLane -Slot $slot1 }
+
+    $busy3 = [ref]$null
+    $slot3 = Enter-InteractiveLane -BusyMessage $busy3 # must now succeed: released
+    if ($null -ne $slot3) { Exit-InteractiveLane -Slot $slot3 }
+
+    Write-Output ([ordered]@{
+        slot1 = $slot1; busy1 = $busy1.Value
+        slot2 = $slot2; busy2 = $busy2.Value
+        slot3 = $slot3; busy3 = $busy3.Value
+    } | ConvertTo-Json -Compress)
+    exit 0
 }
 
 # ---------- form ----------

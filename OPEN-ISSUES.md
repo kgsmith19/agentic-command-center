@@ -76,49 +76,34 @@ line under `## Resolved`.
   `C:/code/guards/watcher/` (or the full `C:/code/guards/` prefix), verified
   safe to re-enable, documented in AGENTS.md (done 2026-08-03).
 
-## OI-015 guards-gui.ps1 interactive-lane wiring is unverified — this sandbox has no PowerShell at all
-- opened: 2026-08-01
-- where: guards-gui.ps1 (Invoke-LaneCli/Enter-InteractiveLane/Complete-
-  InteractiveLaneHandoff/Exit-InteractiveLane, Start-PtySession, the legacy
-  cmd /k branch of btnStartWork.Add_Click, Stop-PtySession)
-- what: Kyle hit an API error INSIDE an interactive session even after the
-  2026-08-01 lane.mjs hardening, because that first pass only ever wrapped
-  AUTOMATED headless launches (runner.mjs, e2e) — guards-gui.ps1's Go button
-  and Terminal-tab launches spawned `claude` with zero coordination, so an
-  interactive launch could still stack concurrently with automation or
-  another manual terminal. Fix: a second, isolated "interactive" lane
-  category (hooks/lane.mjs, tested — 44/44 lane.test.mjs, including category
-  isolation, full-jitter backoff, 529-specific base delay, and circuit-
-  breaker trip/warn/reset, all green) plus a two-step reserve/reown/release
-  handshake wired into guards-gui.ps1 around every claude spawn path.
-  lane.mjs's own logic is proven; the PowerShell side is not — this sandbox
-  has no `powershell`/`pwsh` binary at all (confirmed: pre-existing fast-tier
-  tests that shell out to powershell fail with `spawnSync powershell ENOENT`,
-  unrelated to this change), so nothing here could exercise Enter-
-  InteractiveLane/Complete-InteractiveLaneHandoff/Exit-InteractiveLane, the
-  busy-refusal MessageBox, or the Process.Exited release path against a real
-  interpreter. Brace/paren/bracket counts were checked as a crude sanity
-  pass only (braces and brackets balanced exactly; the file's pre-existing
-  2-paren "imbalance" is unchanged from HEAD, i.e. literal parens inside
-  comments/strings, not a real defect) — that is not a substitute for
-  running it.
-- why open: needs Kyle's own machine to run PowerShell at all.
+## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
+- opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
+  `powershell.exe` (unlike when this entry was opened). Added
+  `-TestInteractiveLane` to guards-gui.ps1 — headlessly drives the exact
+  reserve -> reown -> release handshake a real Go-button launch uses, against
+  the real hooks/lane.mjs (already proven 44/44 in hooks/lane.test.mjs), no
+  WinForms window built. New test `gui/guards-gui.test.mjs` (added to
+  `npm run test:windows`, excluded from Linux CI like clearbot.test.mjs since
+  it spawns real powershell) proves: a reserve while free succeeds, a second
+  reserve while the first is held is refused with the exact busy-message
+  text the MessageBox displays, and a reserve after release succeeds again.
+  Verified: `node --test gui/guards-gui.test.mjs` (1/1 green).
+- what's still cut, and why it's not closed: the MessageBox actually
+  rendering, the Process.Exited release path firing off a real killed/exited
+  child, and the interactive slot directory disappearing within a few
+  seconds of Kyle closing a real hosted session — none of that can be
+  exercised without the GUI visible and a human pressing Go twice. Not
+  re-filed as a new entry; it's the same "needs Kyle" residue this entry
+  already named.
+- why open: needs Kyle physically watching the GUI (same as before, just a
+  smaller remaining gap).
 - done when: a real smoke run on Windows — press Go once with automation
   idle (normal launch, no MessageBox), press Go a second time while the
   first is still running (must show the busy MessageBox and refuse, not
   stack a second claude), and confirm the interactive slot directory
   (`%TEMP%\acc-lane\interactive\slot-0`) is gone within a few seconds of
-  closing the session either way (Stop button and natural exit both). Per
-  this repo's own doctrine (ACC-HANDOFF.md "-SmokeTest cannot see layout" —
-  same principle applies to any GUI behavior change): screenshot or narrate
-  what actually happened, don't just eyeball the diff.
-- partial evidence (2026-08-02): `powershell -File guards-gui.ps1 -SmokeTest`
-  now runs clean end to end (`SMOKE OK ...`, exit 0) on real Windows for the
-  first time — the form builds, every tab evaluates, nothing throws. That
-  only proves the code loads; it does NOT exercise Enter-InteractiveLane/
-  Complete-InteractiveLaneHandoff/Exit-InteractiveLane, the busy-refusal
-  MessageBox, or the Process.Exited release path, all of which need the GUI
-  actually visible and a real double-Go-press. Still open — needs Kyle.
+  closing the session either way (Stop button and natural exit both).
+  Screenshot or narrate what actually happened, don't just eyeball the diff.
 
 ## OI-019 Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
 - opened: 2026-08-03
