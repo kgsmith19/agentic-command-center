@@ -174,6 +174,23 @@ line under `## Resolved`.
   fixed in the runbox script before a re-run can complete Task 7. Until he runs it, the gate
   and watcher exist in the repo but are not yet live on the machine, so this
   OI-025 entry's own original incident is not yet provably fixed end-to-end.
+  UPDATE 2026-08-04: fixed the trigger-duration bug. Root cause was
+  `[TimeSpan]::MaxValue` (~29,247 years, `10675199.02:48:05.4775807`)
+  serialized to an ISO8601 duration Task Scheduler's XML rejects outright --
+  exactly the "Duration:P99999999DT23H59M59S" error. `runbox/install-
+  claude-cap-gate.ps1` line 25 now uses `New-TimeSpan -Days 3650` (10 years,
+  effectively "forever" for a task Kyle can re-register anytime) instead.
+  `runbox/` is gitignored (never committed -- see AGENTS.md's runbox
+  convention), so there is no branch/merge for this fix, just the in-place
+  edit. Verified without touching machine state (Register-ScheduledTask was
+  NOT run -- that stays Kyle's call via `/approve-kgs`):
+  `[System.Management.Automation.Language.Parser]::ParseFile` on the script
+  reports 0 syntax errors, and `New-TimeSpan -Days 3650` was confirmed to
+  construct cleanly as a bounded span. The PATH-shim half of the script is
+  idempotent (checks `-notcontains` before prepending) so re-running the
+  whole script is safe even though that half already succeeded. Still needs
+  Kyle to run `/approve-kgs` to actually register the Scheduled Task before
+  this entry's own done-when (a live, running watcher) is satisfied.
   Per the plan's own instruction, `e2e/loop.e2e.mjs` (real tokens) is not
   run as part of this — Kyle's call on timing.
 - done when: Kyle runs `/approve-kgs` on the runbox install script, then
