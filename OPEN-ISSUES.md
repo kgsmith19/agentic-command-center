@@ -53,48 +53,10 @@ line under `## Resolved`.
 - done when: Kyle runs `node e2e/loop.e2e.mjs --only 4` and scenario 4
   passes (the cwd actually moves), then this entry can close.
 
-## OI-005 Guard self-protection is off while the docs still claim it
-- opened: 2026-07-31 (pre-commit security review)
-- where: config.json `protected` vs AGENTS.md "Self-protection";
-  clearbot.ps1 invariant-1b comment
-- what: `C:/code/guards` was removed from the protected list (deliberate
-  2026-07-30 unprotect so the ACC build-out could edit the repo;
-  settings.json stays guarded), but AGENTS.md still documents repo writes as
-  blocked, and clearbot's comment calls ROUTING.md "a table the guard
-  protects" though `C:\code\ROUTING.md` was never in the protected list.
-- why open: re-protecting mid-goal would block the remaining ACC work; when
-  to flip it back is Kyle's call.
-- done when: after the ACC goal closes, `C:/code/guards` is back in
-  `protected` (ideally with `C:/code/ROUTING.md` added), or the AGENTS.md /
-  clearbot wording is changed to match reality.
-
-## OI-007 External (Scheduled Task) watcher supervision needs elevation
-- opened: 2026-07-31
-- where: watcher/watchdog/acc-watchdog-register-elevated.ps1
-- what: the approved design called for a Scheduled Task restarting the
-  clear-watcher at logon and every 2 minutes. `Register-ScheduledTask` fails
-  unelevated on this machine with `PermissionDenied ... HRESULT 0x80070005`,
-  and the ACC's own approval channel (runbox auto-approve) runs unelevated, so
-  the task cannot be installed autonomously.
-- what shipped instead, and why it is not a downgrade: both failure modes are
-  covered without elevation. A CRASH is healed by
-  `budget.mjs reviveClearbotIfDead` at every turn boundary — faster than a
-  2-minute poll and precisely when the watcher is about to be needed (proven
-  live: watcher killed, waited past the 30s staleness window, one Stop hook
-  brought it back: 0 running → 1). A REBOOT is covered by the Startup-folder
-  launcher (`acc-watchdog-startup.ps1`, installed 2026-07-31). The residue is
-  a watcher dying while NO session runs and no logon happens — in which case
-  nothing needs it until a session starts, and SessionStart starts it.
-- why open: only Kyle can run the elevated script, and it is genuinely
-  optional. Recorded so the deviation from the approved spec is visible
-  rather than silently dropped.
-- done when: either the task is registered from an elevated shell, or the
-  spec is amended to make in-process revive + Startup launcher the design.
 
 ## OI-011 Re-verify guards self-protection coverage of guards/ paths
 - opened: 2026-07-31
-- where: hooks/engine.mjs guard config (relates OI-005: self-protection off,
-  docs claim otherwise)
+- where: hooks/engine.mjs guard config
 - what: this branch added gui/PtyHost.cs, gui/term.html, gui/vendor/,
   gui/ptyhost.e2e.ps1 and watcher/stubpipe.ps1 plus many watcher/ system
   scripts (clearbot.ps1, launchers, watchdog/ integration). The full post-branch
@@ -103,12 +65,16 @@ line under `## Resolved`.
   stubs), `watcher/*.cmd` (start/stop launchers), `watcher/watchdog/*.ps1`
   (system integration). All are strategic infrastructure and should be protected.
 - why open: verification task surfaced by the embedded-terminal completion
-  gate; OI-005 already tracks the underlying off-state (self-protection is
-  currently disabled while ACC build-out continues).
+  gate. OI-005 (self-protection currently off, docs claiming otherwise) is
+  now closed 2026-08-04 via its docs-accuracy path — AGENTS.md and
+  clearbot.ps1 already state the off-state correctly, so nothing there was
+  actually stale. This entry's own ask (add the paths to `protected`) still
+  requires re-enabling self-protection for `C:/code/guards`, which remains
+  Kyle's call on timing since it would block further agent edits to this
+  repo, including mid-session ones.
 - done when: `protected` list in config.json gains `C:/code/guards/gui/` and
   `C:/code/guards/watcher/` (or the full `C:/code/guards/` prefix), verified
-  safe to re-enable once OI-005 re-protection happens, documented in AGENTS.md
-  (done 2026-08-03).
+  safe to re-enable, documented in AGENTS.md (done 2026-08-03).
 
 ## OI-015 guards-gui.ps1 interactive-lane wiring is unverified — this sandbox has no PowerShell at all
 - opened: 2026-08-01
@@ -253,6 +219,27 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-005 [RETIRED 2026-08-04] Guard self-protection is off while the docs still claim it
+- opened: 2026-07-31, retired: 2026-08-04 — re-checked both claimed
+  staleness sites directly: AGENTS.md already states "Self-protection —
+  currently OFF" (AGENTS.md:15) and clearbot.ps1's ROUTING.md comment already
+  says "ROUTING.md is not in the protected list" (watcher/clearbot.ps1:19).
+  Both were already corrected (by OI-011's 2026-08-03 documentation pass) —
+  there was nothing stale left to fix. Actually re-enabling protection is
+  tracked separately in OI-011, since that's the part still gated on Kyle's
+  timing call.
+
+## OI-007 [RESOLVED 2026-08-04] External (Scheduled Task) watcher supervision needs elevation
+- opened: 2026-07-31, resolved: 2026-08-04 via the spec-amendment path — the
+  originally-approved design
+  (`docs/superpowers/specs/2026-07-31-acc-autonomy-hardening-design.md`,
+  Section 2 "Watchdog") called for an elevated Scheduled Task; amended in
+  place to formalize what actually shipped and already covers both failure
+  modes without elevation (in-process `reviveClearbotIfDead` for crashes,
+  the Startup-folder launcher for reboots). The elevated register script
+  remains available as an optional belt-and-suspenders install for Kyle, no
+  longer part of the required design.
 
 ## OI-009 [SHRUNK + FIXED 2026-08-04] GUI process is a single point of failure for hosted sessions
 - opened: 2026-07-31, shrunk+fixed: 2026-08-04 — delivered detection, not

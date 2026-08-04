@@ -77,9 +77,21 @@ unfinished goal, never a closed one. Clearbot's kick path is unchanged.
   Statusline shows a red `bot DEAD` segment when stale (>30s). budget.mjs
   SessionStart injects a one-line warning when stale, so a session knows the
   loop behind it is down.
-- **Watchdog:** a runbox script registers a Windows Scheduled Task — at logon
-  and every 2 minutes, run start-clearbot.cmd (no-op when already running).
-  An unregister script ships beside it. Crash and reboot both self-heal.
+- **Watchdog (amended 2026-08-04, guards OI-007):** the originally-specified
+  elevated Scheduled Task (`Register-ScheduledTask` at logon + every 2
+  minutes) fails unelevated, and the ACC's own runbox approval channel runs
+  unelevated too — so it cannot be installed autonomously, only by Kyle
+  running it by hand. In-process revival + a Startup launcher cover both
+  failure modes without elevation instead: a CRASH is healed by
+  `budget.mjs reviveClearbotIfDead` at every turn boundary (faster than a
+  2-minute poll, and precisely when the watcher is about to be needed); a
+  REBOOT is covered by the Startup-folder launcher (`acc-watchdog-startup.ps1`).
+  The residual gap — the watcher dying while no session runs and no logon
+  happens — is benign: nothing needs the watcher until a session starts, and
+  SessionStart starts it. The elevated Scheduled Task registration script
+  still exists (`watcher/watchdog/acc-watchdog-register-elevated.ps1`) as an
+  optional belt-and-suspenders install for Kyle to run from an elevated
+  shell; it is no longer part of the required design.
 
 ## Section 3 — Typing-channel hardening (folds guards OI-004)
 
