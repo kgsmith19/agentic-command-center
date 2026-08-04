@@ -424,13 +424,6 @@ line under `## Resolved`.
   `autonomyFactor`; a corrupt or unreadable autonomy state fails closed
   (denies) instead of silently using the raw ceiling.
 
-## OI-008 [RESOLVED 2026-08-03] Runbox undo-script ordering convention already documented
-- opened: 2026-07-31, resolved: 2026-08-03 (ledger-only, no code change) —
-  AGENTS.md's runbox section already states, verbatim: "Never leave
-  undo/uninstall scripts in the runbox (guards OI-008). Undo scripts live
-  tracked in their own directory (e.g. `watcher/watchdog/`) and are run
-  deliberately." Satisfies this issue's own first "done when" option.
-
 ## OI-001 [RESOLVED 2026-08-03] stop-clearbot.cmd's kill query matches its own probe process
 - opened: 2026-07-31, resolved: 416e9ab "fix: stop-clearbot kill query
   excludes its own probe process (guards OI-001)"
