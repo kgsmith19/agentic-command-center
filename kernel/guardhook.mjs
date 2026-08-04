@@ -31,6 +31,15 @@ function deny(reason, runId, record) {
 // the tool call open until the hook timeout. The cap is env-overridable so a
 // test can prove the timeout path fires without a real multi-second wait.
 const STDIN_TIMEOUT_MS = Number(process.env.ACC_GUARDHOOK_STDIN_TIMEOUT_MS) || 4000;
+// OI-028: a time cap alone bounds how LONG a hook fire can be held open, not
+// how MUCH a misbehaving harness can make it buffer in that window (e.g. a
+// Write/Edit call with a huge new_string) — unbounded growth is a memory-
+// exhaustion vector on the hook process. 8MB is generous for any real tool
+// payload (Claude Code's own hook payloads are tool params, not file
+// contents wholesale) while still bounding worst case; env-overridable so a
+// test can prove the deny path without allocating 8MB for real.
+const STDIN_MAX_BYTES = Number(process.env.ACC_GUARDHOOK_STDIN_MAX_BYTES) || 8 * 1024 * 1024;
+let stdinOversized = false;
 const raw = await new Promise((resolve) => {
   let buf = "";
   const timer = setTimeout(() => resolve(buf), STDIN_TIMEOUT_MS);
@@ -39,10 +48,17 @@ const raw = await new Promise((resolve) => {
   // otherwise crash the process instead of failing closed via deny() below.
   const finish = () => { clearTimeout(timer); resolve(buf); };
   process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (c) => (buf += c));
+  process.stdin.on("data", (c) => {
+    if (stdinOversized) return; // already deciding to deny; stop accumulating
+    buf += c;
+    if (buf.length > STDIN_MAX_BYTES) { stdinOversized = true; finish(); }
+  });
   process.stdin.on("end", finish);
   process.stdin.on("error", finish);
 });
+if (stdinOversized) {
+  deny(`hook payload exceeded ${STDIN_MAX_BYTES} bytes — failing closed`);
+}
 
 const dir = process.env.ACC_KERNEL_DIR;
 if (!dir) deny("no ACC_KERNEL_DIR in the environment — refusing to allow an unguarded call");

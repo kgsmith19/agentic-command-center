@@ -165,6 +165,20 @@ test("a stdin pipe that never closes still fails closed once the timeout cap ela
   assert.match(stderr, /unreadable stdin payload|no readable hook payload/);
 });
 
+test("OI-028: an oversized stdin payload fails closed instead of buffering unbounded", async () => {
+  const child = spawn(process.execPath, [HOOK], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, ACC_ROOT: ROOT, ACC_POLICY: POLICY, ACC_KERNEL_DIR: S.runDir(RUN), ACC_GUARDHOOK_STDIN_MAX_BYTES: "100" },
+  });
+  let stderr = "";
+  child.stderr.on("data", (d) => { stderr += d; });
+  child.stdin.write("x".repeat(1000)); // well over the 100-byte cap
+  child.stdin.end();
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  assert.equal(code, 2);
+  assert.match(stderr, /exceeded 100 bytes/);
+});
+
 test("the tool-call ceiling is enforced across separate hook fires (AC-B1)", () => {
   const call = () => fire({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } });
   assert.equal(call().code, 0);

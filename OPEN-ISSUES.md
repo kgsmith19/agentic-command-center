@@ -23,29 +23,6 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-028 kernel/guardhook.mjs's stdin reader has no size cap, only a time cap
-- opened: 2026-08-04 (surfaced by the OI-019 scenario-enumeration pass,
-  continuing into kernel/guardhook.mjs after OI-027's guard.mjs findings)
-- where: kernel/guardhook.mjs's stdin-reading Promise (`buf += c`)
-- what: the reader caps how LONG it waits (`STDIN_TIMEOUT_MS`, default
-  4000ms) but never caps how MUCH it accumulates in that window. A
-  misbehaving or malicious harness under kernel supervision (which the
-  kernel exists specifically to guard against) making a tool call with a
-  very large payload (e.g. a Write/Edit with a huge `new_string`) could
-  grow `buf` unbounded within the timeout, a memory-exhaustion vector on the
-  hook process. Existing test coverage proves the TIME cap works (a pipe
-  that never closes still fails closed); nothing proves a SIZE cap, because
-  there isn't one.
-- why open: not fixed inline — the right cap value is a real judgment call
-  (too low breaks legitimate large Edit/Write payloads on real files; too
-  high doesn't meaningfully bound memory) and this kernel's own stated scope
-  is "a deterministic process-level boundary, not an OS sandbox" (guard.mjs's
-  own header) - whether resource-exhaustion hardening is in scope at all is
-  a decision, not obviously implied by the existing design.
-- done when: a decision is recorded on whether stdin size capping belongs in
-  this kernel's threat model, and if so, an explicit cap is added with a
-  test proving an oversized payload denies cleanly (not a crash, not a hang)
-  without breaking a realistic large legitimate payload.
 
 ## OI-003 [BLOCKED — runbox] A clearbot-typed /cd does not take effect
 - opened: 2026-07-31, blocked 2026-08-04: needs a real-token e2e run, which
@@ -299,6 +276,18 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-028 [RESOLVED 2026-08-04] kernel/guardhook.mjs's stdin reader had no size cap, only a time cap
+- opened: 2026-08-04, resolved: 2026-08-04 — added `STDIN_MAX_BYTES` (default
+  8MB, env-overridable for tests) to the stdin-reading loop: on exceeding it,
+  stops accumulating and denies closed via the same `deny()` path as every
+  other guardhook failure mode, rather than buffering unbounded. 8MB judged
+  generous for any real Claude Code hook payload (tool params, not file
+  contents wholesale) while still bounding the worst case. New test proves
+  an oversized payload denies cleanly with the byte count in the reason, not
+  a crash or a hang. Verified: `node --test kernel/guardhook.test.mjs`
+  (16/16), full `npm run test:windows` and `node hooks/covgate.mjs` both
+  green.
 
 ## OI-005 [RETIRED 2026-08-04] Guard self-protection is off while the docs still claim it
 - opened: 2026-07-31, retired: 2026-08-04 — re-checked both claimed
