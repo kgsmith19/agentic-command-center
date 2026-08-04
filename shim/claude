@@ -1,0 +1,9 @@
+#!/bin/sh
+DIR="$(cd "$(dirname "$0")" && pwd)"
+node "$DIR/../hooks/lane.mjs" gate -- "$@"
+CODE=$?
+if [ "$CODE" -eq 42 ]; then
+  exit 42
+fi
+REAL="${ACC_REAL_CLAUDE_EXE:-C:/Users/kyleg/.local/bin/claude.exe}"
+exec "$REAL" "$@"

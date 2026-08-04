@@ -66,6 +66,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const POLICY = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
@@ -344,6 +345,94 @@ export async function retryTransport(label, run, opts = {}) {
   }
 }
 
+// ------------------------------------------------------------- launch cap
+// Machine-wide ceiling on concurrent claude.exe, independent of the lane
+// slots above (those are cooperative; this is enforced at every claude
+// resolution via the shim — see shim/claude.cmd). Policy: policy.json
+// lane.total.{cap, exe}. No cap/exe configured = fail open (gate() below).
+const UTILITY_ARGS = new Set(["--version", "-v", "--help", "-h", "doctor", "update", "install", "mcp", "config"]);
+
+// Subcommands/flags that never start a session — these bypass the cap
+// entirely, uncounted, so `claude --version` never queues behind a busy
+// machine.
+export function isUtilityInvocation(args) {
+  const first = args && args[0];
+  return first != null && UTILITY_ARGS.has(String(first));
+}
+
+// One real Win32_Process query, filtered by NAME only (path-filtering happens
+// in countCappedProcesses) — Name alone would also match the unrelated
+// desktop app's claude.exe, which is exactly why the caller must filter by
+// ExecutablePath afterward.
+export function queryClaudeProcesses() {
+  const script =
+    "Get-CimInstance Win32_Process -Filter \"Name='claude.exe'\" | " +
+    "Select-Object ProcessId,ExecutablePath,CreationDate | ConvertTo-Json -Compress -Depth 3";
+  const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+    timeout: 5000,
+    windowsHide: true,
+  });
+  const trimmed = out.trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+// Matched by absolute exe PATH, never by image name — claude.exe is also the
+// name of the (separate, unrelated) desktop app's bundled binary at a
+// different path, which must never count against this cap.
+export function countCappedProcesses(exePaths, listProcesses = queryClaudeProcesses) {
+  const procs = listProcesses() || [];
+  const wanted = new Set((exePaths || []).map((p) => String(p).toLowerCase()));
+  return procs.filter((p) => p && p.ExecutablePath && wanted.has(String(p.ExecutablePath).toLowerCase()));
+}
+
+function laneLabelForPid(pid) {
+  const all = laneStatusAll();
+  for (const list of [all.automation, all.interactive]) {
+    const hit = list.find((s) => Number(s.pid) === Number(pid));
+    if (hit) return hit.label || null;
+  }
+  return null;
+}
+
+// The gate: ok:true means "let it through" (default — every unconfigured or
+// erroring path fails open, on purpose). ok:false means "refuse" and is the
+// ONLY outcome the shim (shim/claude.cmd) maps to exit 42.
+export function gate(args, opts = {}) {
+  if (isUtilityInvocation(args)) return { ok: true, reason: "utility" };
+  const cfg = laneConfig();
+  const total = (cfg.total && typeof cfg.total === "object") ? cfg.total : {};
+  const cap = Number(total.cap);
+  if (!Number.isFinite(cap)) return { ok: true, reason: "no-cap-configured" };
+  const exePaths = Array.isArray(total.exe) ? total.exe : [];
+  if (!exePaths.length) return { ok: true, reason: "no-exe-configured" };
+  let matched;
+  try {
+    matched = countCappedProcesses(exePaths, opts.listProcesses);
+  } catch (e) {
+    return { ok: true, reason: "count-failed", error: String((e && e.message) || e) };
+  }
+  if (matched.length < cap) return { ok: true, count: matched.length, cap };
+  return {
+    ok: false,
+    count: matched.length,
+    cap,
+    holders: matched.map((p) => ({ pid: p.ProcessId, startedAt: p.CreationDate || null, label: laneLabelForPid(p.ProcessId) })),
+  };
+}
+
+// Broken out of the CLI dispatch below so it has a deterministic unit test:
+// exercising this via a real refused CLI subprocess would need an actual
+// live claude.exe on the machine to populate `holders`, which is
+// environment-dependent and not something a hermetic test controls.
+export function formatHolders(holders) {
+  return (holders || [])
+    .map((h) => `pid ${h.pid}${h.label ? ` [${h.label}]` : ""}${h.startedAt ? ` (started ${h.startedAt})` : ""}`)
+    .join(", ") || "unknown";
+}
+
 // ------------------------------------------------------------------- CLI
 // `node hooks/lane.mjs <cmd> ...` — single-shot, NON-BLOCKING commands for
 // callers that cannot import ESM directly (guards-gui.ps1 shells out to
@@ -420,7 +509,23 @@ const isMain = (() => {
   try { return process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
 if (isMain) {
-  const out = runCli(process.argv.slice(2));
-  console.log(JSON.stringify(out));
-  if (out && out.ok === false) process.exitCode = 1;
+  const argv = process.argv.slice(2);
+  const [cmd, ...rest] = argv;
+  if (cmd === "gate") {
+    // Deliberately NOT routed through runCli's JSON-on-stdout convention:
+    // shim/claude.cmd only cares about the exit code, and a JSON line on
+    // every single successful `claude` launch would be noise in Kyle's
+    // terminal. Silent on allow; one human-readable line on stderr to
+    // refuse.
+    const gateArgs = rest[0] === "--" ? rest.slice(1) : rest;
+    const out = gate(gateArgs);
+    if (out && out.ok === false) {
+      console.error(`lane: claude launch cap reached (${out.count}/${out.cap}) — held by ${formatHolders(out.holders)}`);
+      process.exitCode = 42;
+    }
+  } else {
+    const out = runCli(argv);
+    console.log(JSON.stringify(out));
+    if (out && out.ok === false) process.exitCode = 1;
+  }
 }

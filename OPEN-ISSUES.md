@@ -167,18 +167,33 @@ line under `## Resolved`.
   `hooks/budget.mjs`, `watcher/clearbot.ps1`, `gui/ptyhost.e2e.ps1`),
   consistent with the timeouts (not assertion failures) seen in every
   failing scenario.
-- why open: per the plan's own instruction, a failing proof run is not
-  looped blindly — this needs either a clean re-run with verifiably zero
-  other `claude.exe` processes running, or the machine-wide launch cap
+- why open: the machine-wide launch cap
   (`docs/superpowers/specs/2026-08-03-claude-launch-cap-design.md` +
-  `docs/superpowers/plans/2026-08-03-claude-launch-cap-plan.md`, not yet
-  implemented) landing first, which is expected to fix this transitively.
-  OI-003 (Scenario 4) and the OI-011 label mismatch (Scenario 3) are
-  tracked/noted separately and do not block this item's own resolution.
-- done when: `node e2e/loop.e2e.mjs` is re-run with `Get-Process claude`
-  confirmed at ≤1 (this session's own) beforehand, and scenarios 1-5 are
-  confirmed PASS — or the launch-cap lands and is credited with fixing this
-  transitively per its own plan's verification step.
+  `docs/superpowers/plans/2026-08-03-claude-launch-cap-plan.md`) landed
+  2026-08-04, Tasks 1-6 and 8 of its own plan: `hooks/lane.mjs` gained
+  `gate()`/`isUtilityInvocation()`/`countCappedProcesses()`/
+  `queryClaudeProcesses()`/`formatHolders()` and a `gate` CLI verb (exit 42
+  contract); `policy.json`'s `lane.total` dial (cap 3, real exe path);
+  `shim/claude.cmd` + `shim/claude` (fail-open PATH shim); standalone
+  `watcher/claude-cap-watch.ps1` (alert-only breach/fail-open detector).
+  Verified: `npm run test:windows` (417/418, 1 pre-existing unrelated skip),
+  `node hooks/covgate.mjs` (lane.mjs 100% lines/funcs, 89% branches — above
+  its OI-017 override floor), `shim/claude.test.ps1` and
+  `watcher/claude-cap-watch.test.ps1` (both all-PASS), plus a real-machine
+  sanity check against the live process table (cap:0 correctly refused
+  against a genuinely running claude.exe; cap:3 correctly allowed) — no
+  tokens spent. Task 7 (`runbox/install-claude-cap-gate.ps1`, prepends the
+  shim to the user PATH and registers the watcher's Scheduled Task) is
+  written and committed but NOT run — that's real machine-state change
+  outside the repo, for Kyle via `/approve-kgs`. Until he runs it, the gate
+  and watcher exist in the repo but are not yet live on the machine, so this
+  OI-025 entry's own original incident is not yet provably fixed end-to-end.
+  Per the plan's own instruction, `e2e/loop.e2e.mjs` (real tokens) is not
+  run as part of this — Kyle's call on timing.
+- done when: Kyle runs `/approve-kgs` on the runbox install script, then
+  either `node e2e/loop.e2e.mjs` is re-run and scenarios 1-5 pass, or he's
+  satisfied the launch cap being live is sufficient credit per the plan's
+  own verification step.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03

@@ -37,6 +37,7 @@ const {
   acquireSlot, withLaunchSlot, transportFailure, retryTransport, laneStatus, laneConfig,
   laneStatusAll, recordTransportFailure, breakerState, breakerReset,
   tryAcquireOnce, reownSlot, releaseSlot, runCli,
+  isUtilityInvocation, countCappedProcesses, gate, queryClaudeProcesses, formatHolders,
 } = await import("./lane.mjs");
 
 const LANE = process.env.ACC_LANE_DIR;
@@ -602,4 +603,137 @@ test("the CLI entry point (node hooks/lane.mjs status) runs for real as a subpro
   });
   const parsed = JSON.parse(out.trim());
   assert.ok(Array.isArray(parsed.automation));
+});
+
+// --- OI-025 / launch cap: gate() and its primitives (spec 2026-08-03) ------
+
+test("isUtilityInvocation recognizes known utility tokens, nothing else", () => {
+  assert.equal(isUtilityInvocation(["--version"]), true);
+  assert.equal(isUtilityInvocation(["--help"]), true);
+  assert.equal(isUtilityInvocation(["doctor"]), true);
+  assert.equal(isUtilityInvocation(["update"]), true);
+  assert.equal(isUtilityInvocation(["install"]), true);
+  assert.equal(isUtilityInvocation(["mcp"]), true);
+  assert.equal(isUtilityInvocation(["-p", "hello"]), false);
+  assert.equal(isUtilityInvocation([]), false);
+  assert.equal(isUtilityInvocation(undefined), false);
+});
+
+test("countCappedProcesses matches by exact exe path, case-insensitively, ignoring unmatched paths", () => {
+  const procs = [
+    { ProcessId: 1, ExecutablePath: "C:\\real\\claude.exe", CreationDate: "t1" },
+    { ProcessId: 2, ExecutablePath: "C:\\REAL\\CLAUDE.EXE", CreationDate: "t2" },
+    { ProcessId: 3, ExecutablePath: "C:\\Program Files\\WindowsApps\\Claude_1\\app\\claude.exe", CreationDate: "t3" },
+    { ProcessId: 4, ExecutablePath: null, CreationDate: "t4" },
+  ];
+  const matched = countCappedProcesses(["C:\\real\\claude.exe"], () => procs);
+  assert.deepEqual(matched.map((p) => p.ProcessId), [1, 2]);
+});
+
+test("countCappedProcesses returns empty when the lister returns nothing", () => {
+  assert.deepEqual(countCappedProcesses(["C:\\real\\claude.exe"], () => []), []);
+});
+
+test("gate: no lane.total configured at all -> ok true (fail open)", () => {
+  setPolicy({});
+  assert.deepEqual(gate(["-p", "hi"]), { ok: true, reason: "no-cap-configured" });
+});
+
+test("gate: cap configured but no exe list -> ok true (fail open)", () => {
+  setPolicy({ total: { cap: 3 } });
+  assert.deepEqual(gate(["-p", "hi"]), { ok: true, reason: "no-exe-configured" });
+});
+
+test("gate: utility invocation bypasses cap entirely, never calls the lister", () => {
+  setPolicy({ total: { cap: 0, exe: ["C:\\real\\claude.exe"] } });
+  let called = false;
+  const out = gate(["--version"], { listProcesses: () => { called = true; return []; } });
+  assert.deepEqual(out, { ok: true, reason: "utility" });
+  assert.equal(called, false);
+});
+
+test("gate: under cap -> ok true with count", () => {
+  setPolicy({ total: { cap: 3, exe: ["C:\\real\\claude.exe"] } });
+  const procs = [{ ProcessId: 1, ExecutablePath: "C:\\real\\claude.exe" }];
+  assert.deepEqual(gate(["-p", "hi"], { listProcesses: () => procs }), { ok: true, count: 1, cap: 3 });
+});
+
+test("gate: at cap -> ok false with holder pid/startedAt, no lane label when unheld", () => {
+  setPolicy({ total: { cap: 1, exe: ["C:\\real\\claude.exe"] } });
+  const procs = [{ ProcessId: 999999, ExecutablePath: "C:\\real\\claude.exe", CreationDate: "2026-08-03T00:00:00Z" }];
+  const out = gate(["-p", "hi"], { listProcesses: () => procs });
+  assert.equal(out.ok, false);
+  assert.equal(out.count, 1);
+  assert.equal(out.cap, 1);
+  assert.deepEqual(out.holders, [{ pid: 999999, startedAt: "2026-08-03T00:00:00Z", label: null }]);
+});
+
+test("gate: over cap enriches a holder with its lane label when the pid holds a real slot", async () => {
+  setPolicy({ total: { cap: 1, exe: ["C:\\real\\claude.exe"] } });
+  const held = await acquireSlot("labeled-holder", { category: "interactive" });
+  try {
+    const procs = [{ ProcessId: process.pid, ExecutablePath: "C:\\real\\claude.exe", CreationDate: "now" }];
+    const out = gate(["-p", "hi"], { listProcesses: () => procs });
+    assert.equal(out.ok, false);
+    assert.equal(out.holders[0].label, "labeled-holder");
+  } finally {
+    held.release();
+  }
+});
+
+test("gate: lister throwing -> ok true (fail open), reason count-failed", () => {
+  setPolicy({ total: { cap: 1, exe: ["C:\\real\\claude.exe"] } });
+  const out = gate(["-p", "hi"], { listProcesses: () => { throw new Error("CIM unavailable"); } });
+  assert.equal(out.ok, true);
+  assert.equal(out.reason, "count-failed");
+  assert.match(out.error, /CIM unavailable/);
+});
+
+test("queryClaudeProcesses runs a real CIM query and returns an array", { skip: process.platform !== "win32" }, () => {
+  const out = queryClaudeProcesses();
+  assert.ok(Array.isArray(out));
+});
+
+test("CLI: node hooks/lane.mjs gate --version bypasses the cap and exits 0 silently", () => {
+  const out = execFileSync(process.execPath, [path.join(HERE_DIR, "lane.mjs"), "gate", "--version"], {
+    env: { ...process.env, ACC_LANE_DIR: process.env.ACC_LANE_DIR, ACC_POLICY: process.env.ACC_POLICY },
+    encoding: "utf8",
+  });
+  assert.equal(out, "");
+});
+
+test("CLI: node hooks/lane.mjs gate with cap:0 refuses for real and exits 42 with a stderr holder line", { skip: process.platform !== "win32" }, () => {
+  setPolicy({ total: { cap: 0, exe: ["C:\\definitely-not-a-real-path\\claude.exe"] } });
+  assert.throws(
+    () => execFileSync(process.execPath, [path.join(HERE_DIR, "lane.mjs"), "gate", "--", "-p", "hi"], {
+      env: { ...process.env, ACC_LANE_DIR: process.env.ACC_LANE_DIR, ACC_POLICY: process.env.ACC_POLICY },
+      encoding: "utf8",
+    }),
+    (err) => {
+      assert.equal(err.status, 42);
+      assert.match(err.stderr, /lane: claude launch cap reached \(0\/0\)/);
+      return true;
+    },
+  );
+});
+
+test("formatHolders renders pid/label/startedAt, and falls back to 'unknown' when empty", () => {
+  assert.equal(formatHolders([]), "unknown");
+  assert.equal(formatHolders(null), "unknown");
+  assert.equal(formatHolders([{ pid: 111, label: null, startedAt: null }]), "pid 111");
+  assert.equal(
+    formatHolders([{ pid: 111, label: "goal-loop", startedAt: "2026-08-03T00:00:00Z" }]),
+    "pid 111 [goal-loop] (started 2026-08-03T00:00:00Z)"
+  );
+  assert.equal(
+    formatHolders([{ pid: 1, label: null, startedAt: null }, { pid: 2, label: "x", startedAt: null }]),
+    "pid 1, pid 2 [x]"
+  );
+});
+
+test("shim/claude.cmd's baked-in real exe path matches policy.json's lane.total.exe[0]", () => {
+  const policy = JSON.parse(fs.readFileSync(path.join(HERE_DIR, "..", "policy.json"), "utf8").replace(/^\uFEFF/, ""));
+  const configuredExe = policy.lane.total.exe[0];
+  const shimCmd = fs.readFileSync(path.join(HERE_DIR, "..", "shim", "claude.cmd"), "utf8");
+  assert.ok(shimCmd.includes(configuredExe), `shim/claude.cmd must contain the exact path ${configuredExe}`);
 });
