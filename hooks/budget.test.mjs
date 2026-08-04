@@ -364,6 +364,47 @@ test("SessionStart with ACC_PTY records a pty window bound to the parent pid", (
     "consolePid must be the hook's PARENT (the claude process; here, the test runner)");
 });
 
+// guards OI-031, wiring proof. reapDeadGoals() living in goal.mjs is worth
+// nothing unless something actually calls it, and it has to run BEFORE
+// adoption: bindSession falls back to "whatever active goal owns this console
+// pid", so a stale goal whose pid was recycled is exactly what a fresh session
+// picks up. Six such goals were live on 2026-08-04, the oldest from 07-31.
+test("SessionStart reaps a stale goal instead of adopting it (OI-031)", () => {
+  const sb = sandbox({ autoClear: { enabled: false } });
+  const sid = "sid-reap";
+
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_GOALS_DIR = "";
+  const stale = gm.createGoal({ text: "LAST WEEK'S WORK - must not be injected", cwd: sb.root });
+  // Bound to a console that is long gone, then its pid recycled onto THIS
+  // process - the exact collision that makes a fresh session adopt old work.
+  // Must be a real UUID: OI-006's guard treats a non-UUID sessionId as inert, so
+  // boundAt would stay empty, the goal would count as never-bound, and the grace
+  // window would (correctly) protect it - proving nothing about reaping.
+  gm.bindSession({ sessionId: SID(70), consolePid: process.pid, goalId: stale.id });
+  fs.writeFileSync(
+    path.join(sb.root, "runner", "goals", `${stale.id}.json`),
+    JSON.stringify({ ...gm.readGoal(stale.id), consolePid: 999999 })
+  );
+
+  const out = execFileSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
+    env: {
+      ...process.env,
+      ACC_ROOT: sb.root,
+      ACC_POLICY: sb.policyPath,
+      ACC_GOALS_DIR: "",
+      ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+      CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
+      CLAUDE_CODE_RUNNER: "",
+    },
+    encoding: "utf8",
+  });
+
+  assert.equal(gm.readGoal(stale.id), null, "the stale goal was reaped, not left active");
+  assert.ok(!out.includes("LAST WEEK'S WORK"), "and its text was never injected into the new session");
+});
+
 // The anchor rule behind that record: the hook's immediate parent on a live
 // launch is a transient shell (node -> bash -> bash -> claude.exe) that dies
 // with the turn - recording it handed clearbot a dead pid (observed live:

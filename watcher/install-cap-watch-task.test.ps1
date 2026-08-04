@@ -29,4 +29,16 @@ Check 'repeats every 60 seconds' ($spec.RepetitionInterval.TotalSeconds -eq 60)
 Check 'repetition duration is bounded, not TimeSpan::MaxValue' ($spec.RepetitionDuration -lt [TimeSpan]::MaxValue)
 Check 'repetition duration is still effectively forever (>= 1 year)' ($spec.RepetitionDuration.TotalDays -ge 365)
 
+# AC-1. The 60s flash survived -WindowStyle Hidden because the flashing window
+# was never PowerShell's to hide: with DelegationTerminal unset ("let Windows
+# decide"), the console for an interactive task is hosted by a SEPARATE,
+# COM-activated WindowsTerminal.exe. Measured 2026-08-04 across 3 consecutive
+# firings - CASCADIA_HOSTING_WINDOW_CLASS visible 469/608/491ms, plus the
+# cap-watch process's own PseudoConsoleWindow for 47ms. S4U runs the task in
+# session 0, which has no desktop, so no console host can exist to draw a
+# window - true regardless of the terminal-delegation setting, now or after a
+# Windows update. Design: docs/superpowers/specs/2026-08-04-acc-known-defects-design.md
+Check 'principal logon type is S4U (session 0, no desktop -> no console host)' ($spec.LogonType -eq 'S4U')
+Check 'principal run level stays Limited (elevation is for REGISTERING, not running)' ($spec.RunLevel -eq 'Limited')
+
 exit $fail

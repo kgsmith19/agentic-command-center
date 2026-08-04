@@ -23,22 +23,65 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-031 Seven goals are "active" at once; dead ones are never reaped
+## OI-033 The UserPromptSubmit route hook is disabled on this machine and nobody knows why it was eating prompts
 - opened: 2026-08-04
-- where: hooks/goal.mjs, runner/goals/
-- what: `goal.mjs list` returns 7 entries with `status: "active"`, the oldest
-  from 2026-07-31, each bound to a `consolePid` whose console is long gone.
-  Nothing marks a goal dead when its console dies, so the store only ever
-  grows and `pendingKicks` keeps considering goals no one is working. Found
-  while tracing Kyle's "the prompt entered in the UI does not carry cleanly
-  into the ACC process" — a kick aimed at a stale goal is a strong candidate
-  for prompts landing in the wrong place, but that link is NOT yet proven.
-- why open: found mid-turn while fixing the 60s window flash; fixing it needs
-  a decision on what "dead" means (console gone? no cycle in N hours? both?)
-  and a reaper with its own tests. Not a drive-by.
-- done when: a goal whose console PID is gone is reaped automatically,
-  `goal.mjs list` shows only genuinely live goals on this machine, and a test
-  covers the reap rule. Then re-check whether the prompt-handoff symptom survives.
+- where: `~/.claude/settings.json` (UserPromptSubmit), `hooks/route.mjs`,
+  `policy.json` autoCd
+- what: runbox script `disable-route-hook.mjs` auto-ran at 18:42 on 2026-08-04
+  ("Disables the prompt-routing hook that blocks/re-scopes UserPromptSubmit")
+  and removed `hooks/route.mjs` from settings.json. Verified directly:
+  UserPromptSubmit now lists only prompt_optimizer and testplan.mjs. This is
+  the second time the blocking auto-cd has had to be switched off for eating
+  real prompts (OI-029 was the first, and was closed by RE-ENABLING it on the
+  theory that OI-003 was the root cause -- evidently not, or not entirely).
+  The dial half of this is FIXED: `policy.json autoCd.enabled` is now false, and
+  `hooks/dialcheck.mjs` (10 tests, 100/100/96) fails on dial/hook divergence in
+  both directions — a dial pointing at an unregistered hook, and a registered
+  hook whose dial says off. `node hooks/dialcheck.mjs` currently reports "dials
+  clean". It is its own file rather than a branch in route.mjs because
+  config/consumer coherence is a separate concern from routing, and because it
+  is the seed of the wider setting-traceability work. What is NOT fixed is why
+  prompts were being eaten in the first place.
+- why open: the mitigation (hook off) is in place and Kyle's first-named defect
+  ("the prompt entered in the UI does not carry cleanly into the ACC process")
+  may be this, may be OI-031, or may be both -- not yet separated. Re-enabling
+  the hook before that is understood would reintroduce the symptom. Needs a
+  real repro of a prompt being eaten, which needs the goal store trustworthy
+  first (OI-031).
+- done when: a prompt-eating incident is reproduced and root-caused, the fix is
+  proven, `hooks/route.mjs` is re-registered in settings.json, `policy.json
+  autoCd.enabled` is back to true, and `node hooks/route.mjs doctor` passes
+  with the dial and the hook agreeing.
+
+## OI-034 A console PID is treated as a console IDENTITY, and Windows recycles PIDs
+- opened: 2026-08-04
+- where: hooks/goal.mjs `consoleAlive` (line ~129), `bindSession` (line ~200),
+  `pendingKicks`; watcher/clearbot.ps1 `Invoke-Kicks`
+- what: split out of OI-031, whose reaping half is now resolved. Liveness is a
+  bare `process.kill(pid, 0)` existence test and adoption matches on
+  `Number(g.consolePid) === Number(consolePid)`, so a goal whose console died
+  and whose PID has since been reassigned looks alive, becomes eligible for a
+  kick, and clearbot types a constant into whatever process now owns that PID.
+  The comment directly above `consoleAlive` already names this hazard verbatim
+  ("the pid may since have been reused by an unrelated process") and the check
+  below it does not defend against it. Reaping (OI-031) shrinks the window a
+  great deal but does not close it: a PID can be recycled between one
+  SessionStart and the next.
+- status: latent, not observed firing. All six stale goals' PIDs were dead when
+  checked on 2026-08-04, so nothing was mistargeted; this is a construction
+  defect, not an incident.
+- why open: the fix needs a cheap identity, and the obvious one is awkward —
+  node has no built-in way to read a process start time, and `pendingKicks`
+  runs every 2s via clearbot, so querying the OS per goal per cycle is too
+  expensive. Chosen design, not yet implemented: clearbot already enumerates
+  processes and gets `StartTime` for free, so it passes the live console table
+  IN to goal.mjs rather than goal.mjs reaching out to the OS. That keeps
+  goal.mjs pure and keeps every kick-safety rule in the one file whose header
+  already promises exactly that.
+- done when: a console is identified by (pid, startTime); `consoleAlive` is
+  false for a PID that exists with a different start time; `bindSession` never
+  adopts a goal whose console identity does not match; and a test reproduces
+  the recycled-PID mistarget directly.
 
 ## OI-032 autoApprove:true means an agent writing a file IS an agent running code
 - opened: 2026-08-04
@@ -274,6 +317,33 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-031 [RESOLVED 2026-08-04] Dead-console goals are reaped instead of accumulating
+- opened: 2026-08-04, resolved: 2026-08-04. `goal.mjs reapDeadGoals()` archives a
+  goal whose console is gone to `runner/goals/done/` as `abandoned` — a third
+  status, deliberately distinct from `done`/`blocked`, because a ledger that
+  cannot tell "the model finished" from "the console died" cannot tell a
+  completed loop from a lost one. It runs from `bindSession` itself, BEFORE the
+  adopt-by-console-pid fallback, so there is nothing stale left to adopt; that
+  also keeps every adoption-safety rule in the one file whose header already
+  claims to be the single place they live. A goal that has never bound gets a
+  grace window (the GUI creates the goal, THEN launches the console); one that
+  has bound gets none, because its console provably existed at bind time.
+  CLI: `goal.mjs reap`.
+- the decision the entry asked for, made rather than escalated: **dead = the
+  console PID is absent.** A "no cycle in N hours" rule was considered and
+  rejected — a goal can legitimately sit idle while Kyle is away, and
+  `humanHoldMinutes` already exists for that case.
+- verified live, not just in tests: `node hooks/goal.mjs reap` → `reaped 6`, and
+  `goal.mjs list` then returned 0 active goals (was 6, oldest 2026-07-31, every
+  console dead). All six archived with `status: "abandoned"`. 7 new tests in
+  `hooks/goal.test.mjs` (50/50) plus a wiring test in `hooks/budget.test.mjs`
+  proving SessionStart reaps a stale goal *instead of injecting its text* — that
+  one initially failed for a real reason worth keeping: it used a non-UUID
+  sessionId, which OI-006's guard correctly treats as inert, so the goal counted
+  as never-bound and the grace window (correctly) protected it.
+- NOT closed by this: the PID-reuse hazard the same code comment names. Split
+  out as OI-034, because reaping shrinks that window without closing it.
 
 ## OI-030 [RESOLVED 2026-08-04] Repeated red CI on main -- fold the coverage gate into a local pre-push hook, ACC-style
 - opened: 2026-08-04, resolved: 1726574/644ab7e/d8e7ed8, merged 275a899 -- Approach A

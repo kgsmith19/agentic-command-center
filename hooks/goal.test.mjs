@@ -476,6 +476,82 @@ test("CLI: main() prints usage for an unrecognized command", () => {
   assert.match(runMain(["frobnicate"]), /^usage: goal\.mjs/);
 });
 
+// ------------------------------------------------- reaping (guards OI-031)
+// Six goals sat "active" from 2026-07-31 onward, every one bound to a console
+// that had been gone for days, because nothing ever marked a goal dead when its
+// console died. clearbot even LOGGED those deaths ("GUI-DEAD ... hosting GUI
+// (pid 1620) is gone") and left the goals active. Detection without reaping.
+const DEAD_PID = 999999;
+
+test("OI-031: a goal whose console is gone is reaped and archived as abandoned", () => {
+  const g = m.createGoal({ text: "stranded" });
+  m.bindSession({ sessionId: SID(60), consolePid: DEAD_PID, goalId: g.id });
+
+  const reaped = m.reapDeadGoals({ now: Date.now() + 3600_000 });
+
+  assert.deepEqual(reaped, [g.id], "returns what it reaped so the caller can log it");
+  assert.equal(m.readGoal(g.id), null, "archived out of the live directory");
+  assert.ok(!m.activeGoals().some((x) => x.id === g.id), "gone from activeGoals()");
+});
+
+test("OI-031: 'abandoned' is distinct from done/blocked - the console died, the model did not finish", () => {
+  const g = m.createGoal({ text: "stranded" });
+  m.bindSession({ sessionId: SID(61), consolePid: DEAD_PID, goalId: g.id });
+  m.reapDeadGoals({ now: Date.now() + 3600_000 });
+
+  const archived = JSON.parse(
+    fs.readFileSync(path.join(GOALS_DIR, "done", `${g.id}.json`), "utf8")
+  );
+  assert.equal(archived.status, "abandoned");
+});
+
+test("OI-031: a goal whose console is alive is never reaped", () => {
+  const g = m.createGoal({ text: "working" });
+  m.bindSession({ sessionId: SID(62), consolePid: LIVE, goalId: g.id });
+
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 3600_000 }), []);
+  assert.equal(m.readGoal(g.id).status, "active");
+});
+
+// The GUI creates a goal and only then launches the console, so for a moment a
+// brand-new goal legitimately has no live console. Reaping it there would kill
+// the very launch it belongs to.
+test("OI-031: a goal that has not been bound yet is protected by the grace window", () => {
+  const g = m.createGoal({ text: "just launched" }); // no bindSession: console not up yet
+
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now(), graceMs: 120_000 }), []);
+  assert.equal(m.readGoal(g.id).status, "active", "still active inside the grace window");
+
+  // Once the window closes with no console ever having bound, the launch failed.
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 120_001, graceMs: 120_000 }), [g.id]);
+});
+
+// A goal that HAS bound was attached to a console that provably existed at that
+// moment, so a dead pid now means the console died - no grace applies.
+test("OI-031: a bound goal whose console died is reaped immediately, grace notwithstanding", () => {
+  const g = m.createGoal({ text: "console died" });
+  m.bindSession({ sessionId: SID(63), consolePid: DEAD_PID, goalId: g.id });
+
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now(), graceMs: 120_000 }), [g.id]);
+});
+
+test("OI-031: a reaped goal is never kicked", () => {
+  const g = m.createGoal({ text: "stranded" });
+  m.bindSession({ sessionId: SID(64), consolePid: DEAD_PID, goalId: g.id });
+  m.reapDeadGoals({ now: Date.now() + 3600_000 });
+
+  assert.deepEqual(m.pendingKicks(Date.now() + 7200_000), []);
+});
+
+test("CLI: main() 'reap' archives dead-console goals and names them", () => {
+  const g = m.createGoal({ text: "stranded" });
+  m.bindSession({ sessionId: SID(65), consolePid: DEAD_PID, goalId: g.id });
+
+  assert.equal(runMain(["reap"]), `reaped 1: ${g.id}`);
+  assert.equal(m.readGoal(g.id), null);
+  assert.equal(runMain(["reap"]), "reaped 0", "nothing left to reap");
+});
+
 test("a goal persists correctly after its directory is moved to a new location", async () => {
   const { m, dir } = await loadGoal();
 

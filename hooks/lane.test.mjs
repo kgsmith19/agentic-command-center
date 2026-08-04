@@ -342,9 +342,29 @@ test("a second interactive acquire DOES queue behind the first (interactive is s
 test("pacing is independent per category (interactive minGapMs never delays automation or vice versa)", async () => {
   setPolicy({ slots: 1, minGapMs: 200, pollMs: 20, interactive: { slots: 1, minGapMs: 0 } });
   await withLaunchSlot("auto-1", async () => {}); // primes automation's last-start.json
-  const t0 = Date.now();
+
+  // Measure BOTH and compare the difference, rather than asserting an absolute
+  // wall-clock ceiling on the interactive launch. The old assertion was
+  // `Date.now() - t0 < 150`, which conflates "no deliberate delay was applied"
+  // with "the machine happened not to be busy": it flaked under the full fast
+  // tier and again under covgate's coverage instrumentation, and a red tier
+  // makes covgate refuse to grade coverage for every OTHER change too. Shared
+  // load inflates both measurements equally, so it cancels in the difference,
+  // while a deliberate 200ms gap does not.
+  const tPaced = Date.now();
+  await withLaunchSlot("auto-2", async () => {});
+  const pacedMs = Date.now() - tPaced;
+
+  const tInteractive = Date.now();
   await withLaunchSlot("gui-1", async () => {}, { category: "interactive" });
-  assert.ok(Date.now() - t0 < 150, `interactive launch should not inherit automation's 200ms pacing, took ${Date.now() - t0}ms`);
+  const interactiveMs = Date.now() - tInteractive;
+
+  // Stronger than the original, which never checked that automation IS paced.
+  assert.ok(pacedMs >= 150, `automation's second launch must be paced by minGapMs=200, took ${pacedMs}ms`);
+  assert.ok(
+    pacedMs - interactiveMs >= 100,
+    `interactive must not inherit automation's 200ms pacing: paced ${pacedMs}ms vs interactive ${interactiveMs}ms`
+  );
   setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
 });
 
@@ -428,11 +448,28 @@ test("recordTransportFailure + breakerState: trips at threshold, clears once qui
 
 test("failures outside the window never count toward the threshold", () => {
   breakerReset();
-  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20, breakerThreshold: 2, breakerWindowMs: 30, breakerCooldownMs: 60000 });
+  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20, breakerThreshold: 2, breakerWindowMs: 60000, breakerCooldownMs: 60000 });
   try {
-    recordTransportFailure("econnreset");
-    recordTransportFailure("econnreset");
-    assert.equal(breakerState().tripped, true);
+    // This test did not test its own name. It set breakerWindowMs to 30ms, fired
+    // two recordTransportFailure calls (a file read + write each), and asserted
+    // tripped===true -- i.e. that two failures INSIDE the window DO trip, which
+    // is already covered above with a 60s window. Under load the two calls
+    // exceeded 30ms, the first aged out, and the assertion failed: that was the
+    // second flake blocking covgate. The property in the name -- a failure older
+    // than the window is excluded -- was never covered at all.
+    //
+    // Written straight into breaker.json (a rolling list of epoch ms, see
+    // lane.mjs breakerFile) so the age is exact and no sleep is involved.
+    const now = Date.now();
+    fs.mkdirSync(process.env.ACC_LANE_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(process.env.ACC_LANE_DIR, "breaker.json"),
+      JSON.stringify({ failures: [now - 120000, now], lastCause: "econnreset" })
+    );
+
+    const s = breakerState();
+    assert.equal(s.count, 1, "the failure older than the window must not be counted");
+    assert.equal(s.tripped, false, "one in-window failure is below the threshold of 2");
   } finally {
     breakerReset();
     setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });

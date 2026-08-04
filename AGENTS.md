@@ -126,7 +126,7 @@ file under `kernel/adapters/`), and the honest guard ceilings.
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/pre-push.test.mjs hooks/dialcheck.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
     -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
@@ -158,10 +158,20 @@ powershell -File gui/ptyhost.test.ps1
        protocol accepts/refuses, dispose kills the child. No claude, no GUI.
 powershell -File watcher/claude-cap-watch.test.ps1
 powershell -File watcher/install-cap-watch-task.test.ps1
+powershell -File watcher/flash-probe.test.ps1
     -> FAST TIER, hermetic, PowerShell. Pure functions only: the launch-cap
-       breach/fail-open decision, and the ACC-ClaudeCapWatch task spec
-       (registers nothing). Not in the node runner, so they are listed here
-       or they never get run.
+       breach/fail-open decision, the ACC-ClaudeCapWatch task spec (registers
+       nothing), and the rules deciding whether an observed window is the 60s
+       flash or unrelated desktop noise. Not in the node runner, so they are
+       listed here or they never get run.
+powershell -File watcher/flash-probe.test.ps1 -Observe
+    -> PROOF TIER, ~200s, observational. Watches real firings of the
+       ACC-ClaudeCapWatch task and FAILS if any console window appears. This
+       is the check guards did not have when it first declared the 60s flash
+       fixed: the old installer regex-matched the task's own arguments and
+       printed "no console window will appear" while the window kept
+       appearing. Configuration is not behaviour. It also fails if the task
+       did not fire >=3 times while watching, so it can never pass vacuously.
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
 powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
 npm run e2e:gui
@@ -282,7 +292,18 @@ holds all kicks. `goal.mjs pending` decides every condition that makes a kick
 unsafe (active? console alive? binding settled? cooldown?) so there is one place
 to audit, and `clearbot.ps1` stays a dumb executor.
 
-Tests: `node --test hooks/goal.test.mjs` (20).
+A goal whose console is gone is **reaped**, not left active (guards OI-031).
+`goal.mjs reapDeadGoals()` archives it to `runner\goals\done\` as `abandoned` —
+a third status, deliberately distinct from `done`/`blocked`, because a ledger
+that cannot tell "the model finished" from "the console died" cannot tell a
+completed loop from a lost one. It runs from SessionStart **before**
+`bindSession`, since adoption falls back to "whatever active goal owns this
+console pid" and a recycled pid is exactly how a fresh session would inherit
+last week's task. A goal that has never bound gets a grace window (the GUI
+creates the goal, *then* launches the console); one that has bound gets none,
+because its console provably existed. CLI: `goal.mjs reap`.
+
+Tests: `node --test hooks/goal.test.mjs` (50).
 
 Two things keep the loop from stalling, added 2026-07-31 after it stalled
 twice in one day. **Liveness:** a goal session that ends its turn UNDER the
@@ -309,6 +330,15 @@ ending turns — so conditions live in goal state, not hooks. With no active
 goal the condition is session-local only.
 
 ## Folder routing (Start work tab)
+
+**A dial is only real if its consumer exists.** `hooks/dialcheck.mjs` checks each
+`policy.json` dial against the hook it claims to control in `settings.json`, and
+fails in BOTH directions — a dial pointing at an unregistered hook, and a
+registered hook whose dial says off. It exists because a runbox script removed
+`hooks/route.mjs` from `settings.json` on 2026-08-04 while `autoCd.enabled` went
+on reading `true` for hours (guards OI-033). Run it as `node hooks/dialcheck.mjs`;
+add a dial by appending one entry to its `DIALS` table, never a new code path.
+Tests: `node --test hooks/dialcheck.test.mjs` (10).
 
 `hooks/route.mjs` scores task text against the table in `..\ROUTING.md` and
 names the narrowest folder the work belongs in. Two callers: the Start-work tab

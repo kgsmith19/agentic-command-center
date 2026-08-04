@@ -20,20 +20,40 @@ function Get-CapWatchTaskSpec {
     [pscustomobject]@{
         TaskName = 'ACC-ClaudeCapWatch'
         Execute  = 'powershell.exe'
-        # -WindowStyle Hidden is load-bearing. This action runs in Kyle's
-        # INTERACTIVE session on purpose (claude-cap-watch.ps1 raises a WinForms
-        # balloon on alert, which a session-0 task could never put on his
-        # desktop), and an interactive console app without it flashes a real
-        # console window every single repetition. Measured 2026-08-04 with
-        # EnumWindows polling from t=0: without it a window is visible from
-        # ~213ms until the process exits; with it, never visible at all. That
-        # flash-once-a-minute is exactly what Kyle reported. Do not remove.
+        # Belt-and-braces only. This flag was ONCE believed to be what stopped
+        # the 60s console flash; it is not, and the earlier measurement behind
+        # that belief was scoped to the wrong process. See LogonType below for
+        # the actual mechanism. Kept because removing it is an unrelated change.
         Argument = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
         RepetitionInterval = New-TimeSpan -Seconds 60
         # Finite on purpose: [TimeSpan]::MaxValue serialises to an ISO8601
         # duration ("P99999999DT23H59M59S") that Task Scheduler's XML rejects,
         # failing the whole registration (guards OI-025, twice).
         RepetitionDuration = New-TimeSpan -Days 3650
+        # THE fix for the 60s window flash (Kyle, 2026-08-04). The task used to
+        # run Interactive, so Windows gave its powershell.exe a console - and on
+        # this machine DelegationConsole/DelegationTerminal are
+        # {00000000-...} ("let Windows decide"), which hosts that console in a
+        # SEPARATE, COM-activated WindowsTerminal.exe. -WindowStyle Hidden only
+        # governs windows PowerShell itself owns, so it could never hide a
+        # console host owned by another process. Measured across 3 consecutive
+        # firings: CASCADIA_HOSTING_WINDOW_CLASS visible 469/608/491ms, plus the
+        # cap-watch process's own PseudoConsoleWindow for 47ms.
+        #
+        # S4U = "run whether the user is logged on or not", storing no password.
+        # It runs in session 0, which has no desktop, so no console host can be
+        # created and no window can appear - independent of the delegation
+        # setting, now or after a Windows update.
+        #
+        # Accepted cost: claude-cap-watch.ps1's NotifyIcon balloon can no longer
+        # reach Kyle's desktop. It is already best-effort in a try/catch whose
+        # own comment says the log line is the durable record, so it degrades
+        # correctly with no code change. Kyle, 2026-08-04: "The WinForms balloon
+        # is probably not a big deal."
+        LogonType = 'S4U'
+        # Limited, not Highest: elevation is needed to REGISTER this task, never
+        # to run it. The check only enumerates processes and reads policy.json.
+        RunLevel = 'Limited'
         ScriptPath = $scriptPath
     }
 }
@@ -64,9 +84,9 @@ $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date) `
 $atLogon = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -StartWhenAvailable -MultipleInstances IgnoreNew
-# Interactive: see the -WindowStyle comment above. The balloon needs the desktop.
+# Session 0, no desktop: see the LogonType comment in the spec above.
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
-               -LogonType Interactive -RunLevel Limited
+               -LogonType $spec.LogonType -RunLevel $spec.RunLevel
 
 Register-ScheduledTask -TaskName $spec.TaskName -Action $action -Trigger @($repeat, $atLogon) `
     -Settings $settings -Principal $principal `
@@ -74,12 +94,21 @@ Register-ScheduledTask -TaskName $spec.TaskName -Action $action -Trigger @($repe
     -Force | Out-Null
 
 # Prove it landed the way we asked, rather than trusting a clean exit code.
+#
+# This block deliberately claims LESS than it used to. The previous version
+# regex-matched the task's own arguments and then printed "no console window
+# will appear" - asserting on configuration and reporting it as behaviour. The
+# window kept appearing for another day. Whether a window actually appears is
+# an OBSERVATION, and it belongs to watcher/flash-probe.test.ps1 (AC-2), not
+# here. All this can honestly say is what it read back.
 $live = Get-ScheduledTask -TaskName $spec.TaskName
-$liveArgs = $live.Actions.Arguments
+$liveLogon = $live.Principal.LogonType
 Write-Host "registered: $($spec.TaskName) [$($live.State)]"
-Write-Host "arguments : $liveArgs"
-if ($liveArgs -notmatch '-WindowStyle\s+Hidden') {
-    Write-Error 'registered task is MISSING -WindowStyle Hidden - it will still flash a console window'
+Write-Host "arguments : $($live.Actions.Arguments)"
+Write-Host "logontype : $liveLogon"
+if ("$liveLogon" -ne $spec.LogonType) {
+    Write-Error "registered task LogonType is '$liveLogon', expected '$($spec.LogonType)' - it would still run interactively and flash a console window"
     exit 1
 }
-Write-Host 'verified  : -WindowStyle Hidden is set; no console window will appear.'
+Write-Host "read back : LogonType is $($spec.LogonType), so the task has no desktop to draw on."
+Write-Host 'NOT verified here: that no window appears. Run watcher/flash-probe.test.ps1 to observe that.'

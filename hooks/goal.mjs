@@ -194,6 +194,14 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // same way an auto-clear does.
 export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   ensureDirs();
+  // guards OI-031, and it belongs HERE rather than at the SessionStart call site:
+  // the fallback below adopts "whatever active goal owns this console pid", and
+  // Windows recycles pids, so a stale goal is exactly what a fresh session would
+  // inherit -- injecting last week's task into today's work. Six such goals were
+  // live on 2026-08-04, the oldest from 07-31, every console long dead. Reaping
+  // first means there is nothing stale left to adopt, and it keeps every rule
+  // about what makes adoption unsafe in this one file, as the header promises.
+  reapDeadGoals();
   let goal = goalId ? readGoal(goalId) : null;
   if (goal && goal.status !== "active") goal = null;
   if (!goal && consolePid) {
@@ -255,7 +263,7 @@ export function setStatus(id, status, why) {
   goal.needsKick = false;
   if (why) goal.why = String(why).slice(0, 500);
   write(goal);
-  if (status === "done" || status === "blocked") {
+  if (status === "done" || status === "blocked" || status === "abandoned") {
     try {
       fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
     } catch {}
@@ -267,6 +275,36 @@ export function setStatus(id, status, why) {
     } catch {}
   }
   return goal;
+}
+
+// guards OI-031. Nothing used to mark a goal dead when its console died, so the
+// store only ever grew: six goals sat "active" from 2026-07-31 onward, every one
+// bound to a console gone for days, and pendingKicks kept considering work
+// nobody was doing. clearbot even LOGGED the deaths ("GUI-DEAD ... hosting GUI
+// (pid 1620) is gone") and left the goals active - detection without reaping.
+//
+// "abandoned" is deliberately a third status, not done/blocked: the console went
+// away, the model never finished. A ledger that cannot tell those apart cannot
+// tell a completed loop from a lost one.
+const REAP_GRACE_MS_DEFAULT = 120000;
+
+export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT } = {}) {
+  const reaped = [];
+  for (const g of activeGoals()) {
+    if (consoleAlive(g.consolePid)) continue;
+    // Never bound: the GUI creates the goal and THEN launches the console, so
+    // for a moment a healthy goal legitimately has no console. Reaping there
+    // would kill the very launch the goal belongs to. A goal that HAS bound was
+    // attached to a console that provably existed, so a dead pid now means that
+    // console died - no grace applies.
+    if (!g.boundAt) {
+      const born = Date.parse(g.createdAt || "");
+      if (Number.isFinite(born) && now - born < graceMs) continue;
+    }
+    setStatus(g.id, "abandoned", "console gone - reaped by reapDeadGoals");
+    reaped.push(g.id);
+  }
+  return reaped;
 }
 
 // What clearbot asks for every cycle. Everything that makes a kick unsafe is
@@ -382,6 +420,11 @@ export function main() {
     markKicked(resolveId(argv));
     return;
   }
+  if (cmd === "reap") {
+    const ids = reapDeadGoals();
+    console.log(ids.length ? `reaped ${ids.length}: ${ids.join(" ")}` : "reaped 0");
+    return;
+  }
   if (cmd === "show") {
     const g = readGoal(resolveId(argv));
     console.log(g ? JSON.stringify(g, null, 2) : "no active goal");
@@ -406,7 +449,7 @@ export function main() {
     return;
   }
   console.log(
-    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id]"
+    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
   );
 }
 
