@@ -53,31 +53,6 @@ line under `## Resolved`.
   `protected` (ideally with `C:/code/ROUTING.md` added), or the AGENTS.md /
   clearbot wording is changed to match reality.
 
-## OI-006 Running budget.mjs SessionStart by hand hijacks the live goal binding
-- opened: 2026-07-31 (hit while verifying the heartbeat work — self-inflicted,
-  which is exactly why it is worth recording)
-- where: hooks/budget.mjs onSessionStart → hooks/goal.mjs bindSession
-- what: `bindSession` adopts an active goal by CONSOLE PID (that is the
-  mechanism that survives a /clear, and it must stay). So piping a synthetic
-  SessionStart payload into the live hook from a console that owns a goal
-  rebinds that goal to whatever `session_id` the payload carried. Observed:
-  a smoke test with `session_id:"hbtest"` moved the live goal's sessionId to
-  "hbtest" and armed a kick, which clearbot then typed into the real console.
-  The damage is silent: the real session's Stop hook can no longer find its
-  own goal (`goalForSession` misses), so cycle logging and the new turn-end
-  liveness stop working for that session.
-- why open: the obvious guard (require a UUID-shaped session id) risks
-  breaking legitimate post-clear adoption for a hazard only reachable by
-  hand-running the hook, and AGENTS.md is explicit that guards is a
-  convention enforcer, not a security boundary. Recovery is cheap and known:
-  re-run SessionStart with the true session id, then `goal.mjs kicked <id>`.
-- mitigation in place: every verification recipe in the plan (and AGENTS.md,
-  Task 11) now sets `ACC_ROOT` to a throwaway tree, so a hand-run hook cannot
-  reach live goal state.
-- done when: either a binding guard exists that cannot break legitimate
-  post-clear adoption, or hand-running hooks against live state is impossible
-  by construction.
-
 ## OI-007 External (Scheduled Task) watcher supervision needs elevation
 - opened: 2026-07-31
 - where: watcher/watchdog/acc-watchdog-register-elevated.ps1
@@ -359,6 +334,41 @@ line under `## Resolved`.
   own directory (e.g. watcher/watchdog/) and are run deliberately."
   Satisfies the entry's own first "done when" option exactly. Ledger-only
   resolution — no code or doc change needed beyond this closure.
+
+## OI-006 [RESOLVED 2026-08-04] bindSession refuses to rebind an active goal on anything but a UUID-shaped sessionId
+- opened: 2026-07-31, resolved: 8319f6a — the obvious guard (require a
+  UUID-shaped session id) turned out not to risk legitimate post-clear
+  adoption after all: a non-UUID sessionId is now treated exactly like none
+  was passed — the existing consolePid-based lookup still runs, but
+  sessionId/needsKick/boundAt are left untouched instead of overwritten.
+  Reproduces the ledger's own hazard directly (`bindSession({ sessionId:
+  "hbtest", consolePid: LIVE })` against a bound goal: sessionId/needsKick/
+  boundAt provably unchanged) and confirms a real UUID still adopts
+  normally, via two new regression tests in hooks/goal.test.mjs.
+  AGENTS.md's "never hand-run a hook against live state" warning is updated
+  to note the specific hijack is now closed, but still calls for
+  sandboxing (`markKicked`/`setStatus`/cycle logging are still reachable by
+  a hand-run hook).
+  Touching bindSession subjected the whole file to covgate's 100/100/90
+  floor; the file's real pre-existing coverage was 64/50/58%, and a deeper
+  look found even that number was wrong, not just low — goal.test.mjs's
+  per-test cache-busted reimport of goal.mjs (`?t=${n}`) meant node's own
+  lcov merge (last-write-wins per file path, not a union) only ever
+  reported the LAST-loaded test's coverage. Fixed at the root: goal.mjs's
+  ROOT/GOALS/DONE paths now resolve from the environment on every call
+  instead of once at import, so goal.test.mjs and budget.test.mjs's own
+  direct goal.mjs usage share one module instance with no cache-busting
+  anywhere (this also closed the same collision between the two test
+  files when covgate runs them together). `main()` (the CLI dispatcher) is
+  now exported and tested in-process, since a spawned subprocess is
+  invisible to this file's own coverage instrumentation. New tests cover
+  `goalForSession`/`resolveId`/every CLI subcommand/the remaining
+  defensive catch branches. Real coverage after the fix: 100% lines, 100%
+  funcs, 98–99% branches (`ACC_COVGATE_TESTS=... node hooks/covgate.mjs`
+  green) — the only remaining gaps are the ACC_ROOT/ACC_GOALS_DIR env
+  ternaries at import and the CLI entry-point guard's true branch, neither
+  reachable in-process without reintroducing the collision. No
+  `branchFloorOverrides` entry needed.
 
 ## OI-020 [RESOLVED 2026-08-03] Playwright e2e verifies the kernel GUI in CI
 - opened: 2026-08-03, resolved: 5deff38, 39322e1 — gui/e2e/kernel-settings.spec.mjs

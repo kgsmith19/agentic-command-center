@@ -153,9 +153,12 @@ npm run e2e:gui
 
 **Never run a hook by hand against live state.** `bindSession` adopts a goal by
 console PID, so piping a fake SessionStart into `budget.mjs` from a console
-that owns a goal rebinds that goal to the fake session id and quietly breaks
-the real session's loop (guards OI-006 — it happened). Always sandbox:
-`ACC_ROOT=<throwaway> ACC_POLICY=<file> node hooks/budget.mjs`.
+that owns a goal used to rebind that goal to whatever session id the payload
+carried and quietly break the real session's loop (guards OI-006 — it
+happened). `bindSession` now refuses to rebind on anything that isn't
+UUID-shaped, closing that specific hijack — but a hand-run hook can still
+touch other live state (`markKicked`, `setStatus`, cycle logging), so always
+sandbox regardless: `ACC_ROOT=<throwaway> ACC_POLICY=<file> node hooks/budget.mjs`.
 
 The suites that touch runner state (`budget`, `route`) sandbox themselves via
 `ACC_ROOT` + `ACC_POLICY`, because a test that reset the live `runner\state`
