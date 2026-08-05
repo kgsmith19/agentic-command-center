@@ -114,6 +114,65 @@ export function naRatio(record) {
   return total ? na / total : 0;
 }
 
+// AC-G17. The failure this repo has already shipped once: `4af8cd6`
+// regex-matched a scheduled task's own arguments and reported the result as
+// behaviour. Finding = { file, line, text } - one finding shape across every
+// gate in the programme (matches J's pathgate, E's uigate).
+//
+// Heuristic, not a real parser: flags a test whose LAST statement before an
+// `assert.*` call is a bare `write*(...)` call, and that assert's own source
+// text calls a `read*(...)` getter - i.e. nothing ran in between except the
+// assertion reading back what was just written. Any other statement between
+// them (a consumer call, an assignment used for its own sake) breaks the
+// chain and is not flagged. `// scenariogate-ok: <why>` on the line directly
+// above `test(...)` opts a test out - the persistence tier (Task 6) is
+// exactly a round-trip, and the gate demands the justification be written
+// down, not that the pattern never appear.
+const WRITE_CALL = /^[\w$.]*\bwrite\w*\s*\(/i;
+const READ_CALL = /\bread\w*\s*\(/i;
+const ASSERT_STMT = /^assert\b/;
+const TEST_CALL = /\btest\(\s*(["'`])((?:\\.|(?!\1).)*)\1\s*,\s*(?:async\s*)?\(\)\s*=>\s*\{/g;
+
+function extractTestBodies(src) {
+  const tests = [];
+  const re = new RegExp(TEST_CALL.source, "g");
+  let m;
+  while ((m = re.exec(src))) {
+    let depth = 1;
+    let i = re.lastIndex;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") depth--;
+    }
+    const body = src.slice(re.lastIndex, i - 1);
+    const before = src.slice(0, m.index);
+    const prevLine = before.split(/\r?\n/).filter((l) => l.trim() !== "").pop() || "";
+    tests.push({ name: m[2], body, justified: /^\s*\/\/\s*scenariogate-ok\b/.test(prevLine) });
+  }
+  return tests;
+}
+
+export function selfAssertingTests(files, readFile) {
+  const findings = [];
+  for (const file of files) {
+    let src;
+    try { src = readFile(file); } catch { continue; }
+    for (const t of extractTestBodies(src)) {
+      if (t.justified) continue;
+      let lastWasWrite = false;
+      for (const stmt of t.body.split(";").map((s) => s.trim()).filter(Boolean)) {
+        if (WRITE_CALL.test(stmt)) { lastWasWrite = true; continue; }
+        if (ASSERT_STMT.test(stmt)) {
+          if (lastWasWrite && READ_CALL.test(stmt)) findings.push({ file, line: null, text: t.name });
+          continue; // an assert neither extends nor breaks the write streak on its own
+        }
+        lastWasWrite = false; // any other statement is a real consumer - chain broken
+      }
+    }
+  }
+  return findings;
+}
+
 // ------------------------------------------------------------- CLI
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

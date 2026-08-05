@@ -94,6 +94,61 @@ test("a record whose named tests all exist passes", () => {
   assert.deepEqual(m.gate(["a.mjs"], () => GOOD, { knownTests: names }), []);
 });
 
+// AC-G17: the failure this repo has already shipped once - `4af8cd6`
+// regex-matched a scheduled task's own arguments and reported the result as
+// behaviour.
+test("a test whose only assertion reads back what it wrote is a finding", () => {
+  const src = `
+test("the dial saves", () => {
+  writeConfig({ enabled: true });
+  assert.equal(readConfig().enabled, true);
+});`;
+  assert.equal(m.selfAssertingTests(["a.test.mjs"], () => src).length, 1);
+});
+
+test("a test that exercises a consumer between write and assert is fine", () => {
+  const src = `
+test("the dial changes behaviour", () => {
+  writeConfig({ enabled: true });
+  const outcome = runConsumer();
+  assert.equal(outcome, "re-scoped");
+});`;
+  assert.deepEqual(m.selfAssertingTests(["a.test.mjs"], () => src), []);
+});
+
+test("an explicitly justified round-trip test is allowed", () => {
+  const src = `
+// scenariogate-ok: persistence round-trip IS the behaviour under test
+test("the store round-trips", () => {
+  write(x); assert.deepEqual(read(), x);
+});`;
+  assert.deepEqual(m.selfAssertingTests(["a.test.mjs"], () => src), []);
+});
+
+test("selfAssertingTests skips a file it cannot read instead of throwing", () => {
+  assert.deepEqual(
+    m.selfAssertingTests(["missing.test.mjs"], () => { throw new Error("ENOENT"); }),
+    []
+  );
+});
+
+test("multiple tests in one file are each judged independently", () => {
+  const src = `
+test("bad", () => {
+  writeConfig({ a: 1 });
+  assert.equal(readConfig().a, 1);
+});
+
+test("good", () => {
+  writeConfig({ a: 1 });
+  const outcome = runConsumer();
+  assert.equal(outcome, "ok");
+});`;
+  const findings = m.selfAssertingTests(["a.test.mjs"], () => src);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].text, "bad");
+});
+
 test("an axis with a blank body between headings counts as unanswered, not a crash", () => {
   const record = `# a.mjs — scenarios
 
