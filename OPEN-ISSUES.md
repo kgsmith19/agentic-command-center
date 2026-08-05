@@ -31,6 +31,28 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-045 clearbot.test.mjs's OI-003 settle-duration test is flaky under full-suite load
+- opened: 2026-08-05
+- rank: reliability
+- where: `hooks/clearbot.test.mjs:203` ("OI-003: the non-clear /cd settle
+  duration comes from policy.json, not a hardcoded constant")
+- what: found running `npm run test:windows` from the `acc-j-decomposition`
+  worktree while proving sub-project J's Task 4 (`tools/install-hooks.mjs`,
+  unrelated file). The test asserts a 2500ms-configured settle measurably
+  outlasts a 50ms one; under the full suite's concurrent test-file load the
+  two durations compress close enough that the assertion fails
+  (fast=3866ms, slow=5353ms — a real but too-small gap). Passes reliably in
+  isolation (`node --test hooks/clearbot.test.mjs`, 15/15) and even at
+  `--test-concurrency=1` alone. Not caused by, or related to, install-hooks.
+- why open: a relative-timing assertion against wall-clock durations is
+  inherently sensitive to machine load; fixing it (e.g. asserting a ratio
+  with a wider margin, or mocking the clock instead of really sleeping)
+  is a real fix to a real test, not a one-line tweak, and out of scope for
+  the change that surfaced it.
+- done when: the test passes reliably both standalone and as part of the
+  full concurrent `test:windows` run, without widening the tested behavior
+  itself (still proves the value comes from policy.json, not a constant).
+
 ## OI-044 covgate's coverage merge under-reports funcs%, not just branches%, once a module's own tests spawn real subprocesses
 - opened: 2026-08-05
 - rank: reliability
