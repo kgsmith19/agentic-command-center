@@ -4,6 +4,7 @@
 // real ledgers on disk.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 const m = await import("./inventory.mjs");
 
@@ -164,4 +165,32 @@ test("--json emits parseable JSON with the commit stamp", () => {
   const r = m.run(["--json"], io({ "a.md": "## OI-001 t\n- rank: safety\n" }));
   assert.equal(r.code, 0);
   assert.equal(JSON.parse(r.stdout).generatedFrom, "abc1234");
+});
+
+// Real-ledger integration, via the real io the CLI itself builds
+// (m.realIo()) — guards resolves relative to THIS repo's own checkout
+// (whichever worktree is running), matching the CLI's own REPO_ROOT-relative
+// resolution, so this also exercises realIo()'s own lines for coverage
+// instead of duplicating a second hardcoded ledger list here.
+const haveAll = m.realIo().ledgers.every((l) => fs.existsSync(l.path));
+
+test("every open entry in all five real ledgers is ranked", { skip: !haveAll }, () => {
+  const r = m.run(["--check"], m.realIo());
+  assert.equal(r.code, 0, r.stdout);
+});
+
+test("the real ledgers parse and rank without throwing", { skip: !haveAll }, () => {
+  const r = m.run(["--json"], m.realIo());
+  assert.equal(r.code, 0);
+  const j = JSON.parse(r.stdout);
+  assert.ok(j.rows.length > 0);
+  assert.ok(j.rows.every((row) => row.rank !== "UNRANKED"));
+});
+
+// main() is a spawned subprocess's entry point in real use, invisible to this
+// file's own coverage instrumentation when spawned — so it's called directly,
+// in-process, the same way hooks/goal.test.mjs exercises hooks/goal.mjs's
+// exported main(). It writes real stdout as a side effect; that's expected.
+test("main() runs --check against the real ledgers and returns run()'s exit code", { skip: !haveAll }, () => {
+  assert.equal(m.main(["--check"]), 0);
 });

@@ -5,6 +5,11 @@
 // priority produces a confidently wrong ordering, which is the one thing this
 // file exists to prevent.
 
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 const HEADING = /^##\s+(OI-\d+)\s+(?:\[([^\]]+)\]\s*)?(.*)$/;
 const FIELD = /^-\s+([a-z-]+):\s*(.*)$/i;
 
@@ -146,38 +151,44 @@ export function run(argv, io) {
   };
 }
 
-// Real CLI. Kept to the edges so every rule above stays unit-testable.
-// Windows note: import.meta.url is `file:///C:/...` (triple slash); comparing
-// it directly against a `file://${argv[1]}` template string never matches on
-// Windows. Resolve both sides to plain paths instead, matching the idiom this
-// repo already uses (hooks/covgate.mjs:243, hooks/goal.mjs:456).
-const { fileURLToPath } = await import("node:url");
-const { default: path } = await import("node:path");
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  const { readFileSync } = await import("node:fs");
-  const { execFileSync } = await import("node:child_process");
-  // The guards ledger and this repo's own commit are resolved relative to
-  // THIS file's own checkout, not a hardcoded C:/code/guards, so the CLI
-  // reports the running worktree's own state (branch, uncommitted ranks)
-  // instead of whatever happens to be checked out at the canonical path —
-  // load-bearing while sub-projects run one-worktree-per-branch (the
-  // completion plan's own convention).
-  const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const LEDGERS = [
-    { name: "code", path: "C:/code/OPEN-ISSUES.md" },
-    { name: "guards", path: path.join(REPO_ROOT, "OPEN-ISSUES.md") },
-    { name: "ecosystem", path: "C:/code/lifeos-ecosystem/OPEN-ISSUES.md" },
-    { name: "lifeos", path: "C:/code/lifeos-ecosystem/lifeos/OPEN-ISSUES.md" },
-    { name: "lifeos-ui", path: "C:/code/lifeos-ecosystem/lifeos-ui/OPEN-ISSUES.md" },
-  ];
-  const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-    cwd: REPO_ROOT, encoding: "utf8",
-  }).trim();
-  const r = run(process.argv.slice(2), {
+// The guards ledger and this repo's own commit are resolved relative to
+// THIS file's own checkout, not a hardcoded C:/code/guards, so the CLI
+// reports the running worktree's own state (branch, uncommitted ranks)
+// instead of whatever happens to be checked out at the canonical path —
+// load-bearing while sub-projects run one-worktree-per-branch (the
+// completion plan's own convention).
+const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+export function realIo() {
+  return {
     readFile: (p) => readFileSync(p, "utf8"),
-    ledgers: LEDGERS,
-    commit,
-  });
-  process.stdout.write(r.stdout);
-  process.exit(r.code);
+    ledgers: [
+      { name: "code", path: "C:/code/OPEN-ISSUES.md" },
+      { name: "guards", path: path.join(REPO_ROOT, "OPEN-ISSUES.md") },
+      { name: "ecosystem", path: "C:/code/lifeos-ecosystem/OPEN-ISSUES.md" },
+      { name: "lifeos", path: "C:/code/lifeos-ecosystem/lifeos/OPEN-ISSUES.md" },
+      { name: "lifeos-ui", path: "C:/code/lifeos-ecosystem/lifeos-ui/OPEN-ISSUES.md" },
+    ],
+    commit: execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: REPO_ROOT, encoding: "utf8",
+    }).trim(),
+  };
 }
+
+// Exported and called directly by tests, in-process — a spawned subprocess is
+// invisible to this file's own coverage instrumentation (same fix already
+// applied to hooks/goal.mjs for OI-006). Returns the exit code rather than
+// calling process.exit itself, so a test can call this without killing the
+// test runner.
+export function main(argv = process.argv.slice(2)) {
+  const r = run(argv, realIo());
+  process.stdout.write(r.stdout);
+  return r.code;
+}
+
+// Real CLI entry point. Windows note: import.meta.url is `file:///C:/...`
+// (triple slash); comparing it directly against a `file://${argv[1]}`
+// template string never matches on Windows. Resolve both sides to plain
+// paths instead, matching the idiom this repo already uses
+// (hooks/covgate.mjs:243, hooks/goal.mjs:456).
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) process.exit(main());
