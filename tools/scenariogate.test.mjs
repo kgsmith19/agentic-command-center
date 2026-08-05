@@ -149,6 +149,22 @@ test("good", () => {
   assert.equal(findings[0].text, "bad");
 });
 
+// Task 4 Step 6 of the test-depth program (guards#OI-019): the completeness
+// gate across all twelve real kernel modules is `node tools/scenariogate.mjs
+// --check-all` (see that file's own CLI section) — a standalone command, NOT
+// a node:test test in this file. Node's test runner detects "node:test run()
+// is being called recursively within a test file" and silently SKIPS a
+// nested `node --test` subprocess spawned from inside an already-running
+// `node --test` (confirmed empirically: collectKnownTests' own inner
+// `node --test --test-reporter=tap` produces zero output under the guard,
+// so every named test in every record falsely reports missing-test). That
+// guard applies transitively through any depth of subprocess nesting, so
+// --check-all cannot be proven from inside this test file either — it must
+// be run bare, the same reason `tools/inventory.mjs`'s own --check is never
+// exercised via a node:test subprocess call in tools/inventory.test.mjs.
+// Verified manually for this commit: `node tools/scenariogate.mjs
+// --check-all` reports all 12 modules ok.
+
 test("an axis with a blank body between headings counts as unanswered, not a crash", () => {
   const record = `# a.mjs — scenarios
 

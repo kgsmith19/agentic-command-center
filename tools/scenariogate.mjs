@@ -217,17 +217,53 @@ function collectKnownTests(testFile) {
   }
 }
 
+function checkOne(modulePath) {
+  const testFile = modulePath.replace(/\.mjs$/, ".test.mjs");
+  const knownTests = collectKnownTests(testFile);
+  return gate([modulePath], readRecordFile, { knownTests });
+}
+
+// Task 4 Step 6 of guards#OI-019: the completeness gate over every real
+// kernel module. Deliberately a bare CLI mode, not a node:test test — this
+// spawns `node --test` per module (via collectKnownTests), and Node's own
+// test runner silently skips a nested `node --test` when the OUTER process
+// is already one (warns "run() is being called recursively within a test
+// file" and produces zero output), which would make every module falsely
+// report missing-test if this ran from inside the fast tier. Run bare:
+// `node tools/scenariogate.mjs --check-all`.
+function realKernelModules() {
+  const isModule = (f) => f.endsWith(".mjs") && !f.includes(".test.") && !f.endsWith(".e2e.mjs");
+  const top = readdirSync(path.join(ROOT, "kernel")).filter(isModule).map((f) => `kernel/${f}`);
+  const adapters = readdirSync(path.join(ROOT, "kernel", "adapters")).filter(isModule).map((f) => `kernel/adapters/${f}`);
+  return [...top, ...adapters];
+}
+
 function main() {
   const argv = process.argv.slice(2);
+  if (argv.includes("--check-all")) {
+    const mods = realKernelModules();
+    let anyFail = false;
+    for (const mod of mods) {
+      const problems = checkOne(mod);
+      if (problems.length) {
+        anyFail = true;
+        for (const p of problems) {
+          console.log(`scenariogate: ${p.kind} — ${p.module}${p.axis ? ` [${p.axis}]` : ""}${p.detail ? `: ${p.detail}` : ""}`);
+        }
+      }
+    }
+    if (anyFail) process.exit(1);
+    console.log(`scenariogate: ok — all ${mods.length} kernel modules`);
+    process.exit(0);
+  }
+
   const idx = argv.indexOf("--module");
   const modules = idx >= 0 ? [argv[idx + 1]] : [];
   if (!modules.length) {
-    console.error("usage: scenariogate.mjs --module <path/to/module.mjs>");
+    console.error("usage: scenariogate.mjs --module <path/to/module.mjs> | --check-all");
     process.exit(1);
   }
-  const testFile = modules[0].replace(/\.mjs$/, ".test.mjs");
-  const knownTests = collectKnownTests(testFile);
-  const problems = gate(modules, readRecordFile, { knownTests });
+  const problems = checkOne(modules[0]);
   if (!problems.length) {
     console.log(`scenariogate: ok — ${modules[0]}`);
     process.exit(0);
