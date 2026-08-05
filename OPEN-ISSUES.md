@@ -31,6 +31,30 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-041 tools/workflows.test.mjs's row-shape check silently matches zero rows on this Windows checkout
+- opened: 2026-08-05
+- rank: reliability
+- where: `tools/workflows.test.mjs` ("every workflow row names a Tests
+  value, never a bare dash"), reading `WORKFLOWS.md`
+- what: found while auditing `kernel/run.mjs` for `guards#OI-019` (sub-
+  project G). The test does `doc.split("\n")` then matches each row against
+  `/^\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|$/`. `WORKFLOWS.md` on disk has CRLF line
+  endings, so every line after the split keeps a trailing `\r`, and the `$`
+  anchor never matches it — the regex finds zero rows on every real run here,
+  not just a hypothetical one. The test still "passes" its own
+  `assert.ok(rows.length > 0, ...)` guard as a *failure* (it throws), so this
+  is not silent in CI, but it has been red on this branch since before this
+  audit and nobody has been un-red-ing it — `node --test
+  tools/workflows.test.mjs` fails on a clean `acc/g-kernel-scenarios`
+  checkout with no local changes.
+- why open: out of scope for sub-project G's kernel-module audits (this file
+  belongs to sub-project A's `WORKFLOWS.md` deliverable); logged rather than
+  fixed inline per standing rule 5.
+- done when: the row regex tolerates a trailing `\r` (e.g. strip it before
+  matching, or match against `\r?$`), `node --test tools/workflows.test.mjs`
+  passes on this Windows checkout, and a regression test pins a CRLF-
+  terminated fixture row so this cannot regress silently again.
+
 ## OI-038 hooks/engine.mjs, the runbox lifecycle engine that runs scripts with the user's full authority, has no automated test suite
 - opened: 2026-08-05
 - rank: safety
@@ -411,6 +435,33 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-040 [RESOLVED 2026-08-05] kernel/verifier.mjs's verifyCriterion could throw uncaught, crashing kernel/run.mjs before it finalized the run
+- opened: 2026-08-05, resolved: 2026-08-05
+- rank: reliability
+- where: `kernel/verifier.mjs` `verifyCriterion` (the `file_contains` branch's
+  `new RegExp(v.pattern)`); caller `kernel/run.mjs` `runTask`, which awaits
+  `verifyAll` with no surrounding try/catch
+- what: found during `guards#OI-019`'s scenario audit of `kernel/run.mjs`
+  (sub-project G, error axis). An acceptance criterion with an invalid
+  `pattern` (e.g. an unterminated group) made `verifyCriterion` throw a
+  `SyntaxError`, which propagated out of `verifyAll` and out of `runTask`
+  itself uncaught — unlike every other kernel-side failure (`identity()`,
+  `startTask()`, `envForKeys()`), which are all wrapped and fail closed to
+  `failed-to-start`. A crash here meant `finalize()` never ran: no
+  `run_finalized` ledger line (the run stays looking "started" forever),
+  `cleanupRun` never ran (the staging dir with `settings.json`/
+  `contract.json`/`pin.json` leaks on disk), and `updateAfterRun` never
+  tightened the autonomy window.
+- fix: `verifyCriterion` now wraps its whole method switch in try/catch and
+  reports a normal `fail` result (`verification threw: <message>`) instead of
+  letting the exception escape — the same "a bad input is a failed
+  criterion, not a crash" contract every other verify method already had.
+- verified: new test `kernel/run.test.mjs` "a criterion that throws while
+  being verified fails closed instead of crashing the run (OI-040)" is RED
+  against the pre-fix `verifier.mjs` (confirmed via `git stash`) and GREEN
+  after; `node --test kernel/run.test.mjs kernel/verifier.test.mjs` (32/32);
+  `node tools/scenariogate.mjs --module kernel/run.mjs` ok.
 
 ## OI-034 [RESOLVED 2026-08-05] A console PID is treated as a console IDENTITY, and Windows recycles PIDs
 - opened: 2026-08-04

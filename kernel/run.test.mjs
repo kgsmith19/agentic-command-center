@@ -322,3 +322,33 @@ test("the autonomy window is updated after every finalized run (AC-B2 wiring)", 
   assert.equal(A.readAutonomy().factor, 0.5, "four rejected runs must have tightened the ceilings");
   assert.equal(A.readAutonomy().log.at(-1).direction, "tighten");
 });
+
+test("a criterion that throws while being verified fails closed instead of crashing the run (OI-040)", async () => {
+  fs.writeFileSync(path.join(workDir, "out.txt"), "hi");
+  const c = good();
+  c.acceptanceCriteria = [{
+    id: "AC1", ears: "x",
+    verify: { method: "file_contains", path: path.join(workDir, "out.txt"), pattern: "(unterminated" },
+  }];
+  const r = await R.runTask(contractFile(c), { adapter: recordingAdapter().adapter });
+  assert.equal(r.outcome, "rejected", "a criterion whose verification throws must reject the run, not crash it");
+  assert.equal(r.criteria[0].status, "fail");
+  assert.match(r.criteria[0].detail, /verification threw/);
+  assert.equal(fs.existsSync(S.runDir(r.runId)), false, "the run must still finalize and clean up its staging dir");
+  assert.ok(L.readRuns().find((x) => x.event === "run_finalized" && x.runId === r.runId));
+});
+
+test("two concurrent runs finalize and clean up independently, with no cross-contamination (rare)", async () => {
+  fs.writeFileSync(path.join(workDir, "out.txt"), "done");
+  const [a, b] = await Promise.all([
+    R.runTask(contractFile(good()), { adapter: recordingAdapter().adapter }),
+    R.runTask(contractFile(good()), { adapter: recordingAdapter().adapter }),
+  ]);
+  assert.notEqual(a.runId, b.runId);
+  assert.equal(a.outcome, "accepted");
+  assert.equal(b.outcome, "accepted");
+  assert.equal(fs.existsSync(S.runDir(a.runId)), false);
+  assert.equal(fs.existsSync(S.runDir(b.runId)), false);
+  const finalized = L.readRuns().filter((x) => x.event === "run_finalized" && (x.runId === a.runId || x.runId === b.runId));
+  assert.equal(finalized.length, 2, "each concurrent run gets exactly one finalized ledger line, not a merged or missing one");
+});
