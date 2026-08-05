@@ -194,3 +194,14 @@ test("the real ledgers parse and rank without throwing", { skip: !haveAll }, () 
 test("main() runs --check against the real ledgers and returns run()'s exit code", { skip: !haveAll }, () => {
   assert.equal(m.main(["--check"]), 0);
 });
+
+test("every Definition-of-Done condition maps to a real ledger id or spec AC", () => {
+  const map = fs.readFileSync("docs/dod-mapping.md", "utf8");
+  const rows = map.split("\n").filter((l) => /^\|\s*\d+\s*\|/.test(l));
+  assert.equal(rows.length, 22, "all 22 conditions must be listed");
+  for (const row of rows) {
+    const covered = row.split("|")[3].trim();
+    assert.notEqual(covered, "", `row has no coverage: ${row}`);
+    assert.doesNotMatch(covered, /^(TBD|TODO|-|\?)$/i, `row has a placeholder coverage: ${row}`);
+  }
+});

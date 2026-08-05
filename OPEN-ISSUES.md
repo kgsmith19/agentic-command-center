@@ -31,6 +31,31 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-036 No deliverable maps every core workflow, and Kyle's DoD condition 3 names exactly that
+- opened: 2026-08-05
+- rank: control
+- where: no code or doc exists yet; surfaced while mapping the archived
+  prompt's (`runner/goals/done/g-20260804-222717-lu7o.json`) 22
+  Definition-of-Done conditions to ledger entries and spec ACs
+  (`docs/dod-mapping.md`, sub-project A Task 10)
+- what: condition 3, "Every core workflow is mapped," has no dedicated
+  deliverable anywhere across the nine sub-project specs. AC-E1/E2/E21 map
+  UI screens to the five modes and AC-J14 proves ONE composite workflow
+  (bind -> kick -> guard-deny) end to end, but nothing inventories the
+  system's actual core workflows (the goal/standing-order loop, the
+  autopilot cycle, the guard/approval chain, the kernel run supervisor, the
+  CD/routing hook) the way `INVENTORY.md` (sub-project A) inventories open
+  issues.
+- why open: out of scope for A itself (A's own spec is issues, not
+  workflows) and not claimed by any other sub-project's spec; needs its own
+  scoping pass — likely a short spec producing a `WORKFLOWS.md` or
+  equivalent map, in the shape of A's inventory but for workflows instead
+  of issues.
+- done when: a document or generated artifact exists that names every core
+  workflow, what triggers it, what it touches, and where its own tests
+  live, kept current the way `INVENTORY.md` is regenerated rather than
+  hand-maintained.
+
 ## OI-035 Prompt storage and verbatim cmd passthrough were requested 2026-08-02 and are in no sub-project
 - opened: 2026-08-04
 - rank: autonomy-blocker
