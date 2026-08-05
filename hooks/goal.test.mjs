@@ -773,3 +773,14 @@ test("an explicit goalId still binds without a table", () => {
   const g = m.createGoal({ text: "t" });
   assert.equal(m.bindSession({ sessionId: SID(82), consolePid: 4242, goalId: g.id }).id, g.id);
 });
+
+// OI-034, Task 6: existence is not identity - the OS-query check is gone.
+test("consoleAlive is gone - existence is not identity", () => {
+  assert.equal(m.consoleAlive, undefined);
+});
+
+test("goal.mjs never queries the OS - purity is what keeps kick rules in one file", () => {
+  const src = fs.readFileSync(path.resolve("hooks/goal.mjs"), "utf8");
+  assert.doesNotMatch(src, /child_process/);
+  assert.doesNotMatch(src, /process\.kill\(/);
+});
