@@ -114,6 +114,31 @@ test("a budget above a policy hard cap is rejected (AC-C5)", () => {
   assert.match(C.validateContract(c).errors.join(" "), /hard cap/i);
 });
 
+test("a writeRoot that is a PARENT of a protected path is rejected too, not just a child or exact match (edge)", () => {
+  const c = good();
+  c.allowedActions.writeRoots = [os.homedir()]; // parent of ~/.claude, a protected path
+  assert.equal(C.validateContract(c).ok, false);
+  assert.match(C.validateContract(c).errors.join(" "), /protected/i);
+});
+
+test("a contract that parses to a non-object JSON value is treated as empty, not a crash (error)", () => {
+  for (const shape of ["just a string", 42, [1, 2, 3], true]) {
+    const r = C.validateContract(shape);
+    assert.equal(r.ok, false);
+    assert.equal(r.errors.length, C.REQUIRED_FIELDS.length);
+  }
+});
+
+test("validateContract propagates a corrupt underlying policy file's throw, never swallows it (fault-tolerance)", () => {
+  const saved = fs.readFileSync(process.env.ACC_POLICY, "utf8");
+  fs.writeFileSync(process.env.ACC_POLICY, "{ not json");
+  try {
+    assert.throws(() => C.validateContract(good()), /kernel policy unreadable/);
+  } finally {
+    fs.writeFileSync(process.env.ACC_POLICY, saved);
+  }
+});
+
 test("the tool allowlist is derived from allowedActions", () => {
   assert.deepEqual(C.toolsFor(good()).sort(), ["Bash", "Edit", "Glob", "Grep", "Read", "TodoWrite", "Write"].sort());
   const readOnly = good();
