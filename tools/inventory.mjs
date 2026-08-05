@@ -31,3 +31,11 @@ export function parseLedger(text, ledger) {
   }
   return entries;
 }
+
+// SHRUNK is deliberately absent: a shrunk entry is a smaller open entry, not a
+// closed one. OI-015 has been marked SHRUNK and unfinished since 2026-08-04.
+const CLOSED = /^(RESOLVED|RETIRED|SUPERSEDED)\b/;
+
+export function isOpen(entry) {
+  return !(entry.marker && CLOSED.test(entry.marker));
+}
