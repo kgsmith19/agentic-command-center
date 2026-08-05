@@ -114,6 +114,33 @@ line under `## Resolved`.
   invariant rather than weakening it, and both are planned like every other
   sub-project in `docs/superpowers/plans/2026-08-04-acc-completion-plan.md`.
 
+## OI-039 hooks/statusline.mjs, hooks/engine.mjs and kernel/guard.mjs will fail covgate the day they're next changed, same as budget.mjs just did
+- opened: 2026-08-05
+- rank: maintainability
+- where: hooks/statusline.mjs, hooks/engine.mjs, kernel/guard.mjs; hooks/covgate.mjs `tests.subprocessOnlyLibs`
+- what: these three, like hooks/budget.mjs, are tested exclusively by spawning
+  a real subprocess (`execFileSync("node", [...], ...)`), and their test files
+  deliberately clear `NODE_V8_COVERAGE` first to stop the nested process
+  corrupting covgate's own coverage merge (the fix `hooks/clearbot.test.mjs`
+  and `hooks/budget.test.mjs` both carry, 2026-08-02). That makes V8's
+  coverage merge structurally blind to them — real, thorough tests, 0%
+  measured. `hooks/budget.mjs` just hit this for real (OI-034/B2b) and was
+  resolved by adding it to the new `tests.subprocessOnlyLibs` policy dial
+  (covgate.mjs, mirrors the existing `branchFloorOverrides` pattern) — a floor
+  of 0/0/0 for exactly the listed file, meaning "unmeasurable", not "waived
+  because untested".
+- why open: these three haven't been touched yet on any branch since the dial
+  was added, so listing them now would be speculative (the dial's own
+  documentation is explicit that a file only belongs on it when its test file
+  demonstrably follows the spawn-only, coverage-cleared pattern — check, don't
+  assume, at the point a real change needs it).
+- done when: whichever of the three is next a changed file either (a) gets
+  added to `tests.subprocessOnlyLibs` after confirming its test file clears
+  `NODE_V8_COVERAGE` before every spawn, the same way budget.mjs's entry was
+  justified, or (b) this whole class gets a real fix instead of a floor
+  waiver — e.g. a coverage-safe way to let a spawned child's V8 coverage merge
+  into the parent run without the corruption the clearing was working around.
+
 ## OI-033 The UserPromptSubmit route hook is disabled on this machine and nobody knows why it was eating prompts
 - opened: 2026-08-04
 - rank: broken-workflow
@@ -144,37 +171,6 @@ line under `## Resolved`.
   proven, `hooks/route.mjs` is re-registered in settings.json, `policy.json
   autoCd.enabled` is back to true, and `node hooks/route.mjs doctor` passes
   with the dial and the hook agreeing.
-
-## OI-034 A console PID is treated as a console IDENTITY, and Windows recycles PIDs
-- opened: 2026-08-04
-- rank: safety
-- where: hooks/goal.mjs `consoleAlive` (line ~129), `bindSession` (line ~200),
-  `pendingKicks`; watcher/clearbot.ps1 `Invoke-Kicks`
-- what: split out of OI-031, whose reaping half is now resolved. Liveness is a
-  bare `process.kill(pid, 0)` existence test and adoption matches on
-  `Number(g.consolePid) === Number(consolePid)`, so a goal whose console died
-  and whose PID has since been reassigned looks alive, becomes eligible for a
-  kick, and clearbot types a constant into whatever process now owns that PID.
-  The comment directly above `consoleAlive` already names this hazard verbatim
-  ("the pid may since have been reused by an unrelated process") and the check
-  below it does not defend against it. Reaping (OI-031) shrinks the window a
-  great deal but does not close it: a PID can be recycled between one
-  SessionStart and the next.
-- status: latent, not observed firing. All six stale goals' PIDs were dead when
-  checked on 2026-08-04, so nothing was mistargeted; this is a construction
-  defect, not an incident.
-- why open: the fix needs a cheap identity, and the obvious one is awkward —
-  node has no built-in way to read a process start time, and `pendingKicks`
-  runs every 2s via clearbot, so querying the OS per goal per cycle is too
-  expensive. Chosen design, not yet implemented: clearbot already enumerates
-  processes and gets `StartTime` for free, so it passes the live console table
-  IN to goal.mjs rather than goal.mjs reaching out to the OS. That keeps
-  goal.mjs pure and keeps every kick-safety rule in the one file whose header
-  already promises exactly that.
-- done when: a console is identified by (pid, startTime); `consoleAlive` is
-  false for a PID that exists with a different start time; `bindSession` never
-  adopts a goal whose console identity does not match; and a test reproduces
-  the recycled-PID mistarget directly.
 
 ## OI-032 autoApprove:true means an agent writing a file IS an agent running code
 - opened: 2026-08-04
@@ -415,6 +411,72 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-034 [RESOLVED 2026-08-05] A console PID is treated as a console IDENTITY, and Windows recycles PIDs
+- opened: 2026-08-04
+- rank: safety
+- where: hooks/goal.mjs `consoleAlive` (line ~129), `bindSession` (line ~200),
+  `pendingKicks`; watcher/clearbot.ps1 `Invoke-Kicks`
+- what: split out of OI-031, whose reaping half is now resolved. Liveness is a
+  bare `process.kill(pid, 0)` existence test and adoption matches on
+  `Number(g.consolePid) === Number(consolePid)`, so a goal whose console died
+  and whose PID has since been reassigned looks alive, becomes eligible for a
+  kick, and clearbot types a constant into whatever process now owns that PID.
+  The comment directly above `consoleAlive` already names this hazard verbatim
+  ("the pid may since have been reused by an unrelated process") and the check
+  below it does not defend against it. Reaping (OI-031) shrinks the window a
+  great deal but does not close it: a PID can be recycled between one
+  SessionStart and the next.
+- status: latent, not observed firing. All six stale goals' PIDs were dead when
+  checked on 2026-08-04, so nothing was mistargeted; this is a construction
+  defect, not an incident.
+- resolved: a console is now identified by `(pid, startTime)`, not pid alone.
+  `hooks/goal.mjs` gained `consoleState(goal, consoles)` (pure — no OS query;
+  `undefined` table -> `"unknown"`, absent pid -> `"dead"`, unstamped pid ->
+  `"unknown"`, matching startTime -> `"alive"`, mismatched -> `"dead"`) and
+  `stampConsoles()` (stamps `consoleStartedAt` on first sighting inside the
+  120s grace window, idempotent, never guesses for legacy goals outside it).
+  `pendingKicks`/`reapDeadGoals` both fail closed with no table (`[]`/no
+  reaping — "it never destroys on a guess"); `bindSession`'s pid-fallback
+  adoption now requires `consoleState(...) === "alive"` (an explicit `goalId`
+  still binds without a table — that's a caller naming a goal, not a guess).
+  `consoleAlive` and every `process.kill(` call are deleted from goal.mjs,
+  which is now provably OS-query-free (grep-gated by its own test).
+  `watcher/clearbot.ps1` builds one process-table enumeration per cycle
+  (`Get-Process` -> `StartTime.ToUniversalTime().ToString('o')`) and pipes it
+  to `goal.mjs pending`/`reap` on stdin (unbounded pid list, so argv was never
+  an option); the redundant per-kick `Get-Process -Id $cpid` existence check
+  in `Invoke-Kicks` is gone too — identity is decided once, in goal.mjs.
+  Beyond the plan's original file list: `hooks/budget.mjs`'s SessionStart path
+  (`bindSession`'s only other production caller — the post-`/clear` adoption
+  that survives across sessions) needed the same proof, but can't afford
+  clearbot's full enumeration inside a hook that has previously blown its own
+  timeout doing exactly that (see `hooks/winfind.ps1`'s header). Fix: a new
+  `hooks/consoletable.mjs`/`consoletable.ps1` query, by id, only the pids that
+  matter to that one decision (the just-resolved window, plus every currently
+  active goal's console) — individually verified, so the resulting table is
+  still authoritative enough to reap by, without a system-wide scan. Real
+  production store observed clean (`node hooks/goal.mjs list` -> `[]`) before
+  and after `reap` at merge time — no stale goals were live to exercise the
+  reap path against for real, so that evidence is "correctly did nothing to a
+  clean store," not "reaped N."
+- follow-on gap found and logged, not fixed here: `hooks/budget.mjs` has zero
+  direct-import test coverage by design (its tests spawn it exclusively via
+  `execFileSync("node", ...)`, clearing `NODE_V8_COVERAGE` first to avoid
+  corrupting covgate's merge — same pattern as `hooks/clearbot.test.mjs`),
+  which made it fail `covgate` the moment this fix had to touch it. Resolved
+  narrowly via a new, evidence-scoped `tests.subprocessOnlyLibs` policy dial
+  (covgate.mjs, mirrors the existing `branchFloorOverrides` precedent) listing
+  only `hooks/budget.mjs`. `hooks/statusline.mjs`, `hooks/engine.mjs` and
+  `kernel/guard.mjs` share the identical test strategy and will hit the same
+  wall the day one of them is next a changed file — see OI-039.
+- done when: a console is identified by (pid, startTime); `consoleAlive` is
+  false for a PID that exists with a different start time; `bindSession` never
+  adopts a goal whose console identity does not match; and a test reproduces
+  the recycled-PID mistarget directly. — all satisfied; see `hooks/goal.test.mjs`
+  (67 cases covering Tasks 1-4 and 6), `hooks/clearbot.test.mjs` (the two
+  static-content contract tests for Task 5), `hooks/consoletable.test.mjs`
+  (5 cases), and `hooks/covgate.test.mjs` (4 new cases for the policy dial).
 
 ## OI-036 [RESOLVED 2026-08-05] No deliverable maps every core workflow, and Kyle's DoD condition 3 names exactly that
 - opened: 2026-08-05, resolved: 2026-08-05 — `WORKFLOWS.md` now names all 14

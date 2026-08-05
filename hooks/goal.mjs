@@ -123,18 +123,45 @@ export function activeGoals() {
   return listGoals().filter((g) => g.status === "active");
 }
 
-// Is that console still alive? A goal bound to a window Kyle has since closed
-// must never be resumed - there is nothing to type into, and the pid may since
-// have been reused by an unrelated process.
-export function consoleAlive(pid) {
-  const n = Number(pid || 0);
-  if (!n) return false;
-  try {
-    process.kill(n, 0);
-    return true;
-  } catch (e) {
-    return e && e.code === "EPERM"; // exists, owned by someone else
+// OI-034. A pid is not an identity: Windows recycles them, and the comment
+// this replaced named that hazard since the file was written while the check
+// below it did nothing about it. A console is (pid, startTime).
+//
+// This function does NOT query the OS. Autopilot already enumerates processes
+// every cycle and gets StartTime free, so it passes the table in. That keeps
+// this module pure and keeps every kick-safety rule in this one file, which is
+// what its header promises.
+export function consoleState(goal, consoles) {
+  if (!consoles) return "unknown"; // cannot tell -> do nothing
+  const pid = Number(goal.consolePid || 0);
+  if (!pid) return "dead";
+  const seen = consoles[String(pid)];
+  if (!seen) return "dead"; // pid is gone
+  if (!goal.consoleStartedAt) return "unknown"; // not stamped yet
+  return goal.consoleStartedAt === seen ? "alive" : "dead"; // recycled if it differs
+}
+
+// Stamped by autopilot on first sighting rather than at bind time: bindSession's
+// caller has the pid but no cheap way to read a start time. Inside the grace
+// window the goal is seconds old, so a recycle here is not credible - and this
+// is the same window reapDeadGoals already protects (REAP_GRACE_MS_DEFAULT).
+// An unstamped goal older than the grace window is left unstamped on purpose:
+// it predates this change and its identity cannot be reconstructed, so it is
+// left for reapDeadGoals to reap rather than guessed at.
+export function stampConsoles(consoles, { now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT } = {}) {
+  if (!consoles) return [];
+  const stamped = [];
+  for (const g of activeGoals()) {
+    if (g.consoleStartedAt) continue;
+    const seen = consoles[String(Number(g.consolePid || 0))];
+    if (!seen) continue;
+    const createdMs = Date.parse(g.createdAt || 0);
+    if (!Number.isFinite(createdMs) || now - createdMs > graceMs) continue;
+    g.consoleStartedAt = seen;
+    write(g);
+    stamped.push(g.id);
   }
+  return stamped;
 }
 
 export function goalForSession(sessionId) {
@@ -192,7 +219,7 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // The second case is the one that survives a /clear, and it is deliberately not
 // conditional on how the clear happened: a goal Kyle cleared by hand resumes the
 // same way an auto-clear does.
-export function bindSession({ sessionId, consolePid, cwd, goalId }) {
+export function bindSession({ sessionId, consolePid, cwd, goalId, consoles }) {
   ensureDirs();
   // guards OI-031, and it belongs HERE rather than at the SessionStart call site:
   // the fallback below adopts "whatever active goal owns this console pid", and
@@ -201,11 +228,16 @@ export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   // live on 2026-08-04, the oldest from 07-31, every console long dead. Reaping
   // first means there is nothing stale left to adopt, and it keeps every rule
   // about what makes adoption unsafe in this one file, as the header promises.
-  reapDeadGoals();
+  reapDeadGoals({ consoles });
   let goal = goalId ? readGoal(goalId) : null;
   if (goal && goal.status !== "active") goal = null;
   if (!goal && consolePid) {
-    goal = activeGoals().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
+    // OI-034: matching on pid alone is how a fresh session inherited last
+    // week's task. Identity, or no adoption.
+    goal =
+      activeGoals().find(
+        (g) => Number(g.consolePid) === Number(consolePid) && consoleState(g, consoles) === "alive"
+      ) || null;
   }
   if (!goal) return null;
 
@@ -288,10 +320,12 @@ export function setStatus(id, status, why) {
 // tell a completed loop from a lost one.
 const REAP_GRACE_MS_DEFAULT = 120000;
 
-export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT } = {}) {
+export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT, consoles } = {}) {
   const reaped = [];
   for (const g of activeGoals()) {
-    if (consoleAlive(g.consolePid)) continue;
+    // OI-034: identity, not existence. Without a table we cannot prove a pid is
+    // gone, so nothing is reaped on a guess - see consoleState's own comment.
+    if (consoleState(g, consoles) !== "dead") continue;
     // Never bound: the GUI creates the goal and THEN launches the console, so
     // for a moment a healthy goal legitimately has no console. Reaping there
     // would kill the very launch the goal belongs to. A goal that HAS bound was
@@ -314,6 +348,10 @@ export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAUL
 //   - the binding must have settled (TUI ready)
 //   - the cooldown must have expired
 export function pendingKicks(now = Date.now(), opts = {}) {
+  // No table means we cannot prove which process owns that pid. Typing into an
+  // unproven process is OI-034 itself, so this fails closed rather than
+  // best-effort.
+  if (!opts.consoles) return [];
   const tuiReadyMs =
     opts.tuiReadySettleMs != null ? Number(opts.tuiReadySettleMs) : TUI_READY_MS_DEFAULT;
   const settleMs =
@@ -322,7 +360,7 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     opts.humanHoldMinutes != null ? Number(opts.humanHoldMinutes) * 60000 : HUMAN_HOLD_MS_DEFAULT;
   return activeGoals()
     .filter((g) => g.needsKick)
-    .filter((g) => consoleAlive(g.consolePid))
+    .filter((g) => consoleState(g, opts.consoles) === "alive")
     .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= tuiReadyMs)
     // Turn-end settle: the TUI needs a moment after a turn ends, and an instant
     // kick would race the model's own closing tool calls.
@@ -382,6 +420,19 @@ function resolveId(argv) {
   return act.length === 1 ? act[0].id : "";
 }
 
+// The console table arrives on stdin, not argv: the pid list is unbounded and
+// Windows caps command lines. Empty stdin -> no table -> pendingKicks/
+// reapDeadGoals fail closed, which is the intended behaviour, not a degraded
+// one.
+function readConsoleTable() {
+  try {
+    const raw = fs.readFileSync(0, "utf8").trim();
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0] || "list";
@@ -413,7 +464,9 @@ export function main() {
         tuiReadySettleMs: pol?.tui?.readySettleMs,
       };
     } catch {}
-    console.log(JSON.stringify(pendingKicks(Date.now(), dials)));
+    const consoles = readConsoleTable();
+    stampConsoles(consoles);
+    console.log(JSON.stringify(pendingKicks(Date.now(), { ...dials, consoles })));
     return;
   }
   if (cmd === "kicked") {
@@ -421,7 +474,11 @@ export function main() {
     return;
   }
   if (cmd === "reap") {
-    const ids = reapDeadGoals();
+    // Same table as 'pending', same fail-closed rule: reap only what the
+    // caller can prove is gone. An empty table ({}) is a caller asserting "I
+    // enumerated every process and this pid was not among them" - that is
+    // still proof. No table at all proves nothing, so nothing is reaped.
+    const ids = reapDeadGoals({ consoles: readConsoleTable() });
     console.log(ids.length ? `reaped ${ids.length}: ${ids.join(" ")}` : "reaped 0");
     return;
   }

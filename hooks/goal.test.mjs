@@ -45,6 +45,17 @@ const LIVE = process.pid;
 // the rebind/adoption path below must actually look like one.
 const SID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
+// OI-034: pendingKicks/reapDeadGoals/bindSession's pid-fallback all now require
+// a console table proving identity, matching what autopilot's real cycle
+// supplies. table() builds one; identify() also stamps it onto the bound goal,
+// matching the order autopilot really runs in (stamp, then decide).
+const ISO = "2026-08-01T00:00:00.000Z";
+const table = (pid, iso = ISO) => ({ [String(pid)]: iso });
+function identify(pid = LIVE, iso = ISO) {
+  m.stampConsoles(table(pid, iso), { now: Date.now(), graceMs: 120000 });
+  return table(pid, iso);
+}
+
 test("a goal survives as a file and starts unbound", async () => {
   const { m } = await loadGoal();
   const g = m.createGoal({ text: "ship the thing", cwd: "C:/code", profile: "Normal" });
@@ -87,9 +98,10 @@ test("a NEW session in the same console adopts the goal and arms a kick - this i
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(1), consolePid: LIVE, goalId: g.id });
   m.markKicked(g.id);
+  const consoles = identify(LIVE);
 
   // No goalId this time: exactly what a post-/clear SessionStart looks like.
-  const b = m.bindSession({ sessionId: SID(2), consolePid: LIVE });
+  const b = m.bindSession({ sessionId: SID(2), consolePid: LIVE, consoles });
   assert.equal(b.id, g.id, "adopted by console pid, not session id");
   assert.equal(b.needsKick, true);
 });
@@ -114,22 +126,24 @@ test("pendingKicks refuses: too soon after binding", async () => {
   const { m } = await loadGoal();
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(1), consolePid: LIVE, goalId: g.id });
-  assert.equal(m.pendingKicks(Date.now()).length, 0, "TUI is not ready the instant a session starts");
-  assert.equal(m.pendingKicks(Date.now() + 10000).length, 1);
+  const consoles = identify(LIVE);
+  assert.equal(m.pendingKicks(Date.now(), { consoles }).length, 0, "TUI is not ready the instant a session starts");
+  assert.equal(m.pendingKicks(Date.now() + 10000, { consoles }).length, 1);
 });
 
 test("pendingKicks: tuiReadySettleMs overrides the default TUI-ready window (guards OI-003)", async () => {
   const { m } = await loadGoal();
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(1), consolePid: LIVE, goalId: g.id });
+  const consoles = identify(LIVE);
   const t0 = Date.parse(m.readGoal(g.id).boundAt);
 
   // Below the default (4000ms) but the override says this is plenty.
-  const early = m.pendingKicks(t0 + 500, { tuiReadySettleMs: 200 });
+  const early = m.pendingKicks(t0 + 500, { tuiReadySettleMs: 200, consoles });
   assert.ok(early.find((k) => k.id === g.id), "an explicit override can be shorter than the default");
 
   // A stricter-than-default override still refuses before its own window.
-  const strict = m.pendingKicks(t0 + 5000, { tuiReadySettleMs: 8000 });
+  const strict = m.pendingKicks(t0 + 5000, { tuiReadySettleMs: 8000, consoles });
   assert.equal(strict.find((k) => k.id === g.id), undefined, "an explicit override can be longer than the default");
 });
 
@@ -137,7 +151,7 @@ test("pendingKicks refuses: dead console", async () => {
   const { m } = await loadGoal();
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(1), consolePid: 0, goalId: g.id });
-  assert.equal(m.pendingKicks(Date.now() + 10000).length, 0);
+  assert.equal(m.pendingKicks(Date.now() + 10000, { consoles: {} }).length, 0);
 });
 
 test("pendingKicks refuses: within the cooldown", async () => {
@@ -145,10 +159,11 @@ test("pendingKicks refuses: within the cooldown", async () => {
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(1), consolePid: LIVE, goalId: g.id });
   m.markKicked(g.id);
+  const consoles = identify(LIVE);
   // Re-arm as a fresh session would, then ask immediately.
-  m.bindSession({ sessionId: SID(2), consolePid: LIVE });
-  assert.equal(m.pendingKicks(Date.now() + 10000).length, 0, "cooldown outranks a fresh binding");
-  assert.equal(m.pendingKicks(Date.now() + 70000).length, 1);
+  m.bindSession({ sessionId: SID(2), consolePid: LIVE, consoles });
+  assert.equal(m.pendingKicks(Date.now() + 10000, { consoles }).length, 0, "cooldown outranks a fresh binding");
+  assert.equal(m.pendingKicks(Date.now() + 70000, { consoles }).length, 1);
 });
 
 test("pendingKicks refuses: goal paused mid-flight", async () => {
@@ -223,13 +238,14 @@ test("kick waits for the settle window, then fires", async () => {
   m.bindSession({ sessionId: SID(3), consolePid: LIVE, goalId: g.id });
   m.markKicked(g.id);
   m.recordTurnEnd(g.id, { human: false });
+  const consoles = identify(LIVE);
   const t0 = Date.parse(m.readGoal(g.id).turnEndedAt);
 
-  const tooSoon = m.pendingKicks(t0 + 30_000, { kickSettleSeconds: 90 });
+  const tooSoon = m.pendingKicks(t0 + 30_000, { kickSettleSeconds: 90, consoles });
   assert.equal(tooSoon.find((k) => k.id === g.id), undefined, "30s < 90s settle");
 
   // Past settle AND past the 60s cooldown from markKicked.
-  const ready = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90 });
+  const ready = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90, consoles });
   assert.ok(ready.find((k) => k.id === g.id), "fires once settled");
 });
 
@@ -239,12 +255,13 @@ test("a human prompt holds the kick off, and the hold expires", async () => {
   m.bindSession({ sessionId: SID(4), consolePid: LIVE, goalId: g.id });
   m.markKicked(g.id);
   m.recordTurnEnd(g.id, { human: true });
+  const consoles = identify(LIVE);
   const t0 = Date.parse(m.readGoal(g.id).humanPromptAt);
 
-  const held = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90, humanHoldMinutes: 10 });
+  const held = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90, humanHoldMinutes: 10, consoles });
   assert.equal(held.find((k) => k.id === g.id), undefined, "quiet while Kyle is engaged");
 
-  const freed = m.pendingKicks(t0 + 11 * 60_000, { kickSettleSeconds: 90, humanHoldMinutes: 10 });
+  const freed = m.pendingKicks(t0 + 11 * 60_000, { kickSettleSeconds: 90, humanHoldMinutes: 10, consoles });
   assert.ok(freed.find((k) => k.id === g.id), "self-heals after the hold");
 });
 
@@ -338,10 +355,11 @@ test("OI-006: a non-UUID sessionId cannot hijack an active goal's binding", asyn
   m.bindSession({ sessionId: SID(30), consolePid: LIVE, goalId: g.id });
   m.markKicked(g.id);
   const before = m.readGoal(g.id);
+  const consoles = identify(LIVE);
 
   // Exactly the reproduction from the ledger: a hand-run SessionStart payload
   // ("hbtest") aimed at a console that owns a real goal.
-  const hijacked = m.bindSession({ sessionId: "hbtest", consolePid: LIVE });
+  const hijacked = m.bindSession({ sessionId: "hbtest", consolePid: LIVE, consoles });
   assert.equal(hijacked.id, g.id, "console-pid adoption still runs unchanged");
   assert.equal(hijacked.sessionId, before.sessionId, "the real session id must survive a garbage rebind attempt");
   assert.equal(hijacked.needsKick, false, "a garbage id must never arm a kick");
@@ -353,8 +371,9 @@ test("OI-006: a real UUID sessionId still adopts normally after a clear", async 
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(31), consolePid: LIVE, goalId: g.id });
   m.markKicked(g.id);
+  const consoles = identify(LIVE);
 
-  const adopted = m.bindSession({ sessionId: SID(32), consolePid: LIVE });
+  const adopted = m.bindSession({ sessionId: SID(32), consolePid: LIVE, consoles });
   assert.equal(adopted.id, g.id);
   assert.equal(adopted.sessionId, SID(32), "a real UUID rebinds normally");
   assert.equal(adopted.needsKick, true, "a genuinely new session arms a kick");
@@ -413,21 +432,30 @@ test("CLI: main() with no subcommand defaults to 'list', printing active goals a
   assert.ok(printed.some((x) => x.id === g.id));
 });
 
-test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when present and falling back when not", () => {
+// 'pending' now reads the console table from stdin (OI-034, Task 5), so it can
+// no longer be exercised via the in-process runMain() helper: a blocking
+// readFileSync(0) with nothing behind it (or a stream node's test runner
+// never closes) would hang the whole file rather than see EOF. execFileSync's
+// `input` option always supplies and closes stdin, matching what
+// clearbot.ps1 really does every cycle.
+test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when present and falling back when not", async () => {
+  const { execFileSync } = await import("node:child_process");
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(40), consolePid: LIVE, goalId: g.id });
 
-  const savedPolicy = process.env.ACC_POLICY;
-  try {
-    delete process.env.ACC_POLICY; // resolves to the real repo policy.json -- exercises the try branch
-    assert.doesNotThrow(() => JSON.parse(runMain(["pending"])));
+  const run = (extraEnv = {}) =>
+    execFileSync(process.execPath, [path.resolve("hooks/goal.mjs"), "pending"], {
+      input: JSON.stringify(table(LIVE)),
+      encoding: "utf8",
+      env: { ...process.env, ACC_GOALS_DIR: GOALS_DIR, ...extraEnv },
+    });
 
-    process.env.ACC_POLICY = path.join(GOALS_DIR, "does-not-exist.json"); // exercises the catch branch
-    assert.doesNotThrow(() => JSON.parse(runMain(["pending"])));
-  } finally {
-    if (savedPolicy === undefined) delete process.env.ACC_POLICY;
-    else process.env.ACC_POLICY = savedPolicy;
-  }
+  delete process.env.ACC_POLICY; // not inherited unless set below
+  assert.doesNotThrow(() => JSON.parse(run()), "resolves to the real repo policy.json - exercises the try branch");
+  assert.doesNotThrow(
+    () => JSON.parse(run({ ACC_POLICY: path.join(GOALS_DIR, "does-not-exist.json") })),
+    "missing policy.json falls back to defaults - exercises the catch branch"
+  );
 });
 
 test("CLI: main() 'kicked <id>' clears needsKick", () => {
@@ -487,7 +515,7 @@ test("OI-031: a goal whose console is gone is reaped and archived as abandoned",
   const g = m.createGoal({ text: "stranded" });
   m.bindSession({ sessionId: SID(60), consolePid: DEAD_PID, goalId: g.id });
 
-  const reaped = m.reapDeadGoals({ now: Date.now() + 3600_000 });
+  const reaped = m.reapDeadGoals({ now: Date.now() + 3600_000, consoles: {} });
 
   assert.deepEqual(reaped, [g.id], "returns what it reaped so the caller can log it");
   assert.equal(m.readGoal(g.id), null, "archived out of the live directory");
@@ -497,7 +525,7 @@ test("OI-031: a goal whose console is gone is reaped and archived as abandoned",
 test("OI-031: 'abandoned' is distinct from done/blocked - the console died, the model did not finish", () => {
   const g = m.createGoal({ text: "stranded" });
   m.bindSession({ sessionId: SID(61), consolePid: DEAD_PID, goalId: g.id });
-  m.reapDeadGoals({ now: Date.now() + 3600_000 });
+  m.reapDeadGoals({ now: Date.now() + 3600_000, consoles: {} });
 
   const archived = JSON.parse(
     fs.readFileSync(path.join(GOALS_DIR, "done", `${g.id}.json`), "utf8")
@@ -509,7 +537,7 @@ test("OI-031: a goal whose console is alive is never reaped", () => {
   const g = m.createGoal({ text: "working" });
   m.bindSession({ sessionId: SID(62), consolePid: LIVE, goalId: g.id });
 
-  assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 3600_000 }), []);
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 3600_000, consoles: table(LIVE) }), []);
   assert.equal(m.readGoal(g.id).status, "active");
 });
 
@@ -519,11 +547,11 @@ test("OI-031: a goal whose console is alive is never reaped", () => {
 test("OI-031: a goal that has not been bound yet is protected by the grace window", () => {
   const g = m.createGoal({ text: "just launched" }); // no bindSession: console not up yet
 
-  assert.deepEqual(m.reapDeadGoals({ now: Date.now(), graceMs: 120_000 }), []);
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now(), graceMs: 120_000, consoles: {} }), []);
   assert.equal(m.readGoal(g.id).status, "active", "still active inside the grace window");
 
   // Once the window closes with no console ever having bound, the launch failed.
-  assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 120_001, graceMs: 120_000 }), [g.id]);
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 120_001, graceMs: 120_000, consoles: {} }), [g.id]);
 });
 
 // A goal that HAS bound was attached to a console that provably existed at that
@@ -532,24 +560,49 @@ test("OI-031: a bound goal whose console died is reaped immediately, grace notwi
   const g = m.createGoal({ text: "console died" });
   m.bindSession({ sessionId: SID(63), consolePid: DEAD_PID, goalId: g.id });
 
-  assert.deepEqual(m.reapDeadGoals({ now: Date.now(), graceMs: 120_000 }), [g.id]);
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now(), graceMs: 120_000, consoles: {} }), [g.id]);
 });
 
 test("OI-031: a reaped goal is never kicked", () => {
   const g = m.createGoal({ text: "stranded" });
   m.bindSession({ sessionId: SID(64), consolePid: DEAD_PID, goalId: g.id });
-  m.reapDeadGoals({ now: Date.now() + 3600_000 });
+  m.reapDeadGoals({ now: Date.now() + 3600_000, consoles: {} });
 
-  assert.deepEqual(m.pendingKicks(Date.now() + 7200_000), []);
+  assert.deepEqual(m.pendingKicks(Date.now() + 7200_000, { consoles: {} }), []);
 });
 
-test("CLI: main() 'reap' archives dead-console goals and names them", () => {
+// CLI 'reap' does not yet read a console table (Task 5 wires that in, the same
+// way 'pending' reads one from stdin), so until then it is honestly fail-closed
+// like reapDeadGoals is with no table: it destroys nothing on a guess.
+// 'reap' reads the same stdin table as 'pending' (OI-034, Task 5), for the same
+// reason it can no longer run through the in-process runMain() helper - see the
+// comment on the 'pending' CLI test above.
+async function runReap(input) {
+  const { execFileSync } = await import("node:child_process");
+  return execFileSync(process.execPath, [path.resolve("hooks/goal.mjs"), "reap"], {
+    input,
+    encoding: "utf8",
+    env: { ...process.env, ACC_GOALS_DIR: GOALS_DIR },
+  });
+}
+
+test("CLI: main() 'reap' is fail-closed with empty stdin - it does not guess", async () => {
   const g = m.createGoal({ text: "stranded" });
   m.bindSession({ sessionId: SID(65), consolePid: DEAD_PID, goalId: g.id });
 
-  assert.equal(runMain(["reap"]), `reaped 1: ${g.id}`);
+  assert.equal((await runReap("")).trim(), "reaped 0");
+  assert.ok(m.readGoal(g.id), "nothing is reaped without proof the console is gone");
+});
+
+test("CLI: main() 'reap' archives dead-console goals and names them, given a console table", async () => {
+  const g = m.createGoal({ text: "stranded" });
+  m.bindSession({ sessionId: SID(66), consolePid: DEAD_PID, goalId: g.id });
+
+  // {} is a caller asserting "I enumerated every process and this pid was not
+  // among them" - proof the console is gone, same as clearbot's real table.
+  assert.equal((await runReap("{}")).trim(), `reaped 1: ${g.id}`);
   assert.equal(m.readGoal(g.id), null);
-  assert.equal(runMain(["reap"]), "reaped 0", "nothing left to reap");
+  assert.equal((await runReap("{}")).trim(), "reaped 0", "nothing left to reap");
 });
 
 test("a goal persists correctly after its directory is moved to a new location", async () => {
@@ -588,4 +641,146 @@ test("a goal persists correctly after its directory is moved to a new location",
   } finally {
     fs.rmSync(newDir, { recursive: true, force: true });
   }
+});
+
+// OI-034: console identity is (pid, startTime), not pid alone.
+test("a recycled pid is dead, not alive - the OI-034 mistarget, reproduced", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  const consoles = { 4242: "2026-08-04T18:30:00.000Z" }; // same pid, new process
+  assert.equal(m.consoleState(goal, consoles), "dead");
+});
+
+test("a live console whose start time matches is alive", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  assert.equal(m.consoleState(goal, { 4242: "2026-08-04T10:00:00.000Z" }), "alive");
+});
+
+test("a pid absent from the table is dead", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  assert.equal(m.consoleState(goal, { 999: "2026-08-04T10:00:00.000Z" }), "dead");
+});
+
+test("a pid present but not yet stamped is unknown, not a guess", () => {
+  const goal = { consolePid: 4242 };
+  assert.equal(m.consoleState(goal, { 4242: "2026-08-04T10:00:00.000Z" }), "unknown");
+});
+
+test("no table means unknown - never a guess in either direction", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  assert.equal(m.consoleState(goal, undefined), "unknown");
+});
+
+test("a goal inside the grace window is stamped from the table on first sighting", () => {
+  const g = m.createGoal({ text: "keep tests green", cwd: "C:/code/guards" });
+  m.bindSession({ sessionId: SID(70), consolePid: 4242, goalId: g.id });
+  const stamped = m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  assert.deepEqual(stamped, [g.id]);
+  assert.equal(m.readGoal(g.id).consoleStartedAt, "2026-08-04T10:00:00.000Z");
+});
+
+test("stamping is idempotent - an already stamped goal is left alone", () => {
+  const g = m.createGoal({ text: "t", cwd: "C:/code/guards" });
+  m.bindSession({ sessionId: SID(71), consolePid: 4242, goalId: g.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  const again = m.stampConsoles({ 4242: "2026-08-04T99:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  assert.deepEqual(again, []);
+  assert.equal(m.readGoal(g.id).consoleStartedAt, "2026-08-04T10:00:00.000Z");
+});
+
+test("a goal older than the grace window is never stamped - legacy stays unidentifiable", () => {
+  const g = m.createGoal({ text: "t", cwd: "C:/code/guards" });
+  m.bindSession({ sessionId: SID(72), consolePid: 4242, goalId: g.id });
+  const later = Date.now() + 10 * 60 * 1000;
+  assert.deepEqual(
+    m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: later, graceMs: 120000 }),
+    []
+  );
+  assert.equal(m.readGoal(g.id).consoleStartedAt, undefined);
+});
+
+// OI-034, Task 3: reap/kick fail closed without proof of identity.
+test("pendingKicks returns nothing without a console table - fail closed", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(73), consolePid: LIVE, goalId: g.id });
+  assert.deepEqual(m.pendingKicks(Date.now() + 10000, {}), []);
+});
+
+test("pendingKicks skips a goal whose console was recycled", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(74), consolePid: 4242, goalId: g.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  const kicks = m.pendingKicks(Date.now() + 10000, { consoles: { 4242: "2026-08-04T18:30:00.000Z" } });
+  assert.deepEqual(kicks.find((k) => k.id === g.id), undefined);
+});
+
+test("pendingKicks returns a goal whose console identity matches", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(75), consolePid: 4242, goalId: g.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  const kicks = m.pendingKicks(Date.now() + 10000, { consoles: { 4242: "2026-08-04T10:00:00.000Z" } });
+  assert.ok(kicks.find((k) => k.id === g.id));
+});
+
+test("a recycled console is reaped as abandoned and leaves activeGoals", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(76), consolePid: 4242, goalId: g.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  const reaped = m.reapDeadGoals({
+    now: Date.now() + 10 * 60 * 1000,
+    graceMs: 120000,
+    consoles: { 4242: "2026-08-04T18:30:00.000Z" },
+  });
+  assert.deepEqual(reaped, [g.id]);
+  assert.equal(m.readGoal(g.id), null);
+  assert.equal(m.activeGoals().find((x) => x.id === g.id), undefined);
+});
+
+test("reapDeadGoals with no table reaps nothing - it never destroys on a guess", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(77), consolePid: 4242, goalId: g.id });
+  assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 10 * 60 * 1000, graceMs: 120000 }), []);
+  assert.equal(m.readGoal(g.id).status, "active");
+});
+
+// OI-034, Task 4: bindSession's pid-fallback requires proof of identity too.
+test("bindSession never adopts a goal whose console identity does not match", () => {
+  const stale = m.createGoal({ text: "last week's task" });
+  m.bindSession({ sessionId: SID(78), consolePid: 4242, goalId: stale.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+
+  // A brand new session lands on the same pid, now owned by a different process.
+  const adopted = m.bindSession({
+    sessionId: SID(79),
+    consolePid: 4242,
+    consoles: { 4242: "2026-08-04T18:30:00.000Z" },
+  });
+  assert.equal(adopted, null, "must not inherit last week's task");
+});
+
+test("bindSession adopts by pid when the console identity matches", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(80), consolePid: 4242, goalId: g.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  const adopted = m.bindSession({
+    sessionId: SID(81),
+    consolePid: 4242,
+    consoles: { 4242: "2026-08-04T10:00:00.000Z" },
+  });
+  assert.equal(adopted.id, g.id);
+});
+
+test("an explicit goalId still binds without a table", () => {
+  const g = m.createGoal({ text: "t" });
+  assert.equal(m.bindSession({ sessionId: SID(82), consolePid: 4242, goalId: g.id }).id, g.id);
+});
+
+// OI-034, Task 6: existence is not identity - the OS-query check is gone.
+test("consoleAlive is gone - existence is not identity", () => {
+  assert.equal(m.consoleAlive, undefined);
+});
+
+test("goal.mjs never queries the OS - purity is what keeps kick rules in one file", () => {
+  const src = fs.readFileSync(path.resolve("hooks/goal.mjs"), "utf8");
+  assert.doesNotMatch(src, /child_process/);
+  assert.doesNotMatch(src, /process\.kill\(/);
 });
