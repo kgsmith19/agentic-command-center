@@ -233,7 +233,7 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // The second case is the one that survives a /clear, and it is deliberately not
 // conditional on how the clear happened: a goal Kyle cleared by hand resumes the
 // same way an auto-clear does.
-export function bindSession({ sessionId, consolePid, cwd, goalId }) {
+export function bindSession({ sessionId, consolePid, cwd, goalId, consoles }) {
   ensureDirs();
   // guards OI-031, and it belongs HERE rather than at the SessionStart call site:
   // the fallback below adopts "whatever active goal owns this console pid", and
@@ -242,11 +242,16 @@ export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   // live on 2026-08-04, the oldest from 07-31, every console long dead. Reaping
   // first means there is nothing stale left to adopt, and it keeps every rule
   // about what makes adoption unsafe in this one file, as the header promises.
-  reapDeadGoals();
+  reapDeadGoals({ consoles });
   let goal = goalId ? readGoal(goalId) : null;
   if (goal && goal.status !== "active") goal = null;
   if (!goal && consolePid) {
-    goal = activeGoals().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
+    // OI-034: matching on pid alone is how a fresh session inherited last
+    // week's task. Identity, or no adoption.
+    goal =
+      activeGoals().find(
+        (g) => Number(g.consolePid) === Number(consolePid) && consoleState(g, consoles) === "alive"
+      ) || null;
   }
   if (!goal) return null;
 
@@ -329,10 +334,12 @@ export function setStatus(id, status, why) {
 // tell a completed loop from a lost one.
 const REAP_GRACE_MS_DEFAULT = 120000;
 
-export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT } = {}) {
+export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT, consoles } = {}) {
   const reaped = [];
   for (const g of activeGoals()) {
-    if (consoleAlive(g.consolePid)) continue;
+    // OI-034: identity, not existence. Without a table we cannot prove a pid is
+    // gone, so nothing is reaped on a guess - see consoleState's own comment.
+    if (consoleState(g, consoles) !== "dead") continue;
     // Never bound: the GUI creates the goal and THEN launches the console, so
     // for a moment a healthy goal legitimately has no console. Reaping there
     // would kill the very launch the goal belongs to. A goal that HAS bound was
@@ -355,6 +362,10 @@ export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAUL
 //   - the binding must have settled (TUI ready)
 //   - the cooldown must have expired
 export function pendingKicks(now = Date.now(), opts = {}) {
+  // No table means we cannot prove which process owns that pid. Typing into an
+  // unproven process is OI-034 itself, so this fails closed rather than
+  // best-effort.
+  if (!opts.consoles) return [];
   const tuiReadyMs =
     opts.tuiReadySettleMs != null ? Number(opts.tuiReadySettleMs) : TUI_READY_MS_DEFAULT;
   const settleMs =
@@ -363,7 +374,7 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     opts.humanHoldMinutes != null ? Number(opts.humanHoldMinutes) * 60000 : HUMAN_HOLD_MS_DEFAULT;
   return activeGoals()
     .filter((g) => g.needsKick)
-    .filter((g) => consoleAlive(g.consolePid))
+    .filter((g) => consoleState(g, opts.consoles) === "alive")
     .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= tuiReadyMs)
     // Turn-end settle: the TUI needs a moment after a turn ends, and an instant
     // kick would race the model's own closing tool calls.
