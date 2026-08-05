@@ -60,6 +60,7 @@ line under `## Resolved`.
 
 ## OI-033 The UserPromptSubmit route hook is disabled on this machine and nobody knows why it was eating prompts
 - opened: 2026-08-04
+- rank: broken-workflow
 - where: `~/.claude/settings.json` (UserPromptSubmit), `hooks/route.mjs`,
   `policy.json` autoCd
 - what: runbox script `disable-route-hook.mjs` auto-ran at 18:42 on 2026-08-04
@@ -90,6 +91,7 @@ line under `## Resolved`.
 
 ## OI-034 A console PID is treated as a console IDENTITY, and Windows recycles PIDs
 - opened: 2026-08-04
+- rank: safety
 - where: hooks/goal.mjs `consoleAlive` (line ~129), `bindSession` (line ~200),
   `pendingKicks`; watcher/clearbot.ps1 `Invoke-Kicks`
 - what: split out of OI-031, whose reaping half is now resolved. Liveness is a
@@ -120,6 +122,7 @@ line under `## Resolved`.
 
 ## OI-032 autoApprove:true means an agent writing a file IS an agent running code
 - opened: 2026-08-04
+- rank: safety
 - where: policy.json `autoApprove.enabled`, watcher/clearbot.ps1 Invoke-AutoApprove
 - what: already named in docs/2026-08-03-acc-adversarial-review.md §2.1 and
   the remediation prompt, but never given its own ledger entry, so it has been
@@ -139,6 +142,7 @@ line under `## Resolved`.
   or refuse scripts touching `config.protected` paths).
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
+- rank: control
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
   `powershell.exe` (unlike when this entry was opened). Added
   `-TestInteractiveLane` to guards-gui.ps1 — headlessly drives the exact
@@ -169,6 +173,7 @@ line under `## Resolved`.
 
 ## OI-019 Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
 - opened: 2026-08-03
+- rank: reliability
 - where: kernel/*.test.mjs (all suites through Task 16; applies to every
   remaining kernel task, T17-T22)
 - what: covgate's 100/100/90 floors prove every line/branch of a CHANGED file
@@ -215,6 +220,7 @@ line under `## Resolved`.
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
+- rank: reliability
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
   `2026-08-03-acc-kernel-plan.md` T22, executed as Task 11 of
   `2026-08-03-acc-oi-closure-plan.md`)
@@ -330,6 +336,7 @@ line under `## Resolved`.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
+- rank: maintainability
 - where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart
   injection, AGENTS.md "Goals" section, this repo's docs/specs generally
 - what: ACC's "goal" is a persistent working-condition store that survives
@@ -527,6 +534,7 @@ line under `## Resolved`.
   longer part of the required design.
 
 ## OI-009 [SHRUNK + FIXED 2026-08-04] GUI process is a single point of failure for hosted sessions
+- rank: reliability
 - opened: 2026-07-31, shrunk+fixed: 2026-08-04 — delivered detection, not
   reattach: reattaching a hosted session on GUI restart is real, separate
   architecture work (a new session-persistence story) and is cut from this

@@ -156,15 +156,22 @@ const { default: path } = await import("node:path");
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
   const { readFileSync } = await import("node:fs");
   const { execFileSync } = await import("node:child_process");
+  // The guards ledger and this repo's own commit are resolved relative to
+  // THIS file's own checkout, not a hardcoded C:/code/guards, so the CLI
+  // reports the running worktree's own state (branch, uncommitted ranks)
+  // instead of whatever happens to be checked out at the canonical path —
+  // load-bearing while sub-projects run one-worktree-per-branch (the
+  // completion plan's own convention).
+  const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
   const LEDGERS = [
     { name: "code", path: "C:/code/OPEN-ISSUES.md" },
-    { name: "guards", path: "C:/code/guards/OPEN-ISSUES.md" },
+    { name: "guards", path: path.join(REPO_ROOT, "OPEN-ISSUES.md") },
     { name: "ecosystem", path: "C:/code/lifeos-ecosystem/OPEN-ISSUES.md" },
     { name: "lifeos", path: "C:/code/lifeos-ecosystem/lifeos/OPEN-ISSUES.md" },
     { name: "lifeos-ui", path: "C:/code/lifeos-ecosystem/lifeos-ui/OPEN-ISSUES.md" },
   ];
   const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-    cwd: "C:/code/guards", encoding: "utf8",
+    cwd: REPO_ROOT, encoding: "utf8",
   }).trim();
   const r = run(process.argv.slice(2), {
     readFile: (p) => readFileSync(p, "utf8"),
