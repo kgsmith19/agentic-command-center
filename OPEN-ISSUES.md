@@ -258,6 +258,29 @@ line under `## Resolved`.
 
 ## Resolved
 
+## OI-031 [RESOLVED 2026-08-05] Seven goals are "active" at once; dead ones are never reaped
+- opened: 2026-08-04, resolved: 9e2ae89 — decision on what "dead" means:
+  BOUND (consolePid nonzero) and `!consoleAlive(pid)`. An unbound goal
+  (consolePid 0 — created but not yet launched into a console) is left
+  alone, since there is nothing yet to prove dead. `reapDeadGoals()` runs
+  on every `activeGoals()` call so every reader (list, pending,
+  goalForSession) sees the reaped result immediately instead of a stale
+  one; a reaped goal archives to `runner/goals/done/` with status "dead",
+  same as done/blocked. New `reap` CLI verb for explicit/manual use.
+  The mid-turn "prompt entered in the UI does not carry cleanly into the
+  ACC process" symptom this entry was found while chasing is NOT re-checked
+  here — that link was never proven, and this entry's own done-when only
+  asked for the reap mechanism itself, not that follow-up. Re-open a fresh
+  entry if the symptom recurs against a now-clean goal store.
+- verification: `node --test hooks/goal.test.mjs` (48/48, RED-first: 5 new
+  cases failed against the pre-fix code), full fast tier via
+  `npm run test` (422/423 — the 1 fail is hooks/lane.test.mjs's
+  pre-existing "reownSlot ... owner.json can't be written" case, already
+  noted in the OI-018 ledger entry as unrelated; confirmed here it's this
+  sandbox running as root, so chmod 0o444 never actually blocks the write).
+  `node hooks/covgate.mjs` scoped to the changed file: goal.mjs
+  100%/100%/98.3%, clears the 100/100/90 floor. `/security-review`: clean.
+
 ## OI-030 [RESOLVED 2026-08-04] Repeated red CI on main -- fold the coverage gate into a local pre-push hook, ACC-style
 - opened: 2026-08-04, resolved: 1726574/644ab7e/d8e7ed8, merged 275a899 -- Approach A
   (local pre-push git hook) shipped exactly as this entry's own spec described.
