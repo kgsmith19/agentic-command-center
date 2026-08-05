@@ -23,6 +23,33 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-035 Prompt storage and verbatim cmd passthrough were requested 2026-08-02 and are in no sub-project
+- opened: 2026-08-04
+- rank: autonomy-blocker
+- where: no code exists yet; adjacent to `watcher/clearbot.ps1` Invariant 1,
+  `hooks/prompts.mjs`, and sub-project E's Work mode
+- what: on 2026-08-02, via Stop-hook feedback during the acc-embedded-terminal
+  session, Kyle asked for four things. Two of them are covered by the
+  2026-08-04 decomposition and two are not:
+  COVERED -- (3) "continue with task" wired into the Command Center and
+  (4) the GUI usability overhaul, both inside sub-project E.
+  NOT COVERED -- (1) prompt storage: guards should send the FULL prompts Kyle
+  gives it, backed by local plain-text files he can add/update/delete, built so
+  a later swap to an outside API is clean rather than a rewrite; and
+  (2) verbatim passthrough: prompts must reach the cmd 100% intact, without
+  guards "overwriting/rewriting them with its own made up stuff."
+- why open: (2) is security-sensitive and cannot be bolted on. Autopilot only
+  ever types a closed set of vetted constants, routes and replays -- never
+  arbitrary agent-authored text (OI-004, OI-010). "Send it through without
+  guards touching it" must be reconciled with that invariant explicitly: a new,
+  explicitly user-approved channel, not an exception punched through the
+  existing gate. That is a design decision, so it needs its own brainstorming
+  cycle rather than a slice inside E.
+- done when: a spec exists for prompt storage and for the passthrough channel,
+  the passthrough design states its boundary against autopilot's typed-content
+  invariant rather than weakening it, and both are planned like every other
+  sub-project in `docs/superpowers/plans/2026-08-04-acc-completion-plan.md`.
+
 ## OI-033 The UserPromptSubmit route hook is disabled on this machine and nobody knows why it was eating prompts
 - opened: 2026-08-04
 - where: `~/.claude/settings.json` (UserPromptSubmit), `hooks/route.mjs`,
