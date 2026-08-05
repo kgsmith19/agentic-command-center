@@ -23,23 +23,6 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-031 Seven goals are "active" at once; dead ones are never reaped
-- opened: 2026-08-04
-- where: hooks/goal.mjs, runner/goals/
-- what: `goal.mjs list` returns 7 entries with `status: "active"`, the oldest
-  from 2026-07-31, each bound to a `consolePid` whose console is long gone.
-  Nothing marks a goal dead when its console dies, so the store only ever
-  grows and `pendingKicks` keeps considering goals no one is working. Found
-  while tracing Kyle's "the prompt entered in the UI does not carry cleanly
-  into the ACC process" — a kick aimed at a stale goal is a strong candidate
-  for prompts landing in the wrong place, but that link is NOT yet proven.
-- why open: found mid-turn while fixing the 60s window flash; fixing it needs
-  a decision on what "dead" means (console gone? no cycle in N hours? both?)
-  and a reaper with its own tests. Not a drive-by.
-- done when: a goal whose console PID is gone is reaped automatically,
-  `goal.mjs list` shows only genuinely live goals on this machine, and a test
-  covers the reap rule. Then re-check whether the prompt-handoff symptom survives.
-
 ## OI-032 autoApprove:true means an agent writing a file IS an agent running code
 - opened: 2026-08-04
 - where: policy.json `autoApprove.enabled`, watcher/clearbot.ps1 Invoke-AutoApprove
@@ -274,6 +257,29 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-031 [RESOLVED 2026-08-05] Seven goals are "active" at once; dead ones are never reaped
+- opened: 2026-08-04, resolved: 9e2ae89 — decision on what "dead" means:
+  BOUND (consolePid nonzero) and `!consoleAlive(pid)`. An unbound goal
+  (consolePid 0 — created but not yet launched into a console) is left
+  alone, since there is nothing yet to prove dead. `reapDeadGoals()` runs
+  on every `activeGoals()` call so every reader (list, pending,
+  goalForSession) sees the reaped result immediately instead of a stale
+  one; a reaped goal archives to `runner/goals/done/` with status "dead",
+  same as done/blocked. New `reap` CLI verb for explicit/manual use.
+  The mid-turn "prompt entered in the UI does not carry cleanly into the
+  ACC process" symptom this entry was found while chasing is NOT re-checked
+  here — that link was never proven, and this entry's own done-when only
+  asked for the reap mechanism itself, not that follow-up. Re-open a fresh
+  entry if the symptom recurs against a now-clean goal store.
+- verification: `node --test hooks/goal.test.mjs` (48/48, RED-first: 5 new
+  cases failed against the pre-fix code), full fast tier via
+  `npm run test` (422/423 — the 1 fail is hooks/lane.test.mjs's
+  pre-existing "reownSlot ... owner.json can't be written" case, already
+  noted in the OI-018 ledger entry as unrelated; confirmed here it's this
+  sandbox running as root, so chmod 0o444 never actually blocks the write).
+  `node hooks/covgate.mjs` scoped to the changed file: goal.mjs
+  100%/100%/98.3%, clears the 100/100/90 floor. `/security-review`: clean.
 
 ## OI-030 [RESOLVED 2026-08-04] Repeated red CI on main -- fold the coverage gate into a local pre-push hook, ACC-style
 - opened: 2026-08-04, resolved: 1726574/644ab7e/d8e7ed8, merged 275a899 -- Approach A

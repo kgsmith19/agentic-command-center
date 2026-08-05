@@ -265,6 +265,54 @@ test("a dead console is never kicked, however long you wait", async () => {
   assert.equal(m.pendingKicks(Date.now() + 86_400_000).find((k) => k.id === g.id), undefined);
 });
 
+// --- OI-031: a goal bound to a console that's since closed must not sit
+// "active" forever -- it must be reaped (archived out of the live dir) so
+// list/pending only ever see genuinely live goals. ---
+
+test("OI-031: reapDeadGoals archives a goal whose bound console pid is gone", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(50), consolePid: 999999, goalId: g.id });
+  const reaped = m.reapDeadGoals();
+  assert.deepEqual(reaped, [g.id]);
+  assert.equal(m.readGoal(g.id), null, "reaped goal is archived out of the live directory");
+  assert.equal(m.listGoals().length, 0);
+});
+
+test("OI-031: reapDeadGoals leaves an unbound goal (consolePid 0) alone -- nothing yet to prove dead", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  assert.deepEqual(m.reapDeadGoals(), []);
+  assert.equal(m.readGoal(g.id).status, "active");
+});
+
+test("OI-031: reapDeadGoals leaves a LIVE console's goal alone", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(51), consolePid: LIVE, goalId: g.id });
+  assert.deepEqual(m.reapDeadGoals(), []);
+  assert.equal(m.readGoal(g.id).status, "active");
+});
+
+test("OI-031: activeGoals()/list only ever show genuinely live goals -- a dead-console goal disappears on its own", async () => {
+  const { m } = await loadGoal();
+  const live = m.createGoal({ text: "still going" });
+  m.bindSession({ sessionId: SID(52), consolePid: LIVE, goalId: live.id });
+  const dead = m.createGoal({ text: "console closed days ago" });
+  m.bindSession({ sessionId: SID(53), consolePid: 999999, goalId: dead.id });
+
+  const active = m.activeGoals();
+  assert.equal(active.length, 1);
+  assert.equal(active[0].id, live.id);
+  assert.equal(m.readGoal(dead.id), null, "the dead one was reaped as a side effect of listing");
+});
+
+test("CLI: main() 'reap' reports which goals it archived", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(54), consolePid: 999999, goalId: g.id });
+  assert.deepEqual(JSON.parse(runMain(["reap"])), [g.id]);
+});
+
 // --- error paths and edge branches not reachable via the happy-path tests --
 
 test("createGoal refuses empty/whitespace-only/absent text", () => {
