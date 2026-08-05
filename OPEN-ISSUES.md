@@ -31,6 +31,66 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-044 covgate's coverage merge under-reports funcs%, not just branches%, once a module's own tests spawn real subprocesses
+- opened: 2026-08-05
+- rank: reliability
+- where: `hooks/covgate.mjs`'s coverage merge (see its own header comment on
+  `OI-017`, which documents the same phenomenon for branches only);
+  observed on `kernel/run.mjs` (pre-existing, `run.test.mjs`'s
+  `execFileSync` CLI-proof tests) and `kernel/autonomy.mjs` (introduced by
+  `guards#OI-043`'s fix, whose regression tests must spawn real OS
+  processes to prove cross-process lock behavior at all)
+- what: found auditing both modules for `guards#OI-019` (sub-project G).
+  Each function shows as fully exercised when its owning test file runs
+  alone with a clean coverage dir, but the SAME function reports partial
+  (e.g. `run.mjs` 90.70%, `autonomy.mjs` 98.15%) funcs coverage once the
+  full fast tier's shared `NODE_V8_COVERAGE` directory has multiple
+  processes' dumps in it — confirmed by reading the raw V8 coverage JSON
+  directly: the exact same function appears as BOTH covered (count > 0, in
+  the main process's own dump) and uncovered (count 0, in a narrower
+  child's dump) across separate per-process files, and node's own merge
+  picks (or dilutes toward) the lower number rather than a true union.
+  Deliberately did NOT "fix" this by stripping `NODE_V8_COVERAGE` from the
+  child spawns (tried first, made it WORSE — those children execute code,
+  like `guards#OI-043`'s lock-retry loop, that the parent process never
+  does, so suppressing their coverage dump removes real signal, it doesn't
+  remove noise).
+- why open: this is a coverage-TOOLING gap, not a scenario gap — every
+  behavior in both files has a real, verified test (RED-before/GREEN-after
+  confirmed via `git stash` for both `OI-040`/`OI-042`/`OI-043`). Fixing
+  node's own coverage-merge algorithm is out of scope for a kernel-module
+  audit. `tests.branchFloorOverrides` (the existing escape hatch) only
+  covers the branches column; there is no equivalent for funcs today.
+- done when: either node/c8 tooling stops under-reporting funcs% across a
+  merged multi-process run, or `hooks/covgate.mjs` grows a
+  `funcsFloorOverride` (or similar) mirroring `branchFloorOverrides`,
+  documented with the same "proven tooling limitation, not a way to duck a
+  real gap" bar, and `run.mjs`/`autonomy.mjs` are the first two entries.
+
+## OI-041 tools/workflows.test.mjs's row-shape check silently matches zero rows on this Windows checkout
+- opened: 2026-08-05
+- rank: reliability
+- where: `tools/workflows.test.mjs` ("every workflow row names a Tests
+  value, never a bare dash"), reading `WORKFLOWS.md`
+- what: found while auditing `kernel/run.mjs` for `guards#OI-019` (sub-
+  project G). The test does `doc.split("\n")` then matches each row against
+  `/^\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|$/`. `WORKFLOWS.md` on disk has CRLF line
+  endings, so every line after the split keeps a trailing `\r`, and the `$`
+  anchor never matches it — the regex finds zero rows on every real run here,
+  not just a hypothetical one. The test still "passes" its own
+  `assert.ok(rows.length > 0, ...)` guard as a *failure* (it throws), so this
+  is not silent in CI, but it has been red on this branch since before this
+  audit and nobody has been un-red-ing it — `node --test
+  tools/workflows.test.mjs` fails on a clean `acc/g-kernel-scenarios`
+  checkout with no local changes.
+- why open: out of scope for sub-project G's kernel-module audits (this file
+  belongs to sub-project A's `WORKFLOWS.md` deliverable); logged rather than
+  fixed inline per standing rule 5.
+- done when: the row regex tolerates a trailing `\r` (e.g. strip it before
+  matching, or match against `\r?$`), `node --test tools/workflows.test.mjs`
+  passes on this Windows checkout, and a regression test pins a CRLF-
+  terminated fixture row so this cannot regress silently again.
+
 ## OI-038 hooks/engine.mjs, the runbox lifecycle engine that runs scripts with the user's full authority, has no automated test suite
 - opened: 2026-08-05
 - rank: safety
@@ -411,6 +471,101 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-043 [RESOLVED 2026-08-05] kernel/autonomy.mjs's updateAfterRun was an unlocked read-modify-write, so concurrent finalizes could silently drop an adjustment
+- opened: 2026-08-05, resolved: 2026-08-05
+- rank: safety
+- where: `kernel/autonomy.mjs` `updateAfterRun`/`writeAutonomy`, called by
+  `kernel/run.mjs`'s `runTask` after EVERY finalized run (including the
+  concurrent-runs case `guards#OI-019`'s `run.mjs` audit already proved
+  possible)
+- what: found during `guards#OI-019`'s scenario audit of `kernel/autonomy.mjs`
+  (sub-project G, rare axis). `updateAfterRun` read `autonomy.json`, computed
+  a new factor/runsLeft/log, and overwrote the whole file — no lock, no
+  merge. Two processes finalizing around the same moment both read the same
+  old state before either wrote, so the second writeAutonomy() call
+  unconditionally clobbered the first's, silently discarding its adjustment
+  AND its log entry. Reproduced empirically: two racing writers, exactly one
+  log entry survives, every time, before the fix. This is the exact
+  mechanism `docs/2026-08-02-acc-highest-roi-implementation-plan.md`'s T1.1
+  goal-ceiling story is built on top of — a lost tightening decision is a
+  lost cost/runaway brake, not just a lost audit line.
+- fix: `updateAfterRun`'s whole read-modify-write now runs under an
+  exclusive-create lock file (`autonomyFile() + ".lock"`), so a second
+  finalizer correctly sees the first's write and composes on top of it
+  (mid-tightening decrement) instead of overwriting it. A stale lock (age >
+  30s, a crashed holder) is stolen rather than deadlocking every future
+  autonomy update. Windows can throw `EPERM`/`EBUSY` (not `EEXIST`) for a
+  brief window right after a lock is deleted elsewhere — found while
+  hardening the fix, not hypothetical (surfaced as a real, reproducible
+  failure running the kernel test files together) — treated as contended,
+  same as `EEXIST`.
+- verified: new tests in `kernel/autonomy.test.mjs` — two real OS processes
+  finalizing concurrently (RED against the pre-fix code via `git stash`,
+  GREEN after), a briefly-held lock is waited out, and a stale lock is
+  stolen. Full fast tier (`npm run test:windows`): 517/519, the one failure
+  being the pre-existing, separately-logged `guards#OI-041`.
+
+## OI-042 [RESOLVED 2026-08-05] kernel/ledger.mjs's append-once dedup was a read-then-write race across real processes, not atomic
+- opened: 2026-08-05, resolved: 2026-08-05
+- rank: reliability
+- where: `kernel/ledger.mjs` `appendOnce` (backs `appendStarted`/
+  `appendFinalized`)
+- what: found during `guards#OI-019`'s scenario audit of `kernel/ledger.mjs`
+  (sub-project G, rare axis — "concurrent calls"). `appendOnce` decided
+  whether to write by reading the WHOLE `runs.jsonl` and checking for a
+  matching `(event, runId)` line already present. That is safe against one
+  process's own sequential retries, but two real OS processes racing to
+  finalize the SAME runId (the exact "a resumed kernel must not double-write"
+  case the file's own header comment describes) can both read "not yet
+  written" before either has appended, and both win. Reproduced empirically:
+  two Node processes synchronized to append `run_started` for the same
+  runId at the same instant produced two lines in 8/8 trials before the fix,
+  0/8 after.
+- fix: the claim is now made atomically via an exclusive-create (`wx`)
+  marker file per `(runId, event)` under a new `.claims/` subdirectory of
+  the ledger dir — only the process that wins the OS-level exclusive create
+  ever appends the line. Added `kernel/ledger.mjs` `clearRunLog()` (wipes the
+  run log AND its claim markers, leaving `autonomyFile()` untouched) because
+  three existing `kernel/autonomy.test.mjs` tests reset ledger state between
+  seed rounds by deleting `runsFile()` alone, which the new claim markers
+  would otherwise silently outlive — surfaced as a real, reproducible test
+  failure while wiring the fix in, not a hypothetical.
+- verified: new test in `kernel/ledger.test.mjs`, "two real OS processes
+  racing to append the same run's started line still leave exactly one",
+  is RED against the pre-fix code (confirmed via `git stash`) and GREEN
+  after; `node --test kernel/run.test.mjs kernel/ledger.test.mjs
+  kernel/autonomy.test.mjs kernel/verifier.test.mjs` (62/62);
+  `node tools/scenariogate.mjs --module kernel/ledger.mjs` ok; `node
+  hooks/covgate.mjs` shows only the pre-existing, separately-logged
+  `guards#OI-041` failure.
+
+## OI-040 [RESOLVED 2026-08-05] kernel/verifier.mjs's verifyCriterion could throw uncaught, crashing kernel/run.mjs before it finalized the run
+- opened: 2026-08-05, resolved: 2026-08-05
+- rank: reliability
+- where: `kernel/verifier.mjs` `verifyCriterion` (the `file_contains` branch's
+  `new RegExp(v.pattern)`); caller `kernel/run.mjs` `runTask`, which awaits
+  `verifyAll` with no surrounding try/catch
+- what: found during `guards#OI-019`'s scenario audit of `kernel/run.mjs`
+  (sub-project G, error axis). An acceptance criterion with an invalid
+  `pattern` (e.g. an unterminated group) made `verifyCriterion` throw a
+  `SyntaxError`, which propagated out of `verifyAll` and out of `runTask`
+  itself uncaught — unlike every other kernel-side failure (`identity()`,
+  `startTask()`, `envForKeys()`), which are all wrapped and fail closed to
+  `failed-to-start`. A crash here meant `finalize()` never ran: no
+  `run_finalized` ledger line (the run stays looking "started" forever),
+  `cleanupRun` never ran (the staging dir with `settings.json`/
+  `contract.json`/`pin.json` leaks on disk), and `updateAfterRun` never
+  tightened the autonomy window.
+- fix: `verifyCriterion` now wraps its whole method switch in try/catch and
+  reports a normal `fail` result (`verification threw: <message>`) instead of
+  letting the exception escape — the same "a bad input is a failed
+  criterion, not a crash" contract every other verify method already had.
+- verified: new test `kernel/run.test.mjs` "a criterion that throws while
+  being verified fails closed instead of crashing the run (OI-040)" is RED
+  against the pre-fix `verifier.mjs` (confirmed via `git stash`) and GREEN
+  after; `node --test kernel/run.test.mjs kernel/verifier.test.mjs` (32/32);
+  `node tools/scenariogate.mjs --module kernel/run.mjs` ok.
 
 ## OI-034 [RESOLVED 2026-08-05] A console PID is treated as a console IDENTITY, and Windows recycles PIDs
 - opened: 2026-08-04

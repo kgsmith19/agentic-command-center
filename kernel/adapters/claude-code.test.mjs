@@ -249,6 +249,42 @@ test("readState ignores an assistant message with no usage at all", () => {
   assert.equal(s.tokens, 0);
 });
 
+test("readState takes the LAST session_id across multiple differing events, not the first (edge)", () => {
+  const s = A.readState([
+    { type: "system", subtype: "init", session_id: "sid-old" },
+    { type: "assistant", message: {} },
+    { type: "system", subtype: "resumed", session_id: "sid-new" },
+  ]);
+  assert.equal(s.sessionId, "sid-new");
+});
+
+test("two concurrent launches serialize through the lane when only one slot exists (rare, AC-A4)", async () => {
+  const childA = fakeChild();
+  const childB = fakeChild();
+  const spawns = [];
+  const handleAPromise = A.startTask({
+    runId: "r-race-a", prompt: "a", settingsPath: "C:/tmp/s.json",
+    sessionId: "11111111-2222-3333-4444-555555555555", tools: ["Read"], cwd: BASE,
+    spawnFn: () => { spawns.push("a"); return childA; },
+  });
+  const handleA = await handleAPromise;
+  let bSpawned = false;
+  const handleBPromise = A.startTask({
+    runId: "r-race-b", prompt: "b", settingsPath: "C:/tmp/s.json",
+    sessionId: "11111111-2222-3333-4444-555555555555", tools: ["Read"], cwd: BASE,
+    spawnFn: () => { bSpawned = true; spawns.push("b"); return childB; },
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(bSpawned, false, "the second launch must wait for the only slot, not spawn alongside the first");
+  childA.emit("close", 0);
+  await handleA.done;
+  const handleB = await handleBPromise;
+  assert.equal(bSpawned, true, "the second launch proceeds once the first releases its slot");
+  childB.emit("close", 0);
+  await handleB.done;
+  assert.deepEqual(spawns, ["a", "b"]);
+});
+
 test("sendStep continues an existing session over --resume (AC-A7)", async () => {
   const child = fakeChild();
   let seen = null;

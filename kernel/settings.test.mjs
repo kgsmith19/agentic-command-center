@@ -54,6 +54,20 @@ test("a missing settings file or pin fails closed, never passes by default", () 
   assert.equal(S.verifySettingsPin(path.join(BASE, "nope")).ok, false);
 });
 
+test("a corrupt (not valid JSON) pin.json fails closed too, distinct from a missing one (fault-tolerance)", () => {
+  const w = S.writeRunFiles(contract, { runId: "r-corrupt-pin", guardhookPath: "C:/g/kernel/guardhook.mjs" });
+  fs.writeFileSync(w.pinPath, "{ not json");
+  const v = S.verifySettingsPin(w.dir);
+  assert.equal(v.ok, false);
+  assert.ok(v.error, "the failure reason must be surfaced, not just ok:false");
+});
+
+test("a contract granting no optional actions still produces a valid matcher of just the always-allowed tools (edge)", () => {
+  const bare = { ...contract, allowedActions: { readRoots: [], writeRoots: [], bashPatterns: [], networkHosts: [], vaultKeys: [], subagents: [] } };
+  const s = S.generateSettings(bare, { guardhookPath: "C:/g/kernel/guardhook.mjs" });
+  assert.equal(s.hooks.PreToolUse[0].matcher, "TodoWrite");
+});
+
 test("cleanupRun removes the staging directory", () => {
   const w = S.writeRunFiles(contract, { runId: "r-clean", guardhookPath: "C:/g/kernel/guardhook.mjs" });
   S.cleanupRun("r-clean");

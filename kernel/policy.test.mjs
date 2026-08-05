@@ -110,6 +110,21 @@ test("saveKernelPolicy round-trips through the file and preserves everything it 
   assert.equal(onDisk.context.softK, 400, "other policy blocks survive");
 });
 
+test("boundary values at the exact edge of each valid range are accepted, not rejected (edge)", () => {
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ kernel: goodBlock() }, null, 2));
+  const saved = saveKernelPolicy({
+    ...goodBlock(),
+    budget: { wallClockMin: 0.001, toolCalls: 1, tokens: 1 },
+    checkpointMin: 0.001,
+    autonomy: { window: 1, rejectRate: 1, factor: 1, runs: 1 },
+  });
+  assert.equal(saved.budget.toolCalls, 1);
+  assert.equal(saved.budget.tokens, 1);
+  assert.equal(saved.autonomy.rejectRate, 1);
+  assert.equal(saved.autonomy.factor, 1);
+  assert.equal(saved.autonomy.runs, 1);
+});
+
 test("an invalid block is rejected atom-for-atom: throws, file byte-identical", () => {
   fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ kernel: goodBlock() }, null, 2));
   const before = fs.readFileSync(process.env.ACC_POLICY, "utf8");
@@ -131,4 +146,10 @@ test("an invalid block is rejected atom-for-atom: throws, file byte-identical", 
 test("saveKernelPolicy with no policy file fails closed instead of inventing one", () => {
   fs.rmSync(process.env.ACC_POLICY, { force: true });
   assert.throws(() => saveKernelPolicy(goodBlock()), /cannot edit/);
+});
+
+test("saveKernelPolicy against a corrupt on-disk file throws instead of silently overwriting it (error, fault-tolerance)", () => {
+  fs.writeFileSync(process.env.ACC_POLICY, "{ not json");
+  assert.throws(() => saveKernelPolicy(goodBlock()));
+  assert.equal(fs.readFileSync(process.env.ACC_POLICY, "utf8"), "{ not json", "a failed save must not touch the corrupt file");
 });

@@ -42,8 +42,42 @@ export function readRuns() {
   return readLines(runsFile());
 }
 
+// Test-only reset: wipes the transactional run log AND its claim markers,
+// but leaves autonomyFile() untouched — a bare `rm runsFile()` used to be
+// enough to let a runId be reused (the old dedup re-read the now-empty
+// file), but the OI-042 claim markers outlive the log on their own, so a
+// caller wiping just the log must wipe this too or every re-seeded runId
+// silently no-ops.
+export function clearRunLog() {
+  fs.rmSync(runsFile(), { force: true });
+  fs.rmSync(claimsDir(), { recursive: true, force: true });
+}
+
+// guards#OI-042: the old check was "does a matching line already exist in
+// runs.jsonl?", read-then-decide over the WHOLE file — safe against a single
+// process's own sequential retries, but two real OS processes racing to
+// finalize the same runId (the exact "resumed kernel must not double-write"
+// case this function exists for) can both read "not yet written" before
+// either appends, and both win. An exclusive-create marker file makes the
+// CLAIM atomic at the filesystem level (Windows and POSIX both refuse a
+// second `wx` create), so only the process that wins the claim ever appends.
+function claimsDir() {
+  return path.join(ledgerDir(), ".claims");
+}
+
+function claimOnce(event, runId) {
+  fs.mkdirSync(claimsDir(), { recursive: true });
+  try {
+    fs.writeFileSync(path.join(claimsDir(), `${runId}.${event}`), "", { flag: "wx" });
+    return true;
+  } catch (e) {
+    if (e.code === "EEXIST") return false;
+    throw e;
+  }
+}
+
 function appendOnce(event, entry) {
-  if (readRuns().some((r) => r.event === event && r.runId === entry.runId)) return false;
+  if (!claimOnce(event, entry.runId)) return false;
   appendLine(runsFile(), { event, ...entry });
   return true;
 }

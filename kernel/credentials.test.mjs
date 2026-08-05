@@ -39,3 +39,16 @@ test("a missing vault file yields no keys rather than throwing on first run", ()
   assert.deepEqual(C.vaultNames(), []);
   process.env.ACC_VAULT = old;
 });
+
+test("envForKeys with no argument at all defaults to no keys requested (edge)", () => {
+  assert.deepEqual(C.envForKeys(), {});
+});
+
+test("a corrupt vault file fails closed identically to a missing one, not a crash (fault-tolerance)", () => {
+  const old = process.env.ACC_VAULT;
+  process.env.ACC_VAULT = path.join(BASE, "corrupt.json");
+  fs.writeFileSync(process.env.ACC_VAULT, "{ not json");
+  assert.deepEqual(C.vaultNames(), [], "a corrupt vault denies every key, exactly like an absent one");
+  assert.throws(() => C.envForKeys(["ALLOWED_KEY"]), /ALLOWED_KEY/);
+  process.env.ACC_VAULT = old;
+});

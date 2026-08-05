@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LEDGER = path.join(HERE, "ledger.mjs");
@@ -49,6 +49,30 @@ test("a repeated append with the same runId applies exactly once (AC-G4)", () =>
     "the first finalize wins; a duplicate must not rewrite the outcome");
 });
 
+test("two real OS processes racing to append the same run's started line still leave exactly one (rare, OI-042)", async () => {
+  const { spawn } = await import("node:child_process");
+  const sigFile = path.join(BASE, "race.sig");
+  fs.rmSync(sigFile, { force: true });
+  const script = path.join(BASE, "race-append.mjs");
+  fs.writeFileSync(script, `
+    const L = await import(${JSON.stringify(pathToFileURL(LEDGER).href)});
+    const fs = await import("node:fs");
+    const sig = ${JSON.stringify(sigFile)};
+    while (!fs.existsSync(sig)) { /* busy-wait for the synchronized start */ }
+    L.appendStarted({ runId: "race1", startedAt: "2026-08-05T00:00:00.000Z", contract: {}, settingsSha256: "x" });
+  `);
+  const runOnce = () => new Promise((resolve) => {
+    const p = spawn(process.execPath, [script], { env: process.env });
+    p.on("exit", resolve);
+  });
+  const races = [runOnce(), runOnce()];
+  await new Promise((r) => setTimeout(r, 100)); // let both processes reach the busy-wait
+  fs.writeFileSync(sigFile, "");
+  await Promise.all(races);
+  const rows = L.readRuns().filter((r) => r.runId === "race1" && r.event === "run_started");
+  assert.equal(rows.length, 1, "two concurrent writers must not both win — exactly one started line must survive");
+});
+
 test("an abort still writes a finalized line (AC-L1 covers failure and abort)", () => {
   L.appendStarted(started("r3"));
   L.appendFinalized(finalized("r3", "aborted-by-budget"));
@@ -88,6 +112,27 @@ test("readDecisions returns the full parsed rows, not just counts", () => {
 test("autonomyFile lives beside the runs file, under the ledger dir", () => {
   assert.equal(path.dirname(L.autonomyFile()), L.ledgerDir());
   assert.equal(path.basename(L.autonomyFile()), "autonomy.json");
+});
+
+test("readRuns and decisionCounts read as empty, not a throw, when the ledger has never been written (error)", () => {
+  assert.deepEqual(L.readRuns(), []);
+  assert.deepEqual(L.decisionCounts("never-run"), { allow: 0, deny: 0, total: 0 });
+});
+
+test("query's since/until bounds are inclusive at the exact timestamp (edge)", () => {
+  L.appendStarted({ runId: "e1", startedAt: "2026-08-04T00:00:00.000Z", contract: {}, settingsSha256: "a" });
+  L.appendFinalized({ runId: "e1", finishedAt: "2026-08-04T00:00:01.000Z", outcome: "accepted",
+    harness: { name: "x", version: "1" }, criteria: [], decisions: {}, tokens: 1, wallClockMs: 1 });
+  assert.deepEqual(L.query({ since: "2026-08-04T00:00:00.000Z" }).map((r) => r.runId), ["e1"]);
+  assert.deepEqual(L.query({ until: "2026-08-04T00:00:00.000Z" }).map((r) => r.runId), ["e1"]);
+});
+
+test("a claim directory that cannot be created makes appendStarted throw loudly, not swallow (fault-tolerance)", () => {
+  const dir = path.join(L.ledgerDir(), ".claims");
+  fs.mkdirSync(L.ledgerDir(), { recursive: true });
+  fs.writeFileSync(dir, "not a directory"); // collides with the claims dir path
+  assert.throws(() => L.appendStarted(started("blocked")), /ENOTDIR|EEXIST/);
+  fs.rmSync(dir, { force: true });
 });
 
 test("a truncated trailing line does not lose the records before it", () => {
