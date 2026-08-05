@@ -4,6 +4,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const AUTONOMY_MJS = path.join(HERE, "autonomy.mjs");
 
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-kernel-autonomy-"));
 process.env.ACC_ROOT = path.join(BASE, "root");
@@ -53,6 +57,63 @@ test("crossing the rejected-rate threshold tightens the next N runs automaticall
   assert.equal(state.runsLeft, 5);
   assert.equal(adjustment.direction, "tighten");
   assert.match(adjustment.reason, /3\/10/);
+});
+
+test("two real OS processes finalizing concurrently do not clobber each other's autonomy update (rare, OI-043)", async () => {
+  seedRuns(["rejected", "rejected", "rejected", "rejected", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted"]);
+  const { spawn } = await import("node:child_process");
+  const sigFile = path.join(BASE, "autonomy-race.sig");
+  fs.rmSync(sigFile, { force: true });
+  const script = path.join(BASE, "autonomy-race.mjs");
+  fs.writeFileSync(script, `
+    const A = await import(${JSON.stringify(pathToFileURL(AUTONOMY_MJS).href)});
+    const fs = await import("node:fs");
+    const sig = ${JSON.stringify(sigFile)};
+    while (!fs.existsSync(sig)) { /* busy-wait for the synchronized start */ }
+    A.updateAfterRun({ autonomy: { window: 10, rejectRate: 0.3, factor: 0.5, runs: 5 } });
+  `);
+  const runOnce = () => new Promise((resolve) => {
+    const p = spawn(process.execPath, [script], { env: process.env });
+    p.on("exit", resolve);
+  });
+  const races = [runOnce(), runOnce()];
+  await new Promise((r) => setTimeout(r, 100));
+  fs.writeFileSync(sigFile, "");
+  await Promise.all(races);
+  const state = A.readAutonomy();
+  assert.equal(state.factor, 0.5, "the tightening decision must survive both concurrent writers");
+  assert.equal(state.runsLeft, 4, "the second finalize must see the first's write and decrement from it, not overwrite it");
+  assert.equal(state.log.length, 1, "exactly one adjustment happened; the second call is a mid-tightening decrement with no new log entry");
+});
+
+test("a call that finds the lock briefly held retries until the holder releases it (fault-tolerance, OI-043)", async () => {
+  seedRuns(["accepted", "accepted", "accepted", "accepted", "accepted"]);
+  const lockFile = `${L.autonomyFile()}.lock`;
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  fs.writeFileSync(lockFile, String(process.pid)); // fresh (not stale) — must be waited out, not stolen
+  const releaser = path.join(BASE, "releaser.mjs");
+  fs.writeFileSync(releaser, `
+    const fs = await import("node:fs");
+    await new Promise((r) => setTimeout(r, 80));
+    fs.rmSync(${JSON.stringify(lockFile)}, { force: true });
+  `);
+  const { spawn } = await import("node:child_process");
+  const p = spawn(process.execPath, [releaser], { env: process.env });
+  const { state } = A.updateAfterRun(); // blocks synchronously: must retry-sleep until the releaser deletes the lock
+  await new Promise((r) => p.on("exit", r));
+  assert.equal(state.factor, 1, "the update must complete once the held lock is released, not time out");
+});
+
+test("a stale lock (crashed holder) is stolen instead of deadlocking autonomy updates forever (fault-tolerance, OI-043)", () => {
+  seedRuns(["accepted", "accepted", "accepted", "accepted", "accepted"]);
+  const lockFile = `${L.autonomyFile()}.lock`;
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  fs.writeFileSync(lockFile, "99999999"); // a pid that is certainly not this process
+  const old = new Date(Date.now() - 60000); // older than LOCK_STALE_MS (30s)
+  fs.utimesSync(lockFile, old, old);
+  const { state } = A.updateAfterRun();
+  assert.equal(state.factor, 1, "the update must complete by stealing the stale lock, not hang");
+  assert.equal(fs.existsSync(lockFile), false, "the winning caller releases the lock it stole");
 });
 
 test("a healthy window makes no adjustment", () => {
@@ -148,4 +209,11 @@ test("readAutonomyStrict: missing file is fresh, corrupt file THROWS (never fail
   assert.throws(() => A.readAutonomyStrict());
   fs.writeFileSync(L.autonomyFile(), JSON.stringify({ factor: 0.5, runsLeft: 3 }));
   assert.equal(A.readAutonomyStrict().factor, 0.5);
+});
+
+test("readAutonomyStrict: a non-ENOENT read error (e.g. EISDIR) is re-thrown, not treated as fresh (error)", () => {
+  fs.rmSync(L.autonomyFile(), { force: true, recursive: true });
+  fs.mkdirSync(L.autonomyFile(), { recursive: true }); // a directory where a file is expected: readFileSync throws EISDIR, never ENOENT
+  assert.throws(() => A.readAutonomyStrict(), /EISDIR/);
+  fs.rmSync(L.autonomyFile(), { recursive: true, force: true });
 });

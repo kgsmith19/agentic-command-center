@@ -31,6 +31,42 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-044 covgate's coverage merge under-reports funcs%, not just branches%, once a module's own tests spawn real subprocesses
+- opened: 2026-08-05
+- rank: reliability
+- where: `hooks/covgate.mjs`'s coverage merge (see its own header comment on
+  `OI-017`, which documents the same phenomenon for branches only);
+  observed on `kernel/run.mjs` (pre-existing, `run.test.mjs`'s
+  `execFileSync` CLI-proof tests) and `kernel/autonomy.mjs` (introduced by
+  `guards#OI-043`'s fix, whose regression tests must spawn real OS
+  processes to prove cross-process lock behavior at all)
+- what: found auditing both modules for `guards#OI-019` (sub-project G).
+  Each function shows as fully exercised when its owning test file runs
+  alone with a clean coverage dir, but the SAME function reports partial
+  (e.g. `run.mjs` 90.70%, `autonomy.mjs` 98.15%) funcs coverage once the
+  full fast tier's shared `NODE_V8_COVERAGE` directory has multiple
+  processes' dumps in it — confirmed by reading the raw V8 coverage JSON
+  directly: the exact same function appears as BOTH covered (count > 0, in
+  the main process's own dump) and uncovered (count 0, in a narrower
+  child's dump) across separate per-process files, and node's own merge
+  picks (or dilutes toward) the lower number rather than a true union.
+  Deliberately did NOT "fix" this by stripping `NODE_V8_COVERAGE` from the
+  child spawns (tried first, made it WORSE — those children execute code,
+  like `guards#OI-043`'s lock-retry loop, that the parent process never
+  does, so suppressing their coverage dump removes real signal, it doesn't
+  remove noise).
+- why open: this is a coverage-TOOLING gap, not a scenario gap — every
+  behavior in both files has a real, verified test (RED-before/GREEN-after
+  confirmed via `git stash` for both `OI-040`/`OI-042`/`OI-043`). Fixing
+  node's own coverage-merge algorithm is out of scope for a kernel-module
+  audit. `tests.branchFloorOverrides` (the existing escape hatch) only
+  covers the branches column; there is no equivalent for funcs today.
+- done when: either node/c8 tooling stops under-reporting funcs% across a
+  merged multi-process run, or `hooks/covgate.mjs` grows a
+  `funcsFloorOverride` (or similar) mirroring `branchFloorOverrides`,
+  documented with the same "proven tooling limitation, not a way to duck a
+  real gap" bar, and `run.mjs`/`autonomy.mjs` are the first two entries.
+
 ## OI-041 tools/workflows.test.mjs's row-shape check silently matches zero rows on this Windows checkout
 - opened: 2026-08-05
 - rank: reliability
@@ -435,6 +471,40 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-043 [RESOLVED 2026-08-05] kernel/autonomy.mjs's updateAfterRun was an unlocked read-modify-write, so concurrent finalizes could silently drop an adjustment
+- opened: 2026-08-05, resolved: 2026-08-05
+- rank: safety
+- where: `kernel/autonomy.mjs` `updateAfterRun`/`writeAutonomy`, called by
+  `kernel/run.mjs`'s `runTask` after EVERY finalized run (including the
+  concurrent-runs case `guards#OI-019`'s `run.mjs` audit already proved
+  possible)
+- what: found during `guards#OI-019`'s scenario audit of `kernel/autonomy.mjs`
+  (sub-project G, rare axis). `updateAfterRun` read `autonomy.json`, computed
+  a new factor/runsLeft/log, and overwrote the whole file — no lock, no
+  merge. Two processes finalizing around the same moment both read the same
+  old state before either wrote, so the second writeAutonomy() call
+  unconditionally clobbered the first's, silently discarding its adjustment
+  AND its log entry. Reproduced empirically: two racing writers, exactly one
+  log entry survives, every time, before the fix. This is the exact
+  mechanism `docs/2026-08-02-acc-highest-roi-implementation-plan.md`'s T1.1
+  goal-ceiling story is built on top of — a lost tightening decision is a
+  lost cost/runaway brake, not just a lost audit line.
+- fix: `updateAfterRun`'s whole read-modify-write now runs under an
+  exclusive-create lock file (`autonomyFile() + ".lock"`), so a second
+  finalizer correctly sees the first's write and composes on top of it
+  (mid-tightening decrement) instead of overwriting it. A stale lock (age >
+  30s, a crashed holder) is stolen rather than deadlocking every future
+  autonomy update. Windows can throw `EPERM`/`EBUSY` (not `EEXIST`) for a
+  brief window right after a lock is deleted elsewhere — found while
+  hardening the fix, not hypothetical (surfaced as a real, reproducible
+  failure running the kernel test files together) — treated as contended,
+  same as `EEXIST`.
+- verified: new tests in `kernel/autonomy.test.mjs` — two real OS processes
+  finalizing concurrently (RED against the pre-fix code via `git stash`,
+  GREEN after), a briefly-held lock is waited out, and a stale lock is
+  stolen. Full fast tier (`npm run test:windows`): 517/519, the one failure
+  being the pre-existing, separately-logged `guards#OI-041`.
 
 ## OI-042 [RESOLVED 2026-08-05] kernel/ledger.mjs's append-once dedup was a read-then-write race across real processes, not atomic
 - opened: 2026-08-05, resolved: 2026-08-05

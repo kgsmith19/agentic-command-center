@@ -16,6 +16,66 @@ import { loadKernelPolicy } from "./policy.mjs";
 const NOT_DELIVERED = new Set(["rejected", "aborted-by-budget"]);
 const FRESH = { factor: 1, runsLeft: 0, log: [] };
 
+// guards#OI-043: updateAfterRun does read-autonomy -> compute -> write-
+// autonomy with no lock. kernel/run.mjs calls it after every finalized run,
+// and two runs CAN finalize concurrently (proven by run.mjs's own concurrent-
+// runs test) -- two processes reading the same old state before either
+// writes means the second writeAutonomy() unconditionally overwrites the
+// first, silently discarding its adjustment and its log entry (reproduced
+// empirically: two racing writers, one log entry, every time). An exclusive-
+// create lock file serializes the whole read-modify-write; a stale lock
+// (age > LOCK_STALE_MS) is stolen rather than deadlocking autonomy updates
+// forever if a holder crashed mid-update.
+const LOCK_STALE_MS = 30000;
+const LOCK_WAIT_MS = 5000;
+const LOCK_RETRY_MS = 20;
+
+function lockPath() {
+  return autonomyFile() + ".lock";
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireLock() {
+  fs.mkdirSync(path.dirname(autonomyFile()), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.writeFileSync(lockPath(), String(process.pid), { flag: "wx" });
+      return;
+    } catch (e) {
+      // Windows can throw EPERM/EBUSY (not EEXIST) for a brief window right
+      // after another process deletes the same path — a transient delete-
+      // then-create race on NTFS, not a real error. Treated as "still
+      // contended," same as EEXIST, rather than propagated.
+      if (e.code !== "EEXIST" && e.code !== "EPERM" && e.code !== "EBUSY") throw e;
+      try {
+        if (Date.now() - fs.statSync(lockPath()).mtimeMs > LOCK_STALE_MS) {
+          fs.rmSync(lockPath(), { force: true });
+          continue;
+        }
+      } catch { /* lock vanished between the failed create and this check; retry */ }
+      if (Date.now() > deadline) throw new Error("autonomy lock: timed out waiting for a concurrent update to finish");
+      sleepSync(LOCK_RETRY_MS);
+    }
+  }
+}
+
+function releaseLock() {
+  fs.rmSync(lockPath(), { force: true });
+}
+
+function withAutonomyLock(fn) {
+  acquireLock();
+  try {
+    return fn();
+  } finally {
+    releaseLock();
+  }
+}
+
 export function readAutonomy() {
   try {
     return { ...FRESH, ...JSON.parse(fs.readFileSync(autonomyFile(), "utf8")) };
@@ -63,6 +123,10 @@ function windowOutcomes(size) {
 
 // Call once after every finalized run.
 export function updateAfterRun(policy = null) {
+  return withAutonomyLock(() => updateAfterRunLocked(policy));
+}
+
+function updateAfterRunLocked(policy) {
   const cfg = (policy || loadKernelPolicy()).autonomy;
   const state = readAutonomy();
   const window = windowOutcomes(cfg.window);
