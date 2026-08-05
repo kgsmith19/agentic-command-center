@@ -1,4 +1,4 @@
-// node --test kernel/guardhook.test.mjs  (run from C:\code\guards)
+// node --test kernel/guardhook.test.mjs  (run from the repo root)
 // Integration: spawns the hook as a real subprocess with a real stdin payload,
 // which is the only way the fail-closed and exit-code contract is actually proven.
 import { test, after, beforeEach } from "node:test";

@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { repoRoot, resolve } from "../core/paths.mjs";
 
 const HEADING = /^##\s+(OI-\d+)\s+(?:\[([^\]]+)\]\s*)?(.*)$/;
 const FIELD = /^-\s+([a-z-]+):\s*(.*)$/i;
@@ -152,19 +153,19 @@ export function run(argv, io) {
 }
 
 // The guards ledger and this repo's own commit are resolved relative to
-// THIS file's own checkout, not a hardcoded C:/code/guards, so the CLI
+// THIS file's own checkout, not a hardcoded absolute path, so the CLI
 // reports the running worktree's own state (branch, uncommitted ranks)
 // instead of whatever happens to be checked out at the canonical path —
 // load-bearing while sub-projects run one-worktree-per-branch (the
 // completion plan's own convention).
-const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = repoRoot();
 
 export function realIo() {
   return {
     readFile: (p) => readFileSync(p, "utf8"),
     ledgers: [
       { name: "code", path: "C:/code/OPEN-ISSUES.md" },
-      { name: "guards", path: path.join(REPO_ROOT, "OPEN-ISSUES.md") },
+      { name: "guards", path: resolve("OPEN-ISSUES.md") },
       { name: "ecosystem", path: "C:/code/lifeos-ecosystem/OPEN-ISSUES.md" },
       { name: "lifeos", path: "C:/code/lifeos-ecosystem/lifeos/OPEN-ISSUES.md" },
       { name: "lifeos-ui", path: "C:/code/lifeos-ecosystem/lifeos-ui/OPEN-ISSUES.md" },

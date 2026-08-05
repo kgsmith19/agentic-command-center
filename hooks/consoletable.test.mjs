@@ -1,4 +1,4 @@
-// node --test hooks/consoletable.test.mjs  (run from C:\code\guards)
+// node --test hooks/consoletable.test.mjs  (run from the repo root)
 //
 // buildConsoleTable takes its OS-shelling dependency (execFileSync) and its
 // active-goals source as injected params specifically so this can be
@@ -13,7 +13,7 @@ test("no consolePid and no active goals -> undefined, never shells out", () => {
   const result = buildConsoleTable(null, {
     activeGoals: () => [],
     execFileSync: () => { called = true; return "{}"; },
-    here: "C:/code/guards/hooks",
+    here: "C:/code/example-project/hooks",
   });
   assert.equal(result, undefined);
   assert.equal(called, false, "an empty pid set must never spawn powershell");
@@ -29,7 +29,7 @@ test("gathers the window's own pid plus every active goal's consolePid, deduped"
         argsSeen = args;
         return JSON.stringify({ 111: "2026-08-01T00:00:00.000Z", 222: "2026-08-01T00:00:00.000Z" });
       },
-      here: "C:/code/guards/hooks",
+      here: "C:/code/example-project/hooks",
     }
   );
   const pidsArgIndex = argsSeen.indexOf("-Pids") + 1;
@@ -48,7 +48,7 @@ test("invokes consoletable.ps1 from the given directory, via powershell", () => 
       argsSeen = args;
       return "{}";
     },
-    here: "C:/code/guards/hooks",
+    here: "C:/code/example-project/hooks",
   });
   assert.equal(cmdSeen, "powershell");
   assert.ok(argsSeen.some((a) => String(a).endsWith("consoletable.ps1")));
@@ -60,14 +60,14 @@ test("a throwing execFileSync (powershell missing, timeout, bad JSON) fails open
   const threw = buildConsoleTable({ consolePid: 5 }, {
     activeGoals: () => [],
     execFileSync: () => { throw new Error("boom"); },
-    here: "C:/code/guards/hooks",
+    here: "C:/code/example-project/hooks",
   });
   assert.equal(threw, undefined);
 
   const badJson = buildConsoleTable({ consolePid: 5 }, {
     activeGoals: () => [],
     execFileSync: () => "not json",
-    here: "C:/code/guards/hooks",
+    here: "C:/code/example-project/hooks",
   });
   assert.equal(badJson, undefined);
 });
@@ -77,7 +77,7 @@ test("a goal with no consolePid at all contributes nothing to the pid set", () =
   const result = buildConsoleTable(null, {
     activeGoals: () => [{ text: "no console yet" }],
     execFileSync: () => { called = true; return "{}"; },
-    here: "C:/code/guards/hooks",
+    here: "C:/code/example-project/hooks",
   });
   assert.equal(result, undefined);
   assert.equal(called, false);

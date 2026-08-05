@@ -1,4 +1,4 @@
-// node --test hooks/testplan.test.mjs  (run from C:\code\guards)
+// node --test hooks/testplan.test.mjs  (run from the repo root)
 //
 // Hermetic. ACC_ROOT sandboxes the latch dir BEFORE import (route.test.mjs
 // discipline — live runner/state must never collect test latches, OI-009).

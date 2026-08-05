@@ -1,4 +1,4 @@
-// node --test kernel/credentials.test.mjs  (run from C:\code\guards)
+// node --test kernel/credentials.test.mjs  (run from the repo root)
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

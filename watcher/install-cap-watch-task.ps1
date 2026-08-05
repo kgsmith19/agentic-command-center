@@ -90,7 +90,7 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 
 Register-ScheduledTask -TaskName $spec.TaskName -Action $action -Trigger @($repeat, $atLogon) `
     -Settings $settings -Principal $principal `
-    -Description 'ACC claude launch-cap health check, alert-only (C:\code\guards\watcher\claude-cap-watch.ps1)' `
+    -Description "ACC claude launch-cap health check, alert-only ($($spec.ScriptPath))" `
     -Force | Out-Null
 
 # Prove it landed the way we asked, rather than trusting a clean exit code.

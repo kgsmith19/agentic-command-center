@@ -31,6 +31,33 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-045 hooks/usage.mjs hardcodes its policy.json fallback path, and fixing it drags ~30% pre-existing coverage into covgate's floor
+- opened: 2026-08-05
+- rank: maintainability
+- where: `hooks/usage.mjs` (`POLICY_PATH` fallback), `tools/pathgate.mjs` `DEFERRED`
+- what: sub-project J's Task 3 (de-hardcode every absolute repo path so the
+  Task 12 folder rename is a single command, not an audit) hit one file it
+  could not fix in place: `hooks/usage.mjs`'s `POLICY_PATH` default is still
+  `"C:/code/guards/policy.json"`. Unlike `hooks/budget.mjs` (genuinely
+  subprocess-only, 0% is the honest floor per `tests.subprocessOnlyLibs`),
+  `usage.mjs` is a normal importable module whose existing suite
+  (`hooks/usage.test.mjs`) only covers the OI-005 per-file bucket cache, not
+  the rest of the ~570-line file (~30-65% measured depending on which suite
+  runs). Any edit — even a one-line path fix — makes covgate grade the WHOLE
+  file against the 100/100/90 floor, which it is nowhere near. Fixing the
+  path first would either fail the gate honestly or require writing a full
+  test suite for an unrelated module inside a naming-migration task.
+  `tools/pathgate.mjs`'s `DEFERRED` map carries this one finding by exact
+  file+text match (not a blanket allowlist — the match breaks the moment the
+  line changes) so `node tools/pathgate.mjs` stays green while this is
+  tracked rather than silently skipped.
+- why open: out of scope for sub-project J; real fix is test depth, which is
+  sub-project G's job (`OI-019`, test-depth program).
+- done when: `hooks/usage.mjs` has enough of its own suite to clear
+  covgate's 100/100/90 floor on the whole file, the `POLICY_PATH` default is
+  changed to `resolve("policy.json")` (`core/paths.mjs`), and the matching
+  entry is removed from `tools/pathgate.mjs`'s `DEFERRED` map.
+
 ## OI-044 covgate's coverage merge under-reports funcs%, not just branches%, once a module's own tests spawn real subprocesses
 - opened: 2026-08-05
 - rank: reliability

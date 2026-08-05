@@ -13,8 +13,9 @@
 # "PermissionDenied ... HRESULT 0x80070005" (observed 2026-07-31) - task
 # registration is admin-gated on this machine.
 $ErrorActionPreference = 'Stop'
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $name = 'ACC clearbot watchdog'
-$cmd  = 'C:\code\guards\watcher\start-clearbot.cmd'
+$cmd  = Join-Path $repoRoot 'watcher\start-clearbot.cmd'
 if (-not (Test-Path $cmd)) { throw "missing $cmd" }
 
 $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c "' + $cmd + '"')
@@ -33,7 +34,7 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 
 Register-ScheduledTask -TaskName $name -Action $action -Trigger @($atLogon, $repeat) `
     -Settings $settings -Principal $principal `
-    -Description 'Keeps the ACC clear-watcher alive (see C:\code\guards\AGENTS.md)' -Force | Out-Null
+    -Description "Keeps the ACC clear-watcher alive (see $(Join-Path $repoRoot 'AGENTS.md'))" -Force | Out-Null
 
 Write-Host "registered: $name"
 Get-ScheduledTask -TaskName $name | Select-Object TaskName, State | Format-List

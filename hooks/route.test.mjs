@@ -1,4 +1,4 @@
-// node --test hooks/route.test.mjs  (run from C:\code\guards)
+// node --test hooks/route.test.mjs  (run from the repo root)
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -226,17 +226,17 @@ test("a multi-line mid-session re-scope queues the prompt instead of typing it",
 // doctor: a repo dir is covered ONLY by an exact route path. The wide root
 // route does not cover repos — silent fallback to wide is the OI-003 gap.
 test("doctor flags a repo dir no route covers", () => {
-  const routes = [{ path: "C:\\code\\guards" }, { path: "C:\\code" }];
-  const dirs = ["C:\\code\\guards", "C:\\code\\newrepo"];
+  const routes = [{ path: "C:\\code\\myrepo" }, { path: "C:\\code" }];
+  const dirs = ["C:\\code\\myrepo", "C:\\code\\newrepo"];
   assert.deepEqual(doctor(routes, dirs), ["C:\\code\\newrepo"]);
 });
 
 test("doctor accepts a repo covered by an exact route", () => {
-  assert.deepEqual(doctor([{ path: "C:\\code\\guards" }], ["C:\\code\\guards"]), []);
+  assert.deepEqual(doctor([{ path: "C:\\code\\myrepo" }], ["C:\\code\\myrepo"]), []);
 });
 
 test("doctor compares paths case-insensitively (Windows)", () => {
-  assert.deepEqual(doctor([{ path: "C:\\code\\Guards" }], ["c:\\CODE\\guards"]), []);
+  assert.deepEqual(doctor([{ path: "C:\\code\\Myrepo" }], ["c:\\CODE\\myrepo"]), []);
 });
 
 test("replayable rejects exactly what the injector cannot be trusted with", () => {

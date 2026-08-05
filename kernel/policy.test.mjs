@@ -1,4 +1,4 @@
-// node --test kernel/policy.test.mjs  (run from C:\code\guards)
+// node --test kernel/policy.test.mjs  (run from the repo root)
 // Hermetic: ACC_POLICY/ACC_ROOT point at throwaway paths BEFORE the import.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";

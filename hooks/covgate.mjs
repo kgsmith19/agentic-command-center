@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // covgate.mjs — the changed-file coverage gate the test contract binds.
 //
-//   node hooks/covgate.mjs          (run from C:\code\guards)
+//   node hooks/covgate.mjs          (run from the repo root)
 //
 // WHAT IT PROVES: every lib file you TOUCHED this change is fully exercised by
 // the fast tier. Scope is deliberate — repo-wide 100% is a vanity number that
@@ -90,7 +90,7 @@ export const normPath = (p) => path.resolve(String(p)).replaceAll("\\", "/").toL
 export function changedLibFiles(names) {
   return [...new Set(names)]
     .map((n) => String(n).replaceAll("\\", "/"))
-    .filter((n) => /^(hooks|runner|kernel|gui|tools)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e|spec)\.mjs$/.test(n));
+    .filter((n) => /^(hooks|runner|kernel|gui|tools|core)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e|spec)\.mjs$/.test(n));
 }
 
 // lcov per file: DA:<line>,<hits> (lines), FNDA:<hits>,<name> (functions),

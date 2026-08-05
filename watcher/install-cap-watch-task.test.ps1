@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $fail = 0
 function Check($name, $cond) { if ($cond) { Write-Host "PASS $name" } else { Write-Host "FAIL $name"; $script:fail = 1 } }
 
-$spec = Get-CapWatchTaskSpec -RepoRoot 'C:\code\guards'
+$spec = Get-CapWatchTaskSpec -RepoRoot 'C:\code\myrepo'
 
 Check 'task name is the one already registered on the machine' ($spec.TaskName -eq 'ACC-ClaudeCapWatch')
 
@@ -19,7 +19,7 @@ Check '-WindowStyle Hidden is present (no 60s console flash)' ($spec.Argument -m
 
 Check 'runs the watcher script, quoted for spaces' ($spec.Argument -match '-File\s+"[^"]*claude-cap-watch\.ps1"')
 Check 'no profile, bypassed execution policy' (($spec.Argument -match '-NoProfile') -and ($spec.Argument -match '-ExecutionPolicy\s+Bypass'))
-Check 'script path points inside the given repo root' ($spec.ScriptPath -eq 'C:\code\guards\watcher\claude-cap-watch.ps1')
+Check 'script path points inside the given repo root' ($spec.ScriptPath -eq 'C:\code\myrepo\watcher\claude-cap-watch.ps1')
 
 Check 'repeats every 60 seconds' ($spec.RepetitionInterval.TotalSeconds -eq 60)
 

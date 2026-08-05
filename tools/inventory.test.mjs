@@ -1,4 +1,4 @@
-// node --test tools/inventory.test.mjs   (run from C:\code\guards)
+// node --test tools/inventory.test.mjs   (run from the repo root)
 //
 // Hermetic: every case is an inline ledger fragment. Only Task 9 reads the
 // real ledgers on disk.

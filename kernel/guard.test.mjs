@@ -1,9 +1,15 @@
-// node --test kernel/guard.test.mjs  (run from C:\code\guards)
+// node --test kernel/guard.test.mjs  (run from the repo root)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { decide } from "./guard.mjs";
 
 const norm = (p) => p.replaceAll("\\", "/").toLowerCase();
+// A fictitious protected root, deliberately NOT this repo's own path: these
+// fixtures pair a denyRoots value with a target path that must resolve
+// inside it, and that pairing must hold no matter which worktree the suite
+// runs from - tying it to the real repoRoot() would make the test's outcome
+// depend on checkout location instead of on guard.mjs's logic.
+const PROTECTED = norm("C:/protected/repo");
 const ctx = (over = {}) => ({
   contract: {
     allowedActions: {
@@ -14,8 +20,8 @@ const ctx = (over = {}) => ({
     ...over.contract,
   },
   policy: { alwaysAllowTools: ["TodoWrite"] },
-  denyRoots: [norm("C:/code/guards"), norm("C:/Users/x/.claude")],
-  stagingDir: norm("C:/code/guards/runner/kernel-runs/r1"),
+  denyRoots: [PROTECTED, norm("C:/Users/x/.claude")],
+  stagingDir: `${PROTECTED}/runner/kernel-runs/r1`,
   attempts: 0, ceiling: 200,
   ...over,
 });
@@ -39,10 +45,10 @@ test("a read under readRoots or writeRoots is allowed; elsewhere denied", () => 
 test("guard machinery and the user settings tree are never writable, whatever the contract says (AC-G7)", () => {
   const wideOpen = ctx({ contract: { allowedActions: { readRoots: ["C:/"], writeRoots: ["C:/"], bashPatterns: [], networkHosts: [], vaultKeys: [], subagents: [] } } });
   for (const target of [
-    "C:/code/guards/kernel/guard.mjs",
-    "C:/code/guards/policy.json",
+    `${PROTECTED}/kernel/guard.mjs`,
+    `${PROTECTED}/policy.json`,
     "C:/Users/x/.claude/settings.json",
-    "C:/code/guards/runner/kernel-runs/r1/settings.json",
+    `${PROTECTED}/runner/kernel-runs/r1/settings.json`,
   ]) {
     const d = decide(ev("Write", { file_path: target }), wideOpen);
     assert.equal(d.allow, false, `${target} must never be writable`);
@@ -65,8 +71,8 @@ test("Bash allows only a listed prefix (AC-G1)", () => {
 });
 
 test("a vault key the contract does not list is denied even inside an allowed command (AC-G8)", () => {
-  const allowed = 'npm test && node C:/code/guards/hooks/engine.mjs apply .env ALLOWED_KEY';
-  const smuggled = 'npm test && node C:/code/guards/hooks/engine.mjs apply .env ALLOWED_KEY STRIPE_SECRET';
+  const allowed = `npm test && node ${PROTECTED}/hooks/engine.mjs apply .env ALLOWED_KEY`;
+  const smuggled = `npm test && node ${PROTECTED}/hooks/engine.mjs apply .env ALLOWED_KEY STRIPE_SECRET`;
   assert.equal(decide(ev("Bash", { command: allowed }), ctx()).allow, true);
   const d = decide(ev("Bash", { command: smuggled }), ctx());
   assert.equal(d.allow, false);
@@ -120,7 +126,7 @@ test("every allowedActions category defaults to empty when the field is entirely
   assert.equal(decide(ev("WebFetch", { url: "https://x.example/a" }), minimal).allow, false);
   assert.equal(decide(ev("WebSearch", {}), minimal).allow, false);
   assert.equal(decide(ev("Agent", { subagent_type: "Explore" }), minimal).allow, false);
-  const smuggleCheck = decide(ev("Bash", { command: 'node C:/code/guards/hooks/engine.mjs apply .env X' }), minimal);
+  const smuggleCheck = decide(ev("Bash", { command: `node ${PROTECTED}/hooks/engine.mjs apply .env X` }), minimal);
   assert.equal(smuggleCheck.rule, "vaultKeys");
 });
 
@@ -135,7 +141,7 @@ test("WebSearch is allowed only when networkHosts is non-empty (documented ceili
 });
 
 test("the staging rule fires when the staging dir is NOT already covered by an always-deny root", () => {
-  const isolated = ctx({ stagingDir: norm("D:/sandbox/kernel-runs/r1"), denyRoots: [norm("C:/code/guards")] });
+  const isolated = ctx({ stagingDir: norm("D:/sandbox/kernel-runs/r1"), denyRoots: [PROTECTED] });
   const d = decide(ev("Write", { file_path: "D:/sandbox/kernel-runs/r1/settings.json" }), isolated);
   assert.equal(d.allow, false);
   assert.equal(d.rule, "staging");
@@ -154,10 +160,10 @@ test("a contract with no pinnedPaths field at all is tolerated", () => {
 // included), not a hypothetical.
 
 test("a '..'-traversal path that textually starts with an allowed writeRoot but resolves into denyRoots is still denied", () => {
-  const d = decide(ev("Write", { file_path: "C:/work/src/../../code/guards/policy.json" }), ctx());
+  const d = decide(ev("Write", { file_path: "C:/work/src/../../protected/repo/policy.json" }), ctx());
   assert.equal(d.allow, false, "must not be allowed just because the raw string starts with an allowed writeRoot");
   assert.equal(d.rule, "alwaysDeny");
-  assert.equal(d.target, "c:/code/guards/policy.json", "target must be the RESOLVED path, not the raw traversal string");
+  assert.equal(d.target, `${PROTECTED}/policy.json`, "target must be the RESOLVED path, not the raw traversal string");
 });
 
 test("a '..'-traversal read path resolving outside every granted root is denied, not matched by accident", () => {
@@ -173,7 +179,7 @@ test("a '..'-traversal path that resolves BACK inside an allowed root is allowed
 });
 
 test("a mixed-separator traversal path (backslash and forward-slash) is normalized before the deny check, not bypassed by slash style", () => {
-  const d = decide(ev("Write", { file_path: "C:\\work\\src\\..\\..\\code\\guards\\policy.json" }), ctx());
+  const d = decide(ev("Write", { file_path: "C:\\work\\src\\..\\..\\protected\\repo\\policy.json" }), ctx());
   assert.equal(d.allow, false);
   assert.equal(d.rule, "alwaysDeny");
 });

@@ -23,10 +23,10 @@ const READ_TOOLS = new Set(["Read", "Glob", "Grep", "NotebookRead"]);
 
 // path.posix.normalize collapses ".."/"." segments (pure string manipulation,
 // no filesystem I/O — still safe for this module's "pure" contract). Without
-// it, a harness-supplied file_path like "C:/work/src/../../code/guards/x"
+// it, a harness-supplied file_path like "C:/work/src/../../protected/x"
 // textually starts with the writeRoot "C:/work/src" and would be ALLOWED,
-// while the real filesystem write actually lands in C:/code/guards (a
-// denyRoot) once the OS resolves the ".." segments — a live path-traversal
+// while the real filesystem write actually lands inside a denyRoot once the
+// OS resolves the ".." segments — a live path-traversal
 // bypass of the deny-by-default boundary, found and closed 2026-08-04.
 const norm = (p) => path.posix.normalize(String(p).replaceAll("\\", "/")).toLowerCase().replace(/\/+$/, "");
 const under = (target, root) => target === root || target.startsWith(root + "/");

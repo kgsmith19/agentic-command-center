@@ -1,4 +1,4 @@
-// node --test hooks/prompts.test.mjs  (run from C:\code\guards)
+// node --test hooks/prompts.test.mjs  (run from the repo root)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

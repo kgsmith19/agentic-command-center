@@ -1,4 +1,4 @@
-// node --test kernel/autonomy.test.mjs  (run from C:\code\guards)
+// node --test kernel/autonomy.test.mjs  (run from the repo root)
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

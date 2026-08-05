@@ -12,10 +12,10 @@ Control.cmd`) is the user's GUI on top; the `/approve` skill
 1. **Secrets** — files whose basename matches a `secrets` glob in `config.json`
    (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `vault.json`) can be neither
    read nor written by agent tools, so keys never enter a conversation.
-2. **Self-protection** — currently **OFF**: `C:/code/guards` is not in the
+2. **Self-protection** — currently **OFF**: this repo's own root is not in the
    `protected` list (removed deliberately during the ACC build-out phase). Once
-   the ACC goal closes, it should be re-added (`C:/code/guards/` in full, or
-   specifically `C:/code/guards/gui/` and `C:/code/guards/watcher/`) to block
+   the ACC goal closes, it should be re-added (the repo root in full, or
+   specifically its `gui/` and `watcher/` subtrees) to block
    agent edits of the harness itself. When re-protected, only `~/.claude/settings.json`
    will remain guarded. Exception when re-enabled: runboxes (below).
 3. **Cell ownership** — repos listed under `repos` in `config.json` have path
@@ -34,8 +34,8 @@ The user uploads KEY=VALUE pairs via the GUI ("Give Claude keys" tab) into
 `vault.json` (gitignored, plaintext on disk, read-blocked for agent tools).
 Agents consume them **by name, never by value**:
 
-- `node C:/code/guards/hooks/engine.mjs vault-keys` — list available key names.
-- `node C:/code/guards/hooks/engine.mjs apply <targetFile> <KEY...>` — upsert
+- `node hooks/engine.mjs vault-keys` (from the repo root) — list available key names.
+- `node hooks/engine.mjs apply <targetFile> <KEY...>` (from the repo root) — upsert
   `KEY=value` lines into an env-format file (UTF-8 BOM safe). Values flow
   vault → file directly; never print them, never read the target file afterward.
 
@@ -127,7 +127,7 @@ file under `kernel/adapters/`), and the honest guard ceilings.
 
 ```
 node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/pre-push.test.mjs hooks/dialcheck.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs tools/inventory.test.mjs tools/workflows.test.mjs
-    -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
+    -> FAST TIER, hermetic (`npm run test:windows`). Run from the repo root;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
        list (everything except hooks/clearbot.test.mjs and
@@ -172,8 +172,8 @@ powershell -File watcher/flash-probe.test.ps1 -Observe
        printed "no console window will appear" while the window kept
        appearing. Configuration is not behaviour. It also fails if the task
        did not fire >=3 times while watching, so it can never pass vacuously.
-powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
-powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
+powershell -File guards-gui.ps1 -SmokeTest             (from the repo root)
+powershell -File watcher/screenshot-gui.ps1 [-Advanced] (from the repo root)
 npm run e2e:gui
     -> GUI e2e. Playwright drives gui/kernel.html against gui/server.mjs in a
        sandbox; runs headless in CI (gui-e2e job).

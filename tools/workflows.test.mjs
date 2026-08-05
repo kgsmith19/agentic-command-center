@@ -1,4 +1,4 @@
-// node --test tools/workflows.test.mjs   (run from C:\code\guards)
+// node --test tools/workflows.test.mjs   (run from the repo root)
 //
 // Keeps WORKFLOWS.md honest the way tools/inventory.mjs's --check keeps the
 // ledgers honest: every test-file path it cites must exist on disk, so a

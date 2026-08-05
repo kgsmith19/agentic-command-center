@@ -1,4 +1,4 @@
-// node --test hooks/covgate.test.mjs  (run from C:\code\guards)
+// node --test hooks/covgate.test.mjs  (run from the repo root)
 //
 // Hermetic. The end-to-end tests gate a FIXTURE git repo (temp dir, own
 // history), never this one — so the suite passes identically whether the real
@@ -165,6 +165,13 @@ test("changedLibFiles gates tools/ the same way, dropping its own tests", () => 
   assert.deepEqual(
     changedLibFiles(["tools/inventory.mjs", "tools/inventory.test.mjs"]),
     ["tools/inventory.mjs"]
+  );
+});
+
+test("changedLibFiles gates core/ too - sub-project J's new modules must not skip coverage", () => {
+  assert.deepEqual(
+    changedLibFiles(["core/paths.mjs", "core/paths.test.mjs"]),
+    ["core/paths.mjs"]
   );
 });
 

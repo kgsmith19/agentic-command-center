@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, activeGoals } from "./goal.mjs";
 import { buildConsoleTable } from "./consoletable.mjs";
+import { resolve } from "../core/paths.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
@@ -350,8 +351,8 @@ function goalContext(p, win, policy) {
   parts.push(
     "",
     `[ACC GOAL] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
-    `  - finished, everything verified:  node C:/code/guards/hooks/goal.mjs done ${goal.id}`,
-    `  - genuinely blocked on a human:   node C:/code/guards/hooks/goal.mjs blocked ${goal.id} --why "<one line>"`,
+    `  - finished, everything verified:  node ${resolve("hooks/goal.mjs")} done ${goal.id}`,
+    `  - genuinely blocked on a human:   node ${resolve("hooks/goal.mjs")} blocked ${goal.id} --why "<one line>"`,
     `Until one of those runs, ACC will keep resuming this goal after every clear.`
   );
   return parts.join("\n");
@@ -634,14 +635,14 @@ function onStop(p, policy) {
         (queued
           ? `\n    >>> auto-clear requested - clearbot will type /clear <<<\n\n` +
             `  If nothing happens within ~5s the watcher is not running:\n` +
-            `    node C:/code/guards/hooks/budget.mjs clearbot-status\n`
+            `    node ${resolve("hooks/budget.mjs")} clearbot-status\n`
           : `\n    >>> TYPE /clear NOW <<<\n\n` +
             `  (auto-clear unavailable - no window captured for this session)\n`) +
         (goal
           ? `  Goal ${goal.id} is active - the next session adopts it automatically and\n` +
             `  is resumed by the Command Center. Cycle ${goal.cycles} logged.\n`
           : `  The next session re-primes itself from ${policy.runner.statusFile}.\n`) +
-        `  Verify the clear was real: node C:/code/guards/hooks/usage.mjs clears\n`,
+        `  Verify the clear was real: node ${resolve("hooks/usage.mjs")} clears\n`,
     })
   );
   process.exit(0);
@@ -658,7 +659,7 @@ function onPreToolUseAgent(p, policy) {
     deny(
       `[ACC KILL SWITCH] Rolling 7-day usage is at the RED line (${Math.round(weekTokens / 1e6)}M tokens). ` +
         `Subagent spawns are blocked and the runner is stopped. Main-thread work continues normally. ` +
-        `Clear it in the Command Center GUI (Process tab) or raise week.redTokens in C:/code/guards/policy.json.`
+        `Clear it in the Command Center GUI (Process tab) or raise week.redTokens in ${resolve("policy.json")}.`
     );
   }
 
@@ -672,7 +673,7 @@ function onPreToolUseAgent(p, policy) {
         `Do this work in the MAIN thread. Implementation of a slice task belongs in a runner session ` +
         `(fresh context by construction, far cheaper than an Opus subagent), not here.\n` +
         `If this genuinely needs fan-out: grant a window with ` +
-        `\`node C:/code/guards/hooks/budget.mjs fanout 30\` or the Command Center Process tab.`
+        `\`node ${resolve("hooks/budget.mjs")} fanout 30\` or the Command Center Process tab.`
     );
   }
 

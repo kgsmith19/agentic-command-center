@@ -1,4 +1,4 @@
-// npm run e2e:gui  (run from C:\code\guards). Sandbox only — never live state.
+// npm run e2e:gui  (run from the repo root). Sandbox only — never live state.
 // Satisfies OI-020's done-when: visible field state + a live-edit-applies-
 // without-restart flow, in CI (see .github/workflows/ci.yml gui-e2e).
 import { test, expect } from "@playwright/test";

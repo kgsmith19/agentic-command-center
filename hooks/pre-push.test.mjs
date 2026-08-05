@@ -1,4 +1,4 @@
-// node --test hooks/pre-push.test.mjs  (run from C:\code\guards)
+// node --test hooks/pre-push.test.mjs  (run from the repo root)
 //
 // Hermetic. Each fixture repo carries its OWN copy of the real hooks/covgate.mjs
 // (a plain file copy -- covgate.mjs has zero npm deps, pure node built-ins),

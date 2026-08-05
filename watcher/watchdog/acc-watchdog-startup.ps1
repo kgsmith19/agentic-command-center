@@ -11,7 +11,8 @@
 #
 # Undo: delete the file this prints, or run acc-watchdog-startup-remove.ps1.
 $ErrorActionPreference = 'Stop'
-$src = 'C:\code\guards\watcher\start-clearbot.cmd'
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$src = Join-Path $repoRoot 'watcher\start-clearbot.cmd'
 if (-not (Test-Path $src)) { throw "missing $src" }
 
 $startup = [Environment]::GetFolderPath('Startup')
@@ -19,7 +20,7 @@ $dest = Join-Path $startup 'ACC clearbot.cmd'
 $body = @"
 @echo off
 rem Starts the ACC clear-watcher at logon. Installed by
-rem C:\code\guards\runbox\acc-watchdog-startup.ps1 - safe to delete to opt out.
+rem $PSCommandPath - safe to delete to opt out.
 call "$src"
 "@
 Set-Content -Path $dest -Value $body -Encoding ascii

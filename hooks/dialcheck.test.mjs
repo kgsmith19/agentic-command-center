@@ -1,4 +1,4 @@
-// node --test hooks/dialcheck.test.mjs   (run from C:\code\guards)
+// node --test hooks/dialcheck.test.mjs   (run from the repo root)
 //
 // Hermetic: every rule is checked against inline fixtures, and the two path
 // helpers + main() are driven through env vars pointing at a throwaway tree.
@@ -18,10 +18,10 @@ const m = await import("./dialcheck.mjs");
 // at 18:42 on 2026-08-04 and stripped hooks/route.mjs out of settings.json,
 // while policy.json advertised autoCd.enabled:true for hours afterwards.
 const withHook = {
-  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/guards/hooks/route.mjs"' }] }] },
+  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/example-project/hooks/route.mjs"' }] }] },
 };
 const withoutHook = {
-  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/guards/hooks/testplan.mjs"' }] }] },
+  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/example-project/hooks/testplan.mjs"' }] }] },
 };
 
 test("the real 2026-08-04 divergence: dial says enabled, hook is not registered", () => {

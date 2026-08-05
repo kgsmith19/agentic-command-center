@@ -671,7 +671,7 @@ test("no table means unknown - never a guess in either direction", () => {
 });
 
 test("a goal inside the grace window is stamped from the table on first sighting", () => {
-  const g = m.createGoal({ text: "keep tests green", cwd: "C:/code/guards" });
+  const g = m.createGoal({ text: "keep tests green", cwd: "C:/code/example-project" });
   m.bindSession({ sessionId: SID(70), consolePid: 4242, goalId: g.id });
   const stamped = m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
   assert.deepEqual(stamped, [g.id]);
@@ -679,7 +679,7 @@ test("a goal inside the grace window is stamped from the table on first sighting
 });
 
 test("stamping is idempotent - an already stamped goal is left alone", () => {
-  const g = m.createGoal({ text: "t", cwd: "C:/code/guards" });
+  const g = m.createGoal({ text: "t", cwd: "C:/code/example-project" });
   m.bindSession({ sessionId: SID(71), consolePid: 4242, goalId: g.id });
   m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
   const again = m.stampConsoles({ 4242: "2026-08-04T99:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
@@ -688,7 +688,7 @@ test("stamping is idempotent - an already stamped goal is left alone", () => {
 });
 
 test("a goal older than the grace window is never stamped - legacy stays unidentifiable", () => {
-  const g = m.createGoal({ text: "t", cwd: "C:/code/guards" });
+  const g = m.createGoal({ text: "t", cwd: "C:/code/example-project" });
   m.bindSession({ sessionId: SID(72), consolePid: 4242, goalId: g.id });
   const later = Date.now() + 10 * 60 * 1000;
   assert.deepEqual(

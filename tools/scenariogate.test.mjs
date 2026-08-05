@@ -1,4 +1,4 @@
-// node --test tools/scenariogate.test.mjs   (run from C:\code\guards)
+// node --test tools/scenariogate.test.mjs   (run from the repo root)
 //
 // OI-019: covgate's floors prove every line EXECUTES once. They do not prove
 // the suite covers the scenario space. The first module audited under this
