@@ -24,7 +24,7 @@ test("the configured harness name is the ONLY thing that selects an adapter (AC-
 });
 
 test("a harness name that could traverse out of adapters/ is refused", () => {
-  for (const bad of ["../../evil", "a/b", "Claude Code", "", "x.mjs"]) {
+  for (const bad of ["../../evil", "a/b", "Claude Code", "", "x.mjs", "a\\b", "a\0b", "CLAUDE-CODE"]) {
     assert.throws(() => A.adapterSpecifier(bad), /invalid harness name/);
   }
 });
@@ -41,6 +41,22 @@ test("an adapter missing an interface member is refused by name", () => {
     const partial = { ...full };
     delete partial[missing];
     assert.throws(() => A.assertAdapterShape(partial, "x"), new RegExp(missing));
+  }
+});
+
+test("assertAdapterShape(null/undefined) fails cleanly by name, not a TypeError crash (error)", () => {
+  assert.throws(() => A.assertAdapterShape(null, "x"), new RegExp(A.ADAPTER_INTERFACE[0]));
+  assert.throws(() => A.assertAdapterShape(undefined, "x"), new RegExp(A.ADAPTER_INTERFACE[0]));
+});
+
+test("an adapter file that exists but throws during its own module evaluation is reported as unavailable, not an uncaught crash (fault-tolerance)", async () => {
+  const brokenPath = path.join(HERE, "adapters", "broken-for-test.mjs");
+  fs.writeFileSync(brokenPath, "throw new Error('adapter init boom');\n");
+  try {
+    setHarness("broken-for-test");
+    await assert.rejects(() => A.resolveAdapter(), /is not available.*adapter init boom/s);
+  } finally {
+    fs.rmSync(brokenPath, { force: true });
   }
 });
 
