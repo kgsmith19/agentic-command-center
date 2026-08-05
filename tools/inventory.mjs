@@ -124,3 +124,53 @@ export function toMarkdown(rows, meta) {
   lines.push("");
   return lines.join("\n");
 }
+
+export function run(argv, io) {
+  const all = io.ledgers.flatMap((l) => parseLedger(io.readFile(l.path), l.name));
+  const open = all.filter(isOpen);
+
+  if (argv.includes("--check")) {
+    const unranked = open.filter((e) => !e.fields.rank);
+    if (unranked.length === 0) return { code: 0, stdout: "inventory: every open entry is ranked\n" };
+    const list = unranked.map((e) => `  UNRANKED ${e.qualifiedId} ${e.title}`).join("\n");
+    return { code: 1, stdout: `inventory: ${unranked.length} open entr(ies) have no rank:\n${list}\n` };
+  }
+
+  const rows = dedupe(open);
+  const meta = { generatedFrom: io.commit };
+  return {
+    code: 0,
+    stdout: argv.includes("--json")
+      ? JSON.stringify(toJson(rows, meta), null, 2)
+      : toMarkdown(rows, meta),
+  };
+}
+
+// Real CLI. Kept to the edges so every rule above stays unit-testable.
+// Windows note: import.meta.url is `file:///C:/...` (triple slash); comparing
+// it directly against a `file://${argv[1]}` template string never matches on
+// Windows. Resolve both sides to plain paths instead, matching the idiom this
+// repo already uses (hooks/covgate.mjs:243, hooks/goal.mjs:456).
+const { fileURLToPath } = await import("node:url");
+const { default: path } = await import("node:path");
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  const { readFileSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const LEDGERS = [
+    { name: "code", path: "C:/code/OPEN-ISSUES.md" },
+    { name: "guards", path: "C:/code/guards/OPEN-ISSUES.md" },
+    { name: "ecosystem", path: "C:/code/lifeos-ecosystem/OPEN-ISSUES.md" },
+    { name: "lifeos", path: "C:/code/lifeos-ecosystem/lifeos/OPEN-ISSUES.md" },
+    { name: "lifeos-ui", path: "C:/code/lifeos-ecosystem/lifeos-ui/OPEN-ISSUES.md" },
+  ];
+  const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+    cwd: "C:/code/guards", encoding: "utf8",
+  }).trim();
+  const r = run(process.argv.slice(2), {
+    readFile: (p) => readFileSync(p, "utf8"),
+    ledgers: LEDGERS,
+    commit,
+  });
+  process.stdout.write(r.stdout);
+  process.exit(r.code);
+}

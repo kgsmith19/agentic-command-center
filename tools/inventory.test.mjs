@@ -131,3 +131,37 @@ test("the generated markdown says it is generated and records the commit", () =>
   assert.match(md, /do not hand-edit/i);
   assert.match(md, /deadbee/);
 });
+
+const io = (files) => ({
+  readFile: (p) => files[p],
+  ledgers: Object.keys(files).map((p) => ({ name: p.replace(/\W/g, ""), path: p })),
+  commit: "abc1234",
+});
+
+test("--check exits 1 and names every unranked open entry", () => {
+  const r = m.run(["--check"], io({
+    "a.md": "## OI-001 ranked\n- rank: safety\n## OI-002 not ranked\n- opened: x\n",
+  }));
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /UNRANKED/);
+  assert.match(r.stdout, /OI-002/);
+  assert.doesNotMatch(r.stdout, /OI-001/);
+});
+
+test("--check exits 0 when every open entry is ranked", () => {
+  const r = m.run(["--check"], io({ "a.md": "## OI-001 t\n- rank: safety\n" }));
+  assert.equal(r.code, 0);
+});
+
+test("--check ignores closed entries", () => {
+  const r = m.run(["--check"], io({
+    "a.md": "## OI-001 [RESOLVED 2026-08-04] done\n- opened: x\n",
+  }));
+  assert.equal(r.code, 0);
+});
+
+test("--json emits parseable JSON with the commit stamp", () => {
+  const r = m.run(["--json"], io({ "a.md": "## OI-001 t\n- rank: safety\n" }));
+  assert.equal(r.code, 0);
+  assert.equal(JSON.parse(r.stdout).generatedFrom, "abc1234");
+});
