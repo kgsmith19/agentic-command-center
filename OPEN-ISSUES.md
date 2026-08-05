@@ -436,6 +436,40 @@ line under `## Resolved`.
 
 ## Resolved
 
+## OI-042 [RESOLVED 2026-08-05] kernel/ledger.mjs's append-once dedup was a read-then-write race across real processes, not atomic
+- opened: 2026-08-05, resolved: 2026-08-05
+- rank: reliability
+- where: `kernel/ledger.mjs` `appendOnce` (backs `appendStarted`/
+  `appendFinalized`)
+- what: found during `guards#OI-019`'s scenario audit of `kernel/ledger.mjs`
+  (sub-project G, rare axis — "concurrent calls"). `appendOnce` decided
+  whether to write by reading the WHOLE `runs.jsonl` and checking for a
+  matching `(event, runId)` line already present. That is safe against one
+  process's own sequential retries, but two real OS processes racing to
+  finalize the SAME runId (the exact "a resumed kernel must not double-write"
+  case the file's own header comment describes) can both read "not yet
+  written" before either has appended, and both win. Reproduced empirically:
+  two Node processes synchronized to append `run_started` for the same
+  runId at the same instant produced two lines in 8/8 trials before the fix,
+  0/8 after.
+- fix: the claim is now made atomically via an exclusive-create (`wx`)
+  marker file per `(runId, event)` under a new `.claims/` subdirectory of
+  the ledger dir — only the process that wins the OS-level exclusive create
+  ever appends the line. Added `kernel/ledger.mjs` `clearRunLog()` (wipes the
+  run log AND its claim markers, leaving `autonomyFile()` untouched) because
+  three existing `kernel/autonomy.test.mjs` tests reset ledger state between
+  seed rounds by deleting `runsFile()` alone, which the new claim markers
+  would otherwise silently outlive — surfaced as a real, reproducible test
+  failure while wiring the fix in, not a hypothetical.
+- verified: new test in `kernel/ledger.test.mjs`, "two real OS processes
+  racing to append the same run's started line still leave exactly one",
+  is RED against the pre-fix code (confirmed via `git stash`) and GREEN
+  after; `node --test kernel/run.test.mjs kernel/ledger.test.mjs
+  kernel/autonomy.test.mjs kernel/verifier.test.mjs` (62/62);
+  `node tools/scenariogate.mjs --module kernel/ledger.mjs` ok; `node
+  hooks/covgate.mjs` shows only the pre-existing, separately-logged
+  `guards#OI-041` failure.
+
 ## OI-040 [RESOLVED 2026-08-05] kernel/verifier.mjs's verifyCriterion could throw uncaught, crashing kernel/run.mjs before it finalized the run
 - opened: 2026-08-05, resolved: 2026-08-05
 - rank: reliability

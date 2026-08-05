@@ -79,7 +79,7 @@ test("ceilings restore automatically once the window recovers (AC-B3)", () => {
   seedRuns(["rejected", "rejected", "rejected", "accepted", "accepted"]);
   assert.equal(A.updateAfterRun().state.factor, 0.5);
   A.writeAutonomy({ ...A.readAutonomy(), runsLeft: 1 });
-  fs.rmSync(L.runsFile(), { force: true });
+  L.clearRunLog();
   seedRuns(["accepted", "accepted", "accepted", "accepted", "accepted"]);
   const after2 = A.updateAfterRun();
   assert.equal(after2.state.factor, 1);
@@ -90,7 +90,7 @@ test("mid-tightening runs are decremented without a new adjustment or log entry"
   seedRuns(["rejected", "rejected", "rejected", "accepted", "accepted"]);
   assert.equal(A.updateAfterRun().state.factor, 0.5);
   assert.equal(A.readAutonomy().runsLeft, 5);
-  fs.rmSync(L.runsFile(), { force: true });
+  L.clearRunLog();
   seedRuns(["accepted", "accepted", "accepted", "accepted", "accepted"]);
   const { state, adjustment } = A.updateAfterRun();
   assert.equal(state.runsLeft, 4, "one run consumed from the tightening window, still not elapsed");
@@ -102,7 +102,7 @@ test("if the window is still bad when the tightened runs elapse, tightening re-a
   seedRuns(["rejected", "rejected", "rejected", "accepted", "accepted"]);
   assert.equal(A.updateAfterRun().state.factor, 0.5);
   A.writeAutonomy({ ...A.readAutonomy(), runsLeft: 1 });
-  fs.rmSync(L.runsFile(), { force: true });
+  L.clearRunLog();
   seedRuns(["rejected", "rejected", "rejected", "accepted", "accepted"]);
   const after2 = A.updateAfterRun();
   assert.equal(after2.state.factor, 0.5, "still bad, so it must not silently restore");

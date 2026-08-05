@@ -169,11 +169,14 @@ test("contract-listed vault keys reach the child env and NOTHING else (AC-L4)", 
   const r = await R.runTask(contractFile(c), { adapter });
   assert.equal(seen.env.TASK_KEY, "sk-live-LEDGER-SENTINEL", "the value must reach the child env");
 
-  // The real assertion: the value exists nowhere on disk under the ledger.
-  for (const f of fs.readdirSync(L.ledgerDir())) {
-    const text = fs.readFileSync(path.join(L.ledgerDir(), f), "utf8");
-    assert.equal(text.includes("LEDGER-SENTINEL"), false, `${f} contains a credential value`);
-    assert.equal(text.includes("sk-live"), false, `${f} contains a credential value`);
+  // The real assertion: the value exists nowhere on disk under the ledger
+  // (recursively — the ledger dir also holds the OI-042 claims subdirectory).
+  for (const f of fs.readdirSync(L.ledgerDir(), { recursive: true, withFileTypes: true })) {
+    if (!f.isFile()) continue;
+    const full = path.join(f.parentPath ?? f.path, f.name);
+    const text = fs.readFileSync(full, "utf8");
+    assert.equal(text.includes("LEDGER-SENTINEL"), false, `${full} contains a credential value`);
+    assert.equal(text.includes("sk-live"), false, `${full} contains a credential value`);
   }
   assert.ok(JSON.stringify(L.readRuns()).includes("TASK_KEY"), "key NAMES are recorded, values are not");
   assert.equal(r.outcome === "accepted" || r.outcome === "rejected", true);
