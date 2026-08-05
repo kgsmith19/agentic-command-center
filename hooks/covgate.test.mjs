@@ -128,6 +128,13 @@ test("changedLibFiles gates kernel modules, including one level of nesting", () 
   );
 });
 
+test("changedLibFiles gates tools/ the same way, dropping its own tests", () => {
+  assert.deepEqual(
+    changedLibFiles(["tools/inventory.mjs", "tools/inventory.test.mjs"]),
+    ["tools/inventory.mjs"]
+  );
+});
+
 test("parseLcov computes line, function and branch coverage per file", () => {
   const cov = parseLcov(
     [

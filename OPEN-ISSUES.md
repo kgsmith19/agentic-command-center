@@ -10,11 +10,19 @@ works this list to zero. Entry format:
 ```
 ## OI-NNN Short title
 - opened: 2026-07-31
+- rank: reliability
 - where: path/or/area
 - what: the actual problem in one line, not the symptom
 - why open: blocked-by X / out of scope then / needs a decision / deferred
 - done when: the observable check that proves it is fixed
 ```
+
+`rank:` is required and must be exactly one of, best first:
+`safety`, `broken-workflow`, `data-loss`, `autonomy-blocker`, `reliability`,
+`control`, `usability`, `maintainability`, `performance`, `roi`.
+`tools/inventory.mjs --check` fails on any open entry without one. Optional
+`duplicate-of: <ledger>#OI-nnn` folds this entry into another; it is never
+inferred from titles.
 
 IDs are per-file and never reused. On resolution, delete the entry and add one
 line under `## Resolved`.
@@ -22,6 +30,31 @@ line under `## Resolved`.
 ---
 
 ## Open
+
+## OI-036 No deliverable maps every core workflow, and Kyle's DoD condition 3 names exactly that
+- opened: 2026-08-05
+- rank: control
+- where: no code or doc exists yet; surfaced while mapping the archived
+  prompt's (`runner/goals/done/g-20260804-222717-lu7o.json`) 22
+  Definition-of-Done conditions to ledger entries and spec ACs
+  (`docs/dod-mapping.md`, sub-project A Task 10)
+- what: condition 3, "Every core workflow is mapped," has no dedicated
+  deliverable anywhere across the nine sub-project specs. AC-E1/E2/E21 map
+  UI screens to the five modes and AC-J14 proves ONE composite workflow
+  (bind -> kick -> guard-deny) end to end, but nothing inventories the
+  system's actual core workflows (the goal/standing-order loop, the
+  autopilot cycle, the guard/approval chain, the kernel run supervisor, the
+  CD/routing hook) the way `INVENTORY.md` (sub-project A) inventories open
+  issues.
+- why open: out of scope for A itself (A's own spec is issues, not
+  workflows) and not claimed by any other sub-project's spec; needs its own
+  scoping pass — likely a short spec producing a `WORKFLOWS.md` or
+  equivalent map, in the shape of A's inventory but for workflows instead
+  of issues.
+- done when: a document or generated artifact exists that names every core
+  workflow, what triggers it, what it touches, and where its own tests
+  live, kept current the way `INVENTORY.md` is regenerated rather than
+  hand-maintained.
 
 ## OI-035 Prompt storage and verbatim cmd passthrough were requested 2026-08-02 and are in no sub-project
 - opened: 2026-08-04
@@ -52,6 +85,7 @@ line under `## Resolved`.
 
 ## OI-033 The UserPromptSubmit route hook is disabled on this machine and nobody knows why it was eating prompts
 - opened: 2026-08-04
+- rank: broken-workflow
 - where: `~/.claude/settings.json` (UserPromptSubmit), `hooks/route.mjs`,
   `policy.json` autoCd
 - what: runbox script `disable-route-hook.mjs` auto-ran at 18:42 on 2026-08-04
@@ -82,6 +116,7 @@ line under `## Resolved`.
 
 ## OI-034 A console PID is treated as a console IDENTITY, and Windows recycles PIDs
 - opened: 2026-08-04
+- rank: safety
 - where: hooks/goal.mjs `consoleAlive` (line ~129), `bindSession` (line ~200),
   `pendingKicks`; watcher/clearbot.ps1 `Invoke-Kicks`
 - what: split out of OI-031, whose reaping half is now resolved. Liveness is a
@@ -112,6 +147,7 @@ line under `## Resolved`.
 
 ## OI-032 autoApprove:true means an agent writing a file IS an agent running code
 - opened: 2026-08-04
+- rank: safety
 - where: policy.json `autoApprove.enabled`, watcher/clearbot.ps1 Invoke-AutoApprove
 - what: already named in docs/2026-08-03-acc-adversarial-review.md §2.1 and
   the remediation prompt, but never given its own ledger entry, so it has been
@@ -131,6 +167,7 @@ line under `## Resolved`.
   or refuse scripts touching `config.protected` paths).
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
+- rank: control
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
   `powershell.exe` (unlike when this entry was opened). Added
   `-TestInteractiveLane` to guards-gui.ps1 — headlessly drives the exact
@@ -161,6 +198,7 @@ line under `## Resolved`.
 
 ## OI-019 Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
 - opened: 2026-08-03
+- rank: reliability
 - where: kernel/*.test.mjs (all suites through Task 16; applies to every
   remaining kernel task, T17-T22)
 - what: covgate's 100/100/90 floors prove every line/branch of a CHANGED file
@@ -207,6 +245,7 @@ line under `## Resolved`.
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
+- rank: reliability
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
   `2026-08-03-acc-kernel-plan.md` T22, executed as Task 11 of
   `2026-08-03-acc-oi-closure-plan.md`)
@@ -322,6 +361,7 @@ line under `## Resolved`.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
+- rank: maintainability
 - where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart
   injection, AGENTS.md "Goals" section, this repo's docs/specs generally
 - what: ACC's "goal" is a persistent working-condition store that survives
@@ -519,6 +559,7 @@ line under `## Resolved`.
   longer part of the required design.
 
 ## OI-009 [SHRUNK + FIXED 2026-08-04] GUI process is a single point of failure for hosted sessions
+- rank: reliability
 - opened: 2026-07-31, shrunk+fixed: 2026-08-04 — delivered detection, not
   reattach: reattaching a hosted session on GUI restart is real, separate
   architecture work (a new session-persistence story) and is cut from this
