@@ -31,30 +31,61 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-036 No deliverable maps every core workflow, and Kyle's DoD condition 3 names exactly that
+## OI-038 hooks/engine.mjs, the runbox lifecycle engine that runs scripts with the user's full authority, has no automated test suite
 - opened: 2026-08-05
-- rank: control
-- where: no code or doc exists yet; surfaced while mapping the archived
-  prompt's (`runner/goals/done/g-20260804-222717-lu7o.json`) 22
-  Definition-of-Done conditions to ledger entries and spec ACs
-  (`docs/dod-mapping.md`, sub-project A Task 10)
-- what: condition 3, "Every core workflow is mapped," has no dedicated
-  deliverable anywhere across the nine sub-project specs. AC-E1/E2/E21 map
-  UI screens to the five modes and AC-J14 proves ONE composite workflow
-  (bind -> kick -> guard-deny) end to end, but nothing inventories the
-  system's actual core workflows (the goal/standing-order loop, the
-  autopilot cycle, the guard/approval chain, the kernel run supervisor, the
-  CD/routing hook) the way `INVENTORY.md` (sub-project A) inventories open
-  issues.
-- why open: out of scope for A itself (A's own spec is issues, not
-  workflows) and not claimed by any other sub-project's spec; needs its own
-  scoping pass — likely a short spec producing a `WORKFLOWS.md` or
-  equivalent map, in the shape of A's inventory but for workflows instead
-  of issues.
-- done when: a document or generated artifact exists that names every core
-  workflow, what triggers it, what it touches, and where its own tests
-  live, kept current the way `INVENTORY.md` is regenerated rather than
-  hand-maintained.
+- rank: safety
+- where: `hooks/engine.mjs` — `vault-keys`/`apply` (secret handoff:
+  vault.json -> target env file) and `run`/`trash`/`restore`/`list` (the
+  runbox lifecycle: executes an agent-written script with the user's
+  authority, auto-archives on success, undo via restore)
+- what: found alongside `guards#OI-037` while writing `WORKFLOWS.md`
+  (`guards#OI-036`). The only repo-wide matches for "engine.mjs" inside a
+  `*.test.mjs` file are: a fixture path string in `hooks/clearbot.test.mjs`,
+  a comment in `hooks/goal.test.mjs`, and Bash-command fixture strings in
+  `kernel/guard.test.mjs` (testing *that* file's own smuggling detection,
+  not `engine.mjs`'s behavior). No test exercises `vault-keys`, `apply`,
+  `run`, `trash`, `restore`, or `list` directly.
+- why open: this is the mechanism that actually EXECUTES a runbox script
+  with Kyle's full authority (AGENTS.md: "Scripts run with the user's
+  authority") and moves vault secrets into target files — a bug here (e.g.
+  `apply` writing to the wrong file, `run` re-running an already-archived
+  script, `trash`/`restore` losing a script) has real consequences, not
+  just a wrong test result.
+- done when: `hooks/engine.test.mjs` (or equivalent) exists with real cases
+  for `apply` (upserts KEY=value, never logs the value, fails naming a
+  missing key), `run` (executes with the runbox as cwd, auto-archives a
+  one-shot script, leaves a `guards: keep` script in place, a failed script
+  stays for retry), and `trash`/`restore`/`list`, and
+  `node hooks/covgate.mjs` gates it at the policy floors.
+
+## OI-037 hooks/guard.mjs, the machine-wide PreToolUse write-protection hook, has no automated test suite
+- opened: 2026-08-05
+- rank: safety
+- where: `hooks/guard.mjs` (secrets glob block, self-protection, cell
+  ownership — registered in `~/.claude/settings.json` for
+  `Edit|Write|NotebookEdit|Read`, all projects on this machine)
+- what: found while writing `WORKFLOWS.md` (`guards#OI-036`). Every other
+  guard-shaped module in this repo has a real suite —
+  `kernel/guard.mjs` (`kernel/guard.test.mjs`, 21 tests, the norm()
+  traversal-bypass fix from `guards#OI-019`), `kernel/guardhook.mjs`
+  (`kernel/guardhook.test.mjs`) — but `hooks/guard.mjs` itself has none.
+  The only two repo-wide matches for "guard.mjs" inside a `*.test.mjs` file
+  are a filename string used as fixture data in `hooks/covgate.test.mjs`
+  (`changedLibFiles` regex test), not a behavioral test of this file.
+- why open: `hooks/guard.mjs` is the first and, while self-protection is
+  OFF (see this file's own header note), effectively the *only* line of
+  defense against an agent reading/writing secrets globs or crossing cell
+  ownership — the exact mechanism `guards#OI-032`'s "the guard is a speed
+  bump, not a boundary, while autoApprove is on" discussion assumes is at
+  least correctly implemented. Nothing today proves the secrets glob, the
+  protected-path block, or the cell-ownership match actually deny what they
+  claim to, or catches a regression in any of the three.
+- done when: `hooks/guard.test.mjs` (or equivalent) exists with real cases
+  for all three checks (a secrets-glob path is blocked for read and write;
+  a protected path is blocked for write; a cell-owned path is blocked
+  absent a matching `.agents/task.json` declaration, and allowed when
+  present), and `node hooks/covgate.mjs` gates it at the policy floors like
+  every other lib file.
 
 ## OI-035 Prompt storage and verbatim cmd passthrough were requested 2026-08-02 and are in no sub-project
 - opened: 2026-08-04
@@ -384,6 +415,39 @@ line under `## Resolved`.
   name left in code or docs.
 
 ## Resolved
+
+## OI-036 [RESOLVED 2026-08-05] No deliverable maps every core workflow, and Kyle's DoD condition 3 names exactly that
+- opened: 2026-08-05, resolved: 2026-08-05 — `WORKFLOWS.md` now names all 14
+  core workflows this repo runs, each with its trigger, what it touches, and
+  where its tests live (or an explicit `none` with a ledger id, never a
+  dash). Closes DoD condition 3; `docs/dod-mapping.md` updated to point at
+  it instead of the composite AC-E1/E2/E21/AC-J14 coverage.
+- descoped from the entry's own original done-when: "regenerable... rather
+  than hand-maintained" turned out not to be the right bar. `INVENTORY.md`
+  is regenerable because ledger entries are already structured data
+  (`- rank:`, `- opened:`, etc.) the tool parses; a "core workflow" is
+  implicit in code structure with no equivalent structured declaration to
+  parse, and inventing one (annotating every trigger site) would be a much
+  bigger, speculative undertaking for a fixed, slow-changing list of ~14
+  items. Kept honest a different way instead: `tools/workflows.test.mjs`
+  (2 tests, now wired into `npm run test:windows` and `package.json`'s
+  `test`) verifies every test-file path `WORKFLOWS.md` cites actually
+  exists on disk, and that no row's Tests column is a bare placeholder —
+  same shape of honesty check as `docs/dod-mapping.md`'s own test
+  (`tools/inventory.test.mjs`), which has the identical precedent
+  ("Known gap, deliberate" in sub-project A's own plan, Task 10 self-review).
+- two real, previously-unlogged test gaps surfaced while writing the map,
+  each already its own entry: `guards#OI-037` (`hooks/guard.mjs`, the
+  PreToolUse write-protection hook, has no test suite) and `guards#OI-038`
+  (`hooks/engine.mjs`, the runbox/vault lifecycle engine, has no test
+  suite). `WORKFLOWS.md` cites both honestly as `Tests: none`.
+- verified: `node --test tools/workflows.test.mjs` (2/2), full
+  `npm run test:windows` (477/478, 1 pre-existing unrelated skip, up from
+  458 total — `tools/inventory.test.mjs` and `tools/workflows.test.mjs` are
+  now both actually wired into the gate, closing a second small gap found
+  along the way: `tools/inventory.test.mjs` existed since sub-project A but
+  was never in `package.json`'s `test`/`test:windows` lists), `node
+  hooks/covgate.mjs` PASS, `node tools/inventory.mjs --check` exit 0.
 
 ## OI-031 [RESOLVED 2026-08-04] Dead-console goals are reaped instead of accumulating
 - opened: 2026-08-04, resolved: 2026-08-04. `goal.mjs reapDeadGoals()` archives a

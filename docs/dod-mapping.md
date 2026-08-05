@@ -12,7 +12,7 @@ closing statement the other 21 do.
 |---|---|---|
 | 1 | Every known issue is resolved. | `INVENTORY.md` (sub-project A) reaching zero open entries across all five ledgers |
 | 2 | Every previously documented task is addressed. | `docs/superpowers/plans/2026-08-04-acc-completion-plan.md`'s nine sub-projects (A, B, J, I, F, D, E, G, H) |
-| 3 | Every core workflow is mapped. | **Gap — no dedicated deliverable existed.** Logged as `guards#OI-036`; partial, related coverage: AC-E1, AC-E2, AC-E21 (UI screens map to the five modes), AC-J14 (one composite workflow proven end to end) |
+| 3 | Every core workflow is mapped. | `WORKFLOWS.md` — all 14 core workflows, trigger/touches/tests per row, kept honest by `tools/workflows.test.mjs`. Closed `guards#OI-036`; also related: AC-E1, AC-E2, AC-E21 (UI screens map to the five modes), AC-J14 (one composite workflow proven end to end) |
 | 4 | Every setting reaches its true consumer. | AC-F5, AC-F6, AC-F7, AC-F8 (the L1-L5 traceability chain), AC-F10 (completeness gate over the real `policy.json`/`config.json`) |
 | 5 | Every relevant behavior is tested. | AC-G1, AC-G2, AC-G6, AC-G8 (per-module `.scenarios.md` records, enumerated axes, property tests over every standard invariant) |
 | 6 | Every integration is proven. | AC-G11 through AC-G16 (integration and e2e tiers, real kills, real restarts, real `loop.e2e.mjs`), AC-J14 |
