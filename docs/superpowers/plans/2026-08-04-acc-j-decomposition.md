@@ -588,6 +588,40 @@ Expected: pre-split commits present. This is AC-J12; if history is gone, stop an
 
 `AGENTS.md` (with the boundary statement: *repo-gates answers "does this repo meet the standard?"*), `README.md`, `OPEN-ISSUES.md` from the template, `package.json`, `.github/workflows/ci.yml`, `hooks/pre-push` at mode 100755 with LF endings.
 
+- [ ] **Step 3b: Make the standard itself executable (AC-S1, AC-S2, AC-S3, AC-S4)**
+
+The standards spec says its four criteria are verified by J's first slice. This is that slice. Write these tests, watch them fail, then make them pass:
+
+```javascript
+test("AC-S1: repo-gates exports every gate in the standard's section 3", () => {
+  for (const gate of ["test", "coverage", "testplan", "lint", "e2e", "prepush"]) {
+    assert.equal(typeof m.gates[gate], "function", `no runnable gate for ${gate}`);
+  }
+});
+
+test("AC-S2: a repo missing any section-5 artifact fails npm run gates", () => {
+  for (const artifact of ["AGENTS.md", "README.md", "OPEN-ISSUES.md",
+                          "package.json", ".github/workflows/ci.yml", "hooks/pre-push"]) {
+    const repo = fixtureRepoMissing(artifact);
+    const problems = m.checkArtifacts(repo);
+    assert.ok(problems.some((p) => p.detail.includes(artifact)),
+      `a repo with no ${artifact} must fail`);
+  }
+});
+
+test("AC-S3: testplan fails when a spec AC has no named test", () => {
+  const spec = "| AC-X1 | a thing happens | unit |";
+  assert.ok(m.testplan(spec, new Set()).some((p) => p.id === "AC-X1"));
+  assert.deepEqual(m.testplan(spec, new Set(["AC-X1: a thing happens"])), []);
+});
+
+test("AC-S4: the property-test helper reports its seed on failure", () => {
+  assert.throws(() => m.forAll(m.ints(0, 10), () => false, { seed: 42 }), /seed=42/);
+});
+```
+
+`forAll` and `ints` are sub-project G's Task 5 deliverable. If G has not landed, implement the minimal seeded generator here and G extends it — **do not write a second one**, and do not skip AC-S4.
+
 - [ ] **Step 4: Create the GitHub repo and push**
 
 ```bash
@@ -769,7 +803,7 @@ git checkout main && git merge --no-ff acc/j-decomposition -m "merge: sub-projec
 
 ## Self-Review
 
-**Spec coverage:** AC-J1→T1+T2+T3, AC-J2/J3/J4→T4, AC-J5/J6/J7→T5, AC-J8→T6, AC-J9/J10→T7–T11 (section-5 artifacts per repo), AC-J11→T7–T11 Step 4, AC-J12→T7–T11 Step 2, AC-J13→T3, AC-J14→T7–T12 Step 6/5, AC-J15→T3. All fifteen covered.
+**Spec coverage:** AC-J1→T1+T2+T3, AC-J2/J3/J4→T4, AC-J5/J6/J7→T5, AC-J8→T6, AC-J9→T7–T11, AC-J10→T7–T11 (section-5 artifacts per repo), AC-J11→T7–T11 Step 4, AC-J12→T7–T11 Step 2, AC-J13→T3, AC-J14→T7–T12 Step 6/5, AC-J15→T3. All fifteen covered.
 
 **Placeholder scan:** Two code steps are described rather than shown — Task 4 Step 3 (`upsert`'s grouping logic) and Task 2 Step 3's CLI walker. Both have complete tests defining exact behaviour, which is the contract; writing the body from a red test is the job. Task 12's `node -e "/* attempt a denied write */"` is a genuine gap: fill it with the exact denied-path command from `core/guard.test.mjs`'s existing traversal case when executing.
 

@@ -51,9 +51,14 @@ last so the charter describes a system that has stopped moving.
 
 ## Sub-projects
 
-Spec status as of 2026-08-04: **all nine written, none implemented.**
+Status as of 2026-08-04: **all nine specs and all nine plans written; none
+implemented.** 150 acceptance criteria across the specs; 6 are B1/B3 criteria
+already satisfied by `773005e`, and all 144 remaining are claimed by a named plan
+task. That mapping is machine-checked — every `AC-n` in a spec must appear in a
+plan, and the check is re-run before any sub-project is called done.
 
 ### A — complete ranked inventory
+Plan: `plans/2026-08-04-acc-a-inventory.md` (11 tasks)
 Spec: `specs/2026-08-04-acc-inventory-design.md` (14 ACs)
 One deduped, ranked, regenerable inventory across all five `OPEN-ISSUES.md`
 ledgers, `docs/`, and the archived prompt's 22 Definition-of-Done conditions.
@@ -61,6 +66,7 @@ The ledger ranks itself via a new `rank:` field; the tool sorts and never judges
 `C:\code` `OI-016` (a real work-item tracker) is explicitly **not** solved here.
 
 ### B — the named defects  [B1/B2a/B3 DONE `773005e`; **B2b remains**]
+Plan: `plans/2026-08-04-acc-b2b-console-identity.md` (7 tasks)
 Spec: `specs/2026-08-04-acc-known-defects-design.md`
 Only B2b is left: `OI-034`, console identity by `(pid, startTime)`. Chosen
 design, already recorded: autopilot passes the live console table into the
@@ -69,6 +75,7 @@ B1 (S4U principal, no desktop), B2a (reaping) and B3 (`dialcheck`) are committed
 and verified live.
 
 ### J — service decomposition and naming migration  (absorbs **C**)
+Plan: `plans/2026-08-04-acc-j-decomposition.md` (12 tasks)
 Spec: `specs/2026-08-04-acc-decomposition-design.md` (15 ACs)
 Six repos: `agent-repo-gates`, `agent-guardrails`, `claude-session-telemetry`,
 `agentic-command-center`, `agentic-command-center-ui`, `claude-launch-cap`.
@@ -80,6 +87,7 @@ the same migration performed twice. The enabling mechanism is per-repo
 `install-hooks` installers, so no absolute path is ever hand-written again.
 
 ### I — autonomy posture and tamper-evidence
+Plan: `plans/2026-08-04-acc-i-tamper-evidence.md` (9 tasks)
 Spec: `specs/2026-08-04-acc-autonomy-posture-design.md` (14 ACs)
 `OI-032`. Kyle's decision, 2026-08-04: **accept the authority, make its use
 impossible to miss.** Prevention was rejected on the merits — text-scanning is
@@ -88,6 +96,7 @@ runbox's purpose. Ships: honest docs, a hashed baseline of every protected path
 with attribution against `approvals.log`, and a widened protected set.
 
 ### F — setting-traceability harness  (absorbs `OI-033`)
+Plan: `plans/2026-08-04-acc-f-traceability.md` (10 tasks)
 Spec: `specs/2026-08-04-acc-traceability-design.md` (15 ACs)
 The enforcement arm of standing rule 2. Seven links per setting, L5 (behaviour
 actually changes, proven by A/B observation) being the load-bearing one. Built
@@ -98,6 +107,7 @@ retired and its dial deleted. A dial left permanently `false` pointing at an
 unregistered hook is not an acceptable end state.
 
 ### D — emergency STOP + intervention controls
+Plan: `plans/2026-08-04-acc-d-stop-intervention.md` (10 tasks)
 Spec: `specs/2026-08-04-acc-stop-intervention-design.md` (21 ACs)
 Kyle's scoping rule: STOP kills what this session started — provenance, not
 process name. Session anchor is `(pid, startTime)` of the pty child, reusing
@@ -107,6 +117,7 @@ Every activation records the pid list and each pid's confirmed post-kill state;
 survivors are reported as `partial`.
 
 ### E — web UI completion + first-principles redesign
+Plan: `plans/2026-08-04-acc-e-ui-redesign.md` (9 tasks)
 Spec: `specs/2026-08-04-acc-ui-redesign-design.md` (22 ACs)
 Information architecture is Kyle's own five modes: **Watch / Work / Take over /
 Set up / Look back**. Seven tabs audited down to five modes with strictly more
@@ -115,6 +126,7 @@ purpose and where it is stored and logged. No framework, no build step. WCAG 2.2
 AA with zero axe violations as the gate. Loopback-only, run-token, strict CSP.
 
 ### G — test-depth program
+Plan: `plans/2026-08-04-acc-g-test-depth.md` (8 tasks)
 Spec: `specs/2026-08-04-acc-test-depth-design.md` (18 ACs)
 `OI-019`, 1/12 modules done. Per-module `.scenarios.md` records across six axes,
 enumerated by a gate so an unaudited module fails rather than being forgotten.
@@ -123,6 +135,7 @@ persistence, failure-recovery, long-running stability, security. Owns finishing
 `OI-025`'s 1/5 real-token run.
 
 ### H — Albert charter
+Plan: `plans/2026-08-04-acc-h-albert-charter.md` (9 tasks)
 Spec: `specs/2026-08-04-albert-charter-design.md` (14 ACs)
 All eleven elements Kyle enumerated. The half that makes it real: **every
 obligation clause names its mechanism**, and a gate proves that mechanism exists
