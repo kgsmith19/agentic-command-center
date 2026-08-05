@@ -418,3 +418,23 @@ test("OI-009: a pty window never confirmed alive is not falsely flagged as a dea
     "never having been seen alive must not itself trigger an alert"
   );
 });
+
+// OI-034, Task 5: clearbot builds the console table and pipes it to
+// goal.mjs pending on stdin - a static-content contract, since exercising it
+// live would mean asserting on the caller's own real process table.
+test("clearbot pipes a console table into goal.mjs pending", () => {
+  const ps = fs.readFileSync(path.join(REPO, "watcher", "clearbot.ps1"), "utf8");
+  assert.match(ps, /ToUniversalTime\(\)\.ToString\('o'\)/, "start times must be ISO-8601 UTC");
+  assert.match(ps, /\$json \| & node .*goal\.mjs.*'pending'/, "the table must reach goal.mjs on stdin");
+});
+
+test("clearbot no longer gates a kick on a bare Get-Process existence check", () => {
+  const ps = fs.readFileSync(path.join(REPO, "watcher", "clearbot.ps1"), "utf8");
+  const start = ps.indexOf("function Invoke-Kicks");
+  const kicks = ps.slice(start, start + 2000);
+  assert.doesNotMatch(
+    kicks,
+    /if \(-not \(Get-Process -Id \$cpid/,
+    "existence is not identity - goal.mjs decides, per its own header"
+  );
+});

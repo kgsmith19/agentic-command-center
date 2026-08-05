@@ -432,21 +432,30 @@ test("CLI: main() with no subcommand defaults to 'list', printing active goals a
   assert.ok(printed.some((x) => x.id === g.id));
 });
 
-test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when present and falling back when not", () => {
+// 'pending' now reads the console table from stdin (OI-034, Task 5), so it can
+// no longer be exercised via the in-process runMain() helper: a blocking
+// readFileSync(0) with nothing behind it (or a stream node's test runner
+// never closes) would hang the whole file rather than see EOF. execFileSync's
+// `input` option always supplies and closes stdin, matching what
+// clearbot.ps1 really does every cycle.
+test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when present and falling back when not", async () => {
+  const { execFileSync } = await import("node:child_process");
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(40), consolePid: LIVE, goalId: g.id });
 
-  const savedPolicy = process.env.ACC_POLICY;
-  try {
-    delete process.env.ACC_POLICY; // resolves to the real repo policy.json -- exercises the try branch
-    assert.doesNotThrow(() => JSON.parse(runMain(["pending"])));
+  const run = (extraEnv = {}) =>
+    execFileSync(process.execPath, [path.resolve("hooks/goal.mjs"), "pending"], {
+      input: JSON.stringify(table(LIVE)),
+      encoding: "utf8",
+      env: { ...process.env, ACC_GOALS_DIR: GOALS_DIR, ...extraEnv },
+    });
 
-    process.env.ACC_POLICY = path.join(GOALS_DIR, "does-not-exist.json"); // exercises the catch branch
-    assert.doesNotThrow(() => JSON.parse(runMain(["pending"])));
-  } finally {
-    if (savedPolicy === undefined) delete process.env.ACC_POLICY;
-    else process.env.ACC_POLICY = savedPolicy;
-  }
+  delete process.env.ACC_POLICY; // not inherited unless set below
+  assert.doesNotThrow(() => JSON.parse(run()), "resolves to the real repo policy.json - exercises the try branch");
+  assert.doesNotThrow(
+    () => JSON.parse(run({ ACC_POLICY: path.join(GOALS_DIR, "does-not-exist.json") })),
+    "missing policy.json falls back to defaults - exercises the catch branch"
+  );
 });
 
 test("CLI: main() 'kicked <id>' clears needsKick", () => {
@@ -565,12 +574,35 @@ test("OI-031: a reaped goal is never kicked", () => {
 // CLI 'reap' does not yet read a console table (Task 5 wires that in, the same
 // way 'pending' reads one from stdin), so until then it is honestly fail-closed
 // like reapDeadGoals is with no table: it destroys nothing on a guess.
-test("CLI: main() 'reap' is fail-closed without a console table - it does not guess", () => {
+// 'reap' reads the same stdin table as 'pending' (OI-034, Task 5), for the same
+// reason it can no longer run through the in-process runMain() helper - see the
+// comment on the 'pending' CLI test above.
+async function runReap(input) {
+  const { execFileSync } = await import("node:child_process");
+  return execFileSync(process.execPath, [path.resolve("hooks/goal.mjs"), "reap"], {
+    input,
+    encoding: "utf8",
+    env: { ...process.env, ACC_GOALS_DIR: GOALS_DIR },
+  });
+}
+
+test("CLI: main() 'reap' is fail-closed with empty stdin - it does not guess", async () => {
   const g = m.createGoal({ text: "stranded" });
   m.bindSession({ sessionId: SID(65), consolePid: DEAD_PID, goalId: g.id });
 
-  assert.equal(runMain(["reap"]), "reaped 0");
+  assert.equal((await runReap("")).trim(), "reaped 0");
   assert.ok(m.readGoal(g.id), "nothing is reaped without proof the console is gone");
+});
+
+test("CLI: main() 'reap' archives dead-console goals and names them, given a console table", async () => {
+  const g = m.createGoal({ text: "stranded" });
+  m.bindSession({ sessionId: SID(66), consolePid: DEAD_PID, goalId: g.id });
+
+  // {} is a caller asserting "I enumerated every process and this pid was not
+  // among them" - proof the console is gone, same as clearbot's real table.
+  assert.equal((await runReap("{}")).trim(), `reaped 1: ${g.id}`);
+  assert.equal(m.readGoal(g.id), null);
+  assert.equal((await runReap("{}")).trim(), "reaped 0", "nothing left to reap");
 });
 
 test("a goal persists correctly after its directory is moved to a new location", async () => {

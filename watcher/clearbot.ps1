@@ -377,8 +377,19 @@ function Invoke-Clear($req) {
 # alive? binding settled? cooldown expired?) so there is exactly one place to
 # audit. This function stays a dumb executor on purpose.
 function Invoke-Kicks {
+    # OI-034: one enumeration per cycle replaces the per-pid Get-Process calls
+    # this loop used to make. StartTime throws AccessDenied on protected
+    # processes; those are skipped, and a console we cannot read the start
+    # time of is one we must not type into anyway.
+    $table = @{}
+    foreach ($p in (Get-Process -ErrorAction SilentlyContinue)) {
+        try { $table[[string]$p.Id] = $p.StartTime.ToUniversalTime().ToString('o') } catch { }
+    }
+    $json = $table | ConvertTo-Json -Compress
+    if (-not $json) { $json = '{}' }
+
     $raw = ''
-    try { $raw = & node (Join-Path $Root 'hooks\goal.mjs') 'pending' 2>$null | Out-String } catch { return }
+    try { $raw = $json | & node (Join-Path $Root 'hooks\goal.mjs') 'pending' 2>$null | Out-String } catch { return }
     $pend = $null
     try { $pend = $raw | ConvertFrom-Json } catch { return }
     if (-not $pend) { return }
@@ -393,7 +404,8 @@ function Invoke-Kicks {
 
     foreach ($g in @($pend)) {
         $cpid = [int]$g.consolePid
-        if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) { continue }
+        # Existence is not identity - goal.mjs already decided this pid is the
+        # right console, from the same table, before it ever appeared in $pend.
         $r = Send-Keys $cpid $KICK -ClearLineFirst
         if ($r.ok) {
             & node (Join-Path $Root 'hooks\goal.mjs') 'kicked' $g.id 2>$null | Out-Null

@@ -434,6 +434,19 @@ function resolveId(argv) {
   return act.length === 1 ? act[0].id : "";
 }
 
+// The console table arrives on stdin, not argv: the pid list is unbounded and
+// Windows caps command lines. Empty stdin -> no table -> pendingKicks/
+// reapDeadGoals fail closed, which is the intended behaviour, not a degraded
+// one.
+function readConsoleTable() {
+  try {
+    const raw = fs.readFileSync(0, "utf8").trim();
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0] || "list";
@@ -465,7 +478,9 @@ export function main() {
         tuiReadySettleMs: pol?.tui?.readySettleMs,
       };
     } catch {}
-    console.log(JSON.stringify(pendingKicks(Date.now(), dials)));
+    const consoles = readConsoleTable();
+    stampConsoles(consoles);
+    console.log(JSON.stringify(pendingKicks(Date.now(), { ...dials, consoles })));
     return;
   }
   if (cmd === "kicked") {
@@ -473,7 +488,11 @@ export function main() {
     return;
   }
   if (cmd === "reap") {
-    const ids = reapDeadGoals();
+    // Same table as 'pending', same fail-closed rule: reap only what the
+    // caller can prove is gone. An empty table ({}) is a caller asserting "I
+    // enumerated every process and this pid was not among them" - that is
+    // still proof. No table at all proves nothing, so nothing is reaped.
+    const ids = reapDeadGoals({ consoles: readConsoleTable() });
     console.log(ids.length ? `reaped ${ids.length}: ${ids.join(" ")}` : "reaped 0");
     return;
   }
