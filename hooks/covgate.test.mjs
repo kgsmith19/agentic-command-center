@@ -78,6 +78,39 @@ test("floors() honors a real custom numeric override", () => {
   process.env.ACC_POLICY = saved;
 });
 
+// OI-034/B2b: a file whose test strategy is exclusively subprocess spawns
+// (budget.mjs's own tests clear NODE_V8_COVERAGE before every spawn) is
+// structurally invisible to V8's coverage merge - real tests, unmeasurable
+// coverage. subprocessOnlyLibs waives the lines/funcs/branches floor to 0 for
+// exactly those listed files, and only those.
+test("floors(file) drops all three floors to 0 for a listed subprocessOnlyLibs entry", () => {
+  const p = path.join(BASE, "subprocess-only-policy.json");
+  fs.writeFileSync(p, JSON.stringify({ tests: { subprocessOnlyLibs: ["hooks/budget.mjs"] } }));
+  const saved = process.env.ACC_POLICY;
+  process.env.ACC_POLICY = p;
+  assert.deepEqual(floors("hooks/budget.mjs"), { lines: 0, funcs: 0, branches: 0 });
+  process.env.ACC_POLICY = saved;
+});
+
+test("subprocessOnlyLibs does not leak to an unlisted file or the no-arg call", () => {
+  const p = path.join(BASE, "subprocess-only-scope-policy.json");
+  fs.writeFileSync(p, JSON.stringify({ tests: { subprocessOnlyLibs: ["hooks/budget.mjs"] } }));
+  const saved = process.env.ACC_POLICY;
+  process.env.ACC_POLICY = p;
+  assert.deepEqual(floors("hooks/other.mjs"), { lines: 100, funcs: 100, branches: 90 });
+  assert.deepEqual(floors(), { lines: 100, funcs: 100, branches: 90 });
+  process.env.ACC_POLICY = saved;
+});
+
+test("a malformed (non-array) subprocessOnlyLibs is ignored, not a crash", () => {
+  const p = path.join(BASE, "subprocess-only-junk-policy.json");
+  fs.writeFileSync(p, JSON.stringify({ tests: { subprocessOnlyLibs: "hooks/budget.mjs" } }));
+  const saved = process.env.ACC_POLICY;
+  process.env.ACC_POLICY = p;
+  assert.deepEqual(floors("hooks/budget.mjs"), { lines: 100, funcs: 100, branches: 90 });
+  process.env.ACC_POLICY = saved;
+});
+
 test("parseRange accepts \"<oldrev> <newrev>\", tolerates extra whitespace", () => {
   assert.deepEqual(parseRange("abc123 def456"), { oldrev: "abc123", newrev: "def456" });
   assert.deepEqual(parseRange("  abc123   def456  "), { oldrev: "abc123", newrev: "def456" });

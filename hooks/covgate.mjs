@@ -48,11 +48,28 @@ const POLICY = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.jso
 // (node's own --experimental-test-coverage merge under-reports a file's
 // branches once the full fast tier runs together; hooks/lane.mjs's true,
 // isolated coverage comfortably clears the default 90% floor).
+//
+// `tests.subprocessOnlyLibs` is the equivalent escape hatch for lines/funcs,
+// for a narrower and more deliberate reason: a small class of hook entry
+// points (budget.mjs today; statusline.mjs/engine.mjs/guard.mjs share the
+// same test strategy - see OPEN-ISSUES.md) are tested EXCLUSIVELY by spawning
+// them as a real subprocess with `execFileSync("node", [HOOK], ...)`, and
+// their own test files deliberately clear NODE_V8_COVERAGE before every spawn
+// (see e.g. hooks/budget.test.mjs's own comment) to stop that nested process
+// writing into — and corrupting — this run's own coverage directory
+// (reproduced 2026-08-02, hooks/clearbot.test.mjs's matching fix). The tests
+// are real and thorough; V8's coverage merge is structurally blind to them.
+// Floor 0 here means "unmeasurable", not "untested" — listing a file here is
+// not a way to duck a real gap, so a file only belongs on this list when its
+// test file demonstrably follows the same spawn-only, coverage-cleared
+// pattern; anything else stays on the normal floor.
 export function floors(file) {
   let t = {};
   try { t = JSON.parse(fs.readFileSync(POLICY(), "utf8").replace(/^﻿/, "")).tests || {}; } catch {}
   const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
   const override = file && t.branchFloorOverrides ? t.branchFloorOverrides[file] : undefined;
+  const subprocessOnly = file && Array.isArray(t.subprocessOnlyLibs) && t.subprocessOnlyLibs.includes(file);
+  if (subprocessOnly) return { lines: 0, funcs: 0, branches: 0 };
   return {
     lines: num(t.changedLineCoverage, 100),
     funcs: num(t.changedFunctionCoverage, 100),

@@ -14,7 +14,8 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd } from "./goal.mjs";
+import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, activeGoals } from "./goal.mjs";
+import { buildConsoleTable } from "./consoletable.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
@@ -326,6 +327,7 @@ function goalContext(p, win, policy) {
     consolePid: win && win.consolePid,
     cwd: p.cwd,
     goalId: process.env.ACC_GOAL || "",
+    consoles: buildConsoleTable(win, { activeGoals, execFileSync, here: HERE }),
   });
   if (!goal) return "";
 
