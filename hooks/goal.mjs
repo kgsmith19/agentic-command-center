@@ -155,6 +155,29 @@ export function consoleAlive(pid) {
   }
 }
 
+// Stamped by autopilot on first sighting rather than at bind time: bindSession's
+// caller has the pid but no cheap way to read a start time. Inside the grace
+// window the goal is seconds old, so a recycle here is not credible - and this
+// is the same window reapDeadGoals already protects (REAP_GRACE_MS_DEFAULT).
+// An unstamped goal older than the grace window is left unstamped on purpose:
+// it predates this change and its identity cannot be reconstructed, so it is
+// left for reapDeadGoals to reap rather than guessed at.
+export function stampConsoles(consoles, { now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT } = {}) {
+  if (!consoles) return [];
+  const stamped = [];
+  for (const g of activeGoals()) {
+    if (g.consoleStartedAt) continue;
+    const seen = consoles[String(Number(g.consolePid || 0))];
+    if (!seen) continue;
+    const createdMs = Date.parse(g.createdAt || 0);
+    if (!Number.isFinite(createdMs) || now - createdMs > graceMs) continue;
+    g.consoleStartedAt = seen;
+    write(g);
+    stamped.push(g.id);
+  }
+  return stamped;
+}
+
 export function goalForSession(sessionId) {
   if (!sessionId) return null;
   return activeGoals().find((g) => g.sessionId === sessionId) || null;
