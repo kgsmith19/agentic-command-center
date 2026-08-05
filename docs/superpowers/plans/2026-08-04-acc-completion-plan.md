@@ -65,14 +65,17 @@ ledgers, `docs/`, and the archived prompt's 22 Definition-of-Done conditions.
 The ledger ranks itself via a new `rank:` field; the tool sorts and never judges.
 `C:\code` `OI-016` (a real work-item tracker) is explicitly **not** solved here.
 
-### B — the named defects  [B1/B2a/B3 DONE `773005e`; **B2b remains**]
+### B — the named defects  [DONE 826df06]
 Plan: `plans/2026-08-04-acc-b2b-console-identity.md` (7 tasks)
 Spec: `specs/2026-08-04-acc-known-defects-design.md`
-Only B2b is left: `OI-034`, console identity by `(pid, startTime)`. Chosen
-design, already recorded: autopilot passes the live console table into the
-standing-order module rather than that module reaching out to the OS per cycle.
-B1 (S4U principal, no desktop), B2a (reaping) and B3 (`dialcheck`) are committed
-and verified live.
+B2b (`OI-034`, console identity by `(pid, startTime)`) is done: autopilot
+passes the live console table into `goal.mjs` on stdin rather than that module
+reaching out to the OS per cycle. Went beyond the plan's file list —
+`hooks/budget.mjs`'s SessionStart path is `bindSession`'s only other
+production caller (the post-`/clear` adoption path) and needed the same proof,
+via a new `hooks/consoletable.mjs` (per-pid, not a full enumeration — see
+OI-034's resolution note). B1 (S4U principal, no desktop), B2a (reaping) and
+B3 (`dialcheck`) were already committed and verified live.
 
 ### J — service decomposition and naming migration  (absorbs **C**)
 Plan: `plans/2026-08-04-acc-j-decomposition.md` (12 tasks)
