@@ -10,11 +10,19 @@ works this list to zero. Entry format:
 ```
 ## OI-NNN Short title
 - opened: 2026-07-31
+- rank: reliability
 - where: path/or/area
 - what: the actual problem in one line, not the symptom
 - why open: blocked-by X / out of scope then / needs a decision / deferred
 - done when: the observable check that proves it is fixed
 ```
+
+`rank:` is required and must be exactly one of, best first:
+`safety`, `broken-workflow`, `data-loss`, `autonomy-blocker`, `reliability`,
+`control`, `usability`, `maintainability`, `performance`, `roi`.
+`tools/inventory.mjs --check` fails on any open entry without one. Optional
+`duplicate-of: <ledger>#OI-nnn` folds this entry into another; it is never
+inferred from titles.
 
 IDs are per-file and never reused. On resolution, delete the entry and add one
 line under `## Resolved`.
