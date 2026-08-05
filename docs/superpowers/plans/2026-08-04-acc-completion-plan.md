@@ -57,7 +57,7 @@ already satisfied by `773005e`, and all 144 remaining are claimed by a named pla
 task. That mapping is machine-checked — every `AC-n` in a spec must appear in a
 plan, and the check is re-run before any sub-project is called done.
 
-### A — complete ranked inventory
+### A — complete ranked inventory  [DONE 8847297]
 Plan: `plans/2026-08-04-acc-a-inventory.md` (11 tasks)
 Spec: `specs/2026-08-04-acc-inventory-design.md` (14 ACs)
 One deduped, ranked, regenerable inventory across all five `OPEN-ISSUES.md`
