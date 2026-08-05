@@ -76,6 +76,24 @@ test("a record whose module heading is missing parses with module null and no ax
   assert.deepEqual(r.axes, {});
 });
 
+// AC-G5, one of the two anti-trickery criteria - catches a record claiming
+// coverage that does not exist.
+test("a record naming a test nobody wrote fails the gate", () => {
+  const p = m.gate(["a.mjs"], () => GOOD, { knownTests: new Set() });
+  assert.ok(p.some((x) => x.kind === "missing-test"));
+});
+
+test("a record whose named tests all exist passes", () => {
+  const names = new Set([
+    "allows a write inside writeRoots",
+    "a path with unicode segments resolves identically",
+    "a path exactly equal to a writeRoots entry is allowed",
+    "mixed backslash and forward-slash traversal is caught identically",
+    "a malformed path object is denied, not thrown",
+  ]);
+  assert.deepEqual(m.gate(["a.mjs"], () => GOOD, { knownTests: names }), []);
+});
+
 test("an axis with a blank body between headings counts as unanswered, not a crash", () => {
   const record = `# a.mjs — scenarios
 
