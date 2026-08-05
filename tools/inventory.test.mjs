@@ -73,3 +73,25 @@ test("an unknown rank value fails loudly instead of defaulting", () => {
   const [e] = m.parseLedger("## OI-001 t\n- rank: urgent\n", "guards");
   assert.throws(() => m.rankOrdinal(e), /unknown rank "urgent"/);
 });
+
+test("duplicate-of collapses entries into one row listing every id", () => {
+  const a = m.parseLedger("## OI-031 reaping\n- rank: reliability\n", "guards");
+  const b = m.parseLedger(
+    "## OI-007 same thing\n- rank: reliability\n- duplicate-of: guards#OI-031\n", "code");
+  const rows = m.dedupe([...a, ...b]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].ids, ["guards#OI-031", "code#OI-007"]);
+});
+
+test("duplicate-of naming a nonexistent id fails the run", () => {
+  const es = m.parseLedger("## OI-007 t\n- rank: roi\n- duplicate-of: guards#OI-999\n", "code");
+  assert.throws(() => m.dedupe(es), /guards#OI-999 does not exist/);
+});
+
+test("identical ids in different ledgers never collide", () => {
+  const es = [
+    ...m.parseLedger("## OI-001 guards one\n- rank: safety\n", "guards"),
+    ...m.parseLedger("## OI-001 lifeos one\n- rank: safety\n", "lifeos"),
+  ];
+  assert.equal(m.dedupe(es).length, 2);
+});

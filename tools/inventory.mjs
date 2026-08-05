@@ -66,3 +66,29 @@ export function sortEntries(entries) {
     return idNum(a) - idNum(b);
   });
 }
+
+// Dedup is DECLARED, never inferred. Kyle's prompt says deduplicate "without
+// losing any requirements"; a title-similarity heuristic silently drops one
+// side's requirements, which is the exact loss it must not cause.
+export function dedupe(entries) {
+  const byQid = new Map(entries.map((e) => [e.qualifiedId, e]));
+  const rows = new Map();
+  const dupes = [];
+  for (const e of entries) {
+    const target = e.fields["duplicate-of"];
+    if (target) {
+      if (!byQid.has(target)) {
+        throw new Error(`${e.qualifiedId} is duplicate-of ${target} — ${target} does not exist`);
+      }
+      dupes.push([e, target]);
+    } else {
+      rows.set(e.qualifiedId, { ...e, ids: [e.qualifiedId] });
+    }
+  }
+  for (const [e, target] of dupes) {
+    const row = rows.get(target);
+    if (!row) throw new Error(`${e.qualifiedId} is duplicate-of ${target}, which is itself a duplicate`);
+    row.ids.push(e.qualifiedId);
+  }
+  return [...rows.values()];
+}
