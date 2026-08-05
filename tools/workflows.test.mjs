@@ -21,7 +21,7 @@ test("every test file WORKFLOWS.md cites actually exists", () => {
 
 test("every workflow row names a Tests value, never a bare dash", () => {
   const doc = fs.readFileSync("WORKFLOWS.md", "utf8");
-  const rows = doc.split("\n").filter((l) => /^\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|$/.test(l) && !/^\|\s*Workflow\s*\|/.test(l) && !/^\|---/.test(l));
+  const rows = doc.split(/\r?\n/).filter((l) => /^\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|$/.test(l) && !/^\|\s*Workflow\s*\|/.test(l) && !/^\|---/.test(l));
   assert.ok(rows.length > 0, "no workflow table rows found — the table shape may have changed");
   for (const row of rows) {
     const testsCol = row.split("|")[4].trim();
