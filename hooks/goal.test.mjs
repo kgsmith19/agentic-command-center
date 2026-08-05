@@ -709,3 +709,35 @@ test("reapDeadGoals with no table reaps nothing - it never destroys on a guess",
   assert.deepEqual(m.reapDeadGoals({ now: Date.now() + 10 * 60 * 1000, graceMs: 120000 }), []);
   assert.equal(m.readGoal(g.id).status, "active");
 });
+
+// OI-034, Task 4: bindSession's pid-fallback requires proof of identity too.
+test("bindSession never adopts a goal whose console identity does not match", () => {
+  const stale = m.createGoal({ text: "last week's task" });
+  m.bindSession({ sessionId: SID(78), consolePid: 4242, goalId: stale.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+
+  // A brand new session lands on the same pid, now owned by a different process.
+  const adopted = m.bindSession({
+    sessionId: SID(79),
+    consolePid: 4242,
+    consoles: { 4242: "2026-08-04T18:30:00.000Z" },
+  });
+  assert.equal(adopted, null, "must not inherit last week's task");
+});
+
+test("bindSession adopts by pid when the console identity matches", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(80), consolePid: 4242, goalId: g.id });
+  m.stampConsoles({ 4242: "2026-08-04T10:00:00.000Z" }, { now: Date.now(), graceMs: 120000 });
+  const adopted = m.bindSession({
+    sessionId: SID(81),
+    consolePid: 4242,
+    consoles: { 4242: "2026-08-04T10:00:00.000Z" },
+  });
+  assert.equal(adopted.id, g.id);
+});
+
+test("an explicit goalId still binds without a table", () => {
+  const g = m.createGoal({ text: "t" });
+  assert.equal(m.bindSession({ sessionId: SID(82), consolePid: 4242, goalId: g.id }).id, g.id);
+});
