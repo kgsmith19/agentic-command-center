@@ -76,6 +76,23 @@ test("any fail or unknown makes the run NOT accepted (AC-V2)", async () => {
   assert.equal((await V.verifyAll(withUnknown, { cwd: BASE })).accepted, false);
 });
 
+test("an invalid regex pattern fails the criterion instead of throwing (error, OI-040)", async () => {
+  const r = await V.verifyCriterion(
+    crit("bad-pattern", { method: "file_contains", path: path.join(BASE, "present.txt"), pattern: "(unterminated" }),
+    { cwd: BASE }
+  );
+  assert.equal(r.status, "fail");
+  assert.match(r.detail, /verification threw/);
+});
+
+test("command verification against a cwd that does not exist fails gracefully, not a crash (fault-tolerance)", async () => {
+  const r = await V.verifyCriterion(
+    crit("bad-cwd", { method: "command", command: "node --version", cwd: path.join(BASE, "does-not-exist") }),
+    { cwd: BASE }
+  );
+  assert.equal(r.status, "fail");
+});
+
 test("the verifier ignores anything the harness said about itself (AC-V5)", async () => {
   const contract = {
     harnessClaim: "I verified everything and it all passes",
