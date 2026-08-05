@@ -119,10 +119,6 @@ export function listGoals() {
   }
 }
 
-export function activeGoals() {
-  return listGoals().filter((g) => g.status === "active");
-}
-
 // Is that console still alive? A goal bound to a window Kyle has since closed
 // must never be resumed - there is nothing to type into, and the pid may since
 // have been reused by an unrelated process.
@@ -135,6 +131,33 @@ export function consoleAlive(pid) {
   } catch (e) {
     return e && e.code === "EPERM"; // exists, owned by someone else
   }
+}
+
+// OI-031: left alone, an active goal whose console died just sits "active"
+// forever - nothing ever marked it dead, so the store only grows and
+// pendingKicks keeps re-checking goals no one can ever resume (found live:
+// 7 "active" goals, oldest four days old, every consolePid gone). "dead"
+// means BOUND (consolePid nonzero) and NOT alive; an unbound goal
+// (consolePid 0 - created but not yet launched into a console) is left
+// alone, since there is nothing yet to prove dead. Runs on every
+// activeGoals() call rather than on a timer: cheap (one process.kill(pid,0)
+// per active goal, same cost pendingKicks already pays), and it means every
+// reader - list, pending, goalForSession - sees the reaped result
+// immediately instead of a stale one.
+export function reapDeadGoals() {
+  const reaped = [];
+  for (const g of listGoals()) {
+    if (g.status !== "active") continue;
+    if (!g.consolePid || consoleAlive(g.consolePid)) continue;
+    setStatus(g.id, "dead", `console pid ${g.consolePid} is gone (reaped)`);
+    reaped.push(g.id);
+  }
+  return reaped;
+}
+
+export function activeGoals() {
+  reapDeadGoals();
+  return listGoals().filter((g) => g.status === "active");
 }
 
 export function goalForSession(sessionId) {
@@ -255,7 +278,7 @@ export function setStatus(id, status, why) {
   goal.needsKick = false;
   if (why) goal.why = String(why).slice(0, 500);
   write(goal);
-  if (status === "done" || status === "blocked") {
+  if (status === "done" || status === "blocked" || status === "dead") {
     try {
       fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
     } catch {}
@@ -361,6 +384,10 @@ export function main() {
     console.log(JSON.stringify(activeGoals(), null, 2));
     return;
   }
+  if (cmd === "reap") {
+    console.log(JSON.stringify(reapDeadGoals()));
+    return;
+  }
   if (cmd === "pending") {
     // Dials live in policy.json so they can be tuned without a restart; a
     // missing or broken policy just uses the defaults (fail open).
@@ -406,7 +433,7 @@ export function main() {
     return;
   }
   console.log(
-    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id]"
+    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
   );
 }
 

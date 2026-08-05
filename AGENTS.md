@@ -282,7 +282,7 @@ holds all kicks. `goal.mjs pending` decides every condition that makes a kick
 unsafe (active? console alive? binding settled? cooldown?) so there is one place
 to audit, and `clearbot.ps1` stays a dumb executor.
 
-Tests: `node --test hooks/goal.test.mjs` (20).
+Tests: `node --test hooks/goal.test.mjs` (48).
 
 Two things keep the loop from stalling, added 2026-07-31 after it stalled
 twice in one day. **Liveness:** a goal session that ends its turn UNDER the
