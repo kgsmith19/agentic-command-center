@@ -39,3 +39,30 @@ const CLOSED = /^(RESOLVED|RETIRED|SUPERSEDED)\b/;
 export function isOpen(entry) {
   return !(entry.marker && CLOSED.test(entry.marker));
 }
+
+// Kyle's priority order, verbatim from his 2026-08-04 prompt. Closed set: an
+// unknown value is a typo in a ledger, and coercing it to a default would hide
+// the typo behind a plausible ordering.
+export const RANKS = Object.freeze([
+  "safety", "broken-workflow", "data-loss", "autonomy-blocker", "reliability",
+  "control", "usability", "maintainability", "performance", "roi",
+]);
+
+export function rankOrdinal(entry) {
+  const r = entry.fields.rank;
+  if (!r) return -1;
+  const i = RANKS.indexOf(r);
+  if (i === -1) throw new Error(`unknown rank "${r}" on ${entry.qualifiedId}`);
+  return i;
+}
+
+const idNum = (e) => Number(e.id.slice(3));
+
+export function sortEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const ra = rankOrdinal(a), rb = rankOrdinal(b);
+    if (ra !== rb) return ra - rb;          // -1 (unranked) sorts first
+    if (a.ledger !== b.ledger) return a.ledger < b.ledger ? -1 : 1;
+    return idNum(a) - idNum(b);
+  });
+}

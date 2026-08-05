@@ -44,3 +44,32 @@ test("RESOLVED, RETIRED and SUPERSEDED close an entry; SHRUNK does not", () => {
   const open = m.parseLedger(MARKERS, "guards").filter(m.isOpen).map((e) => e.id);
   assert.deepEqual(open, ["OI-015", "OI-034"]);
 });
+
+test("entries sort by rank ordinal, then ledger, then id", () => {
+  const es = m.parseLedger(`
+## OI-009 later id
+- rank: safety
+## OI-002 low priority
+- rank: roi
+## OI-001 high priority
+- rank: safety
+`, "guards");
+  assert.deepEqual(m.sortEntries(es).map((e) => e.id), ["OI-001", "OI-009", "OI-002"]);
+});
+
+test("an entry with no rank is UNRANKED and sorts first", () => {
+  const es = m.parseLedger(`
+## OI-001 ranked
+- rank: safety
+## OI-002 unranked
+- opened: 2026-08-04
+`, "guards");
+  const sorted = m.sortEntries(es);
+  assert.equal(sorted[0].id, "OI-002");
+  assert.equal(m.rankOrdinal(sorted[0]), -1);
+});
+
+test("an unknown rank value fails loudly instead of defaulting", () => {
+  const [e] = m.parseLedger("## OI-001 t\n- rank: urgent\n", "guards");
+  assert.throws(() => m.rankOrdinal(e), /unknown rank "urgent"/);
+});
