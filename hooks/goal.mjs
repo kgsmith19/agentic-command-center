@@ -123,6 +123,24 @@ export function activeGoals() {
   return listGoals().filter((g) => g.status === "active");
 }
 
+// OI-034. A pid is not an identity: Windows recycles them, and the comment
+// above consoleAlive named that hazard since the file was written while the
+// check below it did nothing about it. A console is (pid, startTime).
+//
+// This function does NOT query the OS. Autopilot already enumerates processes
+// every cycle and gets StartTime free, so it passes the table in. That keeps
+// this module pure and keeps every kick-safety rule in this one file, which is
+// what its header promises.
+export function consoleState(goal, consoles) {
+  if (!consoles) return "unknown"; // cannot tell -> do nothing
+  const pid = Number(goal.consolePid || 0);
+  if (!pid) return "dead";
+  const seen = consoles[String(pid)];
+  if (!seen) return "dead"; // pid is gone
+  if (!goal.consoleStartedAt) return "unknown"; // not stamped yet
+  return goal.consoleStartedAt === seen ? "alive" : "dead"; // recycled if it differs
+}
+
 // Is that console still alive? A goal bound to a window Kyle has since closed
 // must never be resumed - there is nothing to type into, and the pid may since
 // have been reused by an unrelated process.

@@ -589,3 +589,30 @@ test("a goal persists correctly after its directory is moved to a new location",
     fs.rmSync(newDir, { recursive: true, force: true });
   }
 });
+
+// OI-034: console identity is (pid, startTime), not pid alone.
+test("a recycled pid is dead, not alive - the OI-034 mistarget, reproduced", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  const consoles = { 4242: "2026-08-04T18:30:00.000Z" }; // same pid, new process
+  assert.equal(m.consoleState(goal, consoles), "dead");
+});
+
+test("a live console whose start time matches is alive", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  assert.equal(m.consoleState(goal, { 4242: "2026-08-04T10:00:00.000Z" }), "alive");
+});
+
+test("a pid absent from the table is dead", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  assert.equal(m.consoleState(goal, { 999: "2026-08-04T10:00:00.000Z" }), "dead");
+});
+
+test("a pid present but not yet stamped is unknown, not a guess", () => {
+  const goal = { consolePid: 4242 };
+  assert.equal(m.consoleState(goal, { 4242: "2026-08-04T10:00:00.000Z" }), "unknown");
+});
+
+test("no table means unknown - never a guess in either direction", () => {
+  const goal = { consolePid: 4242, consoleStartedAt: "2026-08-04T10:00:00.000Z" };
+  assert.equal(m.consoleState(goal, undefined), "unknown");
+});
