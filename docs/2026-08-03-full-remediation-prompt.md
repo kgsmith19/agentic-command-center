@@ -272,7 +272,7 @@ set, behavior is byte-identical to today. Fast tier + covgate green.
 
 ## Phase 4 — Fix the crash-open and the unlocked writes
 
-**Status: DONE — commit (see next commit in this branch)**
+**Status: DONE — commit 8335cd1**
 
 Shipped 2026-08-06, all four sub-fixes:
 
