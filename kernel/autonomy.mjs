@@ -16,9 +16,24 @@ import { loadKernelPolicy } from "./policy.mjs";
 const NOT_DELIVERED = new Set(["rejected", "aborted-by-budget"]);
 const FRESH = { factor: 1, runsLeft: 0, log: [] };
 
+// Full-repo review (2026-08-06): kernel/policy.mjs's own validator already
+// enforces autonomy.factor in (0, 1] for the POLICY dial (the tightening
+// amount), but the PERSISTED, currently-active factor in autonomy.json was
+// read back with a bare object spread -- a corrupted, tampered, or buggy
+// state file could carry ANY value straight into effectiveCeilings(). A
+// factor <= 0 makes every ceiling zero or negative (every checkpointVerdict
+// check trips instantly); a factor above 1 WIDENS ceilings past normal,
+// silently defeating the whole tightening mechanism this file exists to
+// run. Clamped at the read boundary so every consumer gets a safe value
+// automatically, matching hooks/usage.mjs's own finiteOr pattern.
+function safeFactor(v) {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 1 ? v : 1;
+}
+
 export function readAutonomy() {
   try {
-    return { ...FRESH, ...JSON.parse(fs.readFileSync(autonomyFile(), "utf8")) };
+    const state = { ...FRESH, ...JSON.parse(fs.readFileSync(autonomyFile(), "utf8")) };
+    return { ...state, factor: safeFactor(state.factor) };
   } catch {
     return { ...FRESH, log: [] };
   }
@@ -36,7 +51,8 @@ export function readAutonomyStrict() {
     if (e.code === "ENOENT") return { ...FRESH, log: [] };
     throw e;
   }
-  return { ...FRESH, ...JSON.parse(raw) };
+  const state = { ...FRESH, ...JSON.parse(raw) };
+  return { ...state, factor: safeFactor(state.factor) };
 }
 
 // tmp+rename instead of a bare writeFileSync -- a reader (readAutonomy,

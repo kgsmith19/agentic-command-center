@@ -154,6 +154,32 @@ test("readAutonomyStrict: missing file is fresh, corrupt file THROWS (never fail
   assert.equal(A.readAutonomyStrict().factor, 0.5);
 });
 
+// Full-repo review (2026-08-06) regression: kernel/policy.mjs's own
+// validator already enforces autonomy.factor in (0, 1] for the POLICY dial
+// (the tightening amount) -- but the PERSISTED, currently-active factor in
+// autonomy.json was read back with a bare object spread, letting a
+// corrupted, tampered, or buggy state file carry ANY value straight into
+// effectiveCeilings(). A factor <= 0 makes every ceiling zero or negative
+// (every checkpointVerdict check trips instantly); a factor above 1 WIDENS
+// ceilings past normal, silently defeating the whole tightening mechanism
+// this file exists to run. Both readAutonomy and readAutonomyStrict must
+// clamp back to 1 (the safe, neutral "no tightening" default) on anything
+// outside (0, 1], the same way hooks/usage.mjs's own finiteOr already
+// guards other policy-derived numbers.
+test("readAutonomy and readAutonomyStrict clamp an out-of-range persisted factor back to 1, never pass it through raw", () => {
+  fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });
+  const bad = [-1, 0, 1.5, 999, NaN, "not-a-number", null];
+  for (const factor of bad) {
+    fs.writeFileSync(L.autonomyFile(), JSON.stringify({ factor, runsLeft: 0, log: [] }));
+    assert.equal(A.readAutonomy().factor, 1, `readAutonomy must clamp factor=${factor} to 1`);
+    assert.equal(A.readAutonomyStrict().factor, 1, `readAutonomyStrict must clamp factor=${factor} to 1`);
+  }
+  // A genuinely valid factor still passes through untouched.
+  fs.writeFileSync(L.autonomyFile(), JSON.stringify({ factor: 0.5, runsLeft: 0, log: [] }));
+  assert.equal(A.readAutonomy().factor, 0.5);
+  assert.equal(A.readAutonomyStrict().factor, 0.5);
+});
+
 // OI-019 scenario-enumeration pass: writeAutonomy was the one JSON state
 // file in this codebase still using a bare writeFileSync instead of
 // tmp+rename -- a reader (readAutonomyStrict, an enforcement point that
