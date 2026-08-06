@@ -132,11 +132,11 @@ function requestClear(p, policy, ctx) {
   }
 }
 
-function statePath(sid, suffix) {
+export function statePath(sid, suffix) {
   return path.join(STATE, `${String(sid || "unknown").slice(0, 40)}.${suffix}`);
 }
 
-function readJson(p, dflt) {
+export function readJson(p, dflt) {
   try {
     return JSON.parse(fs.readFileSync(p, "utf8"));
   } catch {
@@ -149,7 +149,7 @@ function readJson(p, dflt) {
 // clear-request file (a crash mid-write, or a concurrent read) and silently
 // treat it as corrupt/missing. Same pattern hooks/goal.mjs's write() and
 // usage.mjs's scan cache already use.
-function atomicWrite(file, text) {
+export function atomicWrite(file, text) {
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
   fs.writeFileSync(tmp, text);
   fs.renameSync(tmp, file);
@@ -183,7 +183,7 @@ const allow = () => process.exit(0);
 
 // Rolling-7-day tier without re-scanning every project on every hook fire:
 // cached for 10 minutes in state/tier.json.
-function weekTier(policy) {
+export function weekTier(policy) {
   const red = policy.week.redTokens || 0;
   const amber = policy.week.amberTokens || 0;
   if (!red && !amber) return { tier: "green", weekTokens: 0, pct: 0 };
@@ -213,7 +213,7 @@ function weekTier(policy) {
 }
 
 // Minimal week scan (kept here so the hook does not pull the whole report path).
-function scanWeek(since) {
+export function scanWeek(since) {
   const projects = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects");
   let total = 0;
   const walk = (dir, depth) => {
@@ -259,7 +259,7 @@ function scanWeek(since) {
   return total;
 }
 
-function stopRunner(policy) {
+export function stopRunner(policy) {
   if (!policy.runner.stopOnRed) return;
   try {
     const stopDir = path.join(ROOT, "runner", "stop");
@@ -270,7 +270,7 @@ function stopRunner(policy) {
 
 // ------------------------------------------------------------- transcript
 
-function lastAssistantText(transcript) {
+export function lastAssistantText(transcript) {
   let out = "";
   try {
     const lines = fs.readFileSync(transcript, "utf8").split("\n");
@@ -294,7 +294,7 @@ function lastAssistantText(transcript) {
 
 // The last USER message of a transcript. Used only to tell a machine
 // continuation from something Kyle typed - see KICK_CONSTANTS.
-function lastUserText(transcript) {
+export function lastUserText(transcript) {
   let last = "";
   try {
     for (const l of fs.readFileSync(transcript, "utf8").split("\n")) {
@@ -338,7 +338,7 @@ const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt.
 // Checked by ACC_GOAL first (a fresh launch aimed straight at a specific
 // goal), then by consolePid (the resume-after-clear path, since a paused
 // goal keeps the consolePid it had when it paused).
-function pausedGoalWarning(p, win) {
+export function pausedGoalWarning(p, win) {
   const wanted = process.env.ACC_GOAL || "";
   const pid = win && win.consolePid;
   const paused = listGoals().find(
@@ -348,7 +348,7 @@ function pausedGoalWarning(p, win) {
   return `[ACC GOAL ${paused.id}] PAUSED at a ceiling (${paused.why || "reason not recorded"}). This session was NOT resumed for it. Review the goal (\`node C:/code/guards/hooks/goal.mjs show ${paused.id}\`) and, if the work should continue, run \`node C:/code/guards/hooks/goal.mjs resume ${paused.id}\`.`;
 }
 
-function goalContext(p, win, policy) {
+export function goalContext(p, win, policy) {
   const goal = bindSession({
     sessionId: p.session_id,
     consolePid: win && win.consolePid,
@@ -392,7 +392,7 @@ function goalContext(p, win, policy) {
 // re-run on a later clear. Deleting BEFORE returning is deliberate - if the
 // injection is lost, the cost is one retyped prompt, whereas a file that
 // survives is a prompt that fires again out of nowhere.
-function queuedPromptContext(win) {
+export function queuedPromptContext(win) {
   const cpid = win && win.consolePid;
   if (!cpid) return "";
   const f = path.join(QUEUEDIR, `${cpid}.md`);
@@ -820,13 +820,22 @@ function main() {
   allow();
 }
 
-try {
-  main();
-} catch (e) {
-  // Fail open, but leave a trace.
+// Phase 7 (full-remediation-prompt.md): main() used to run unconditionally
+// at module load, which is exactly why this file could never be `import`ed
+// for unit testing (covgate read it at a permanent 0% -- OI-033) -- an
+// import would immediately read stdin and process.exit() before a test ever
+// got to assert anything. Guarding it the same way covgate.mjs/kernel/run.mjs
+// already do lets a test import the pure helpers below without also running
+// the hook.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    ensureDirs();
-    fs.appendFileSync(path.join(LOGS, "budget-errors.log"), `${new Date().toISOString()} ${e && e.stack}\n`);
-  } catch {}
-  process.exit(0);
+    main();
+  } catch (e) {
+    // Fail open, but leave a trace.
+    try {
+      ensureDirs();
+      fs.appendFileSync(path.join(LOGS, "budget-errors.log"), `${new Date().toISOString()} ${e && e.stack}\n`);
+    } catch {}
+    process.exit(0);
+  }
 }

@@ -89,6 +89,38 @@ line under `## Resolved`.
 - done when: Phase 7 lands (parseLcov merge fix, budget.mjs restructured so
   its pure logic is importable, `engine.test.mjs` added) and
   `node hooks/covgate.mjs` genuinely gates all three files on a normal diff.
+- UPDATE 2026-08-06 (Phase 7 in progress): parseLcov merge fix shipped —
+  see OI-017's own update; fixed a real bug (multi-consumer files like
+  `usage.mjs` were reading whichever test happened to be parsed last, not
+  their true merged coverage: `usage.mjs` went from `funcs 2.78%` to
+  `funcs 67.3%` once measured honestly). `budget.mjs` un-blinded: guarded
+  `main()` behind the same entrypoint check `covgate.mjs`/`kernel/run.mjs`
+  already use (previously ran unconditionally at import, so importing it
+  for a unit test would `process.exit()` before an assertion ever ran),
+  exported the 11 pure/file-only helpers named in the phase spec
+  (`weekTier`, `scanWeek`, `statePath`, `readJson`, `atomicWrite`,
+  `stopRunner`, `lastAssistantText`, `lastUserText`, `pausedGoalWarning`,
+  `goalContext`, `queuedPromptContext`), new `hooks/budget.unit.test.mjs`
+  (17 tests, all red-first against the unguarded/unexported original).
+  Real, now-measured result: lines 39.8%, funcs 50%, branches 78.4% — a
+  genuine improvement over an opaque 0%, but still under the 100/100/90
+  floor, honestly. The remaining gap is the dispatch layer itself
+  (`onSessionStart`/`onUserPromptSubmit`/`onPostToolUse`/`onStop`/
+  `onPreToolUseAgent`, plus `inject`/`blockStop`/`deny`/`allow`) — every one
+  calls `process.exit()` as its last act, which is exactly why
+  `budget.test.mjs`'s existing 20 tests test them for real via subprocess
+  rather than direct import (and why that file deliberately strips
+  `NODE_V8_COVERAGE` from those spawns, per its own header comment, to
+  protect an unrelated file's coverage numbers from the volume). Closing
+  that gap for real needs the handlers restructured to accept injected
+  output functions instead of calling `process.exit()` directly — a
+  materially bigger, riskier refactor of the single highest-branch-count,
+  most incident-prone file in the hooks layer, not something to force
+  through as a side effect of a coverage-honesty pass. Left open,
+  deliberately, rather than either half-fixed or hidden behind a new
+  `branchFloorOverrides` entry (which the phase's own instructions warn
+  against using to "duck real gaps" — this is a real gap). `engine.mjs`
+  next.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
