@@ -184,6 +184,15 @@ const LOCK_TIMEOUT_MS = Number(process.env.ACC_AGENTS_LOCK_TIMEOUT_MS) || 3000;
 const LOCK_STALE_MS = Number(process.env.ACC_AGENTS_LOCK_STALE_MS) || 5000;
 
 export function withStateLock(lockPath, fn) {
+  // Adversarial review (2026-08-06): the other three lock functions
+  // sharing this exact primitive (withDecisionLock, withAutonomyLock,
+  // withMissionLock) all self-create their lock directory before
+  // attempting to open it. This one didn't, relying on its sole current
+  // caller (reserveAgentSlot) having already called ensureDirs() -- a
+  // future direct caller against a not-yet-created directory would get
+  // ENOENT immediately (not in the EEXIST/EPERM retry set) instead of
+  // self-healing like its siblings.
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   // Full-repo review (2026-08-06): a holder that is merely SLOW -- not
   // crashed -- can have its lock look "stale" to an observer purely from
   // wall-clock elapsed time. A second process then legitimately reclaims it

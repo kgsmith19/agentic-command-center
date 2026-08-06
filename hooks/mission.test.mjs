@@ -392,6 +392,39 @@ test("OI-034: consumeDeadMissionAlerts reads and clears every alert; a second ca
   }
 });
 
+// Adversarial review (2026-08-06), a fresh pass on this session's own
+// fixes: writeDeadAlert used a bare fs.writeFileSync (unlike every other
+// shared JSON state file this session hardened with atomicWrite), and
+// consumeDeadMissionAlerts deleted every alert file BEFORE checking
+// whether it actually parsed -- a reader racing a half-written file (or
+// any other on-disk corruption) got a parse failure and the alert was
+// gone forever anyway. Since a dead-mission alert is explicitly one-shot
+// with no "resume" command to re-trigger it, this defeated OI-034's
+// entire purpose in that race: Kyle silently never told his mission died.
+test("consumeDeadMissionAlerts preserves an unparseable alert file for a future retry instead of destroying it", async () => {
+  const { m, dir } = await loadMission();
+  const alerts = path.join(dir, "alerts");
+  process.env.ACC_ALERTS_DIR = alerts;
+  try {
+    fs.mkdirSync(alerts, { recursive: true });
+    // Simulates a reader racing a half-written file (or any other on-disk
+    // corruption) -- not valid JSON.
+    fs.writeFileSync(path.join(alerts, "m-torn.dead.json"), '{"id":"m-torn","text":"cut off mid-writ');
+    const g = m.createMission({ text: "well formed" });
+    m.bindSession({ sessionId: SID(57), consolePid: 999996, missionId: g.id });
+    m.reapDeadMissions(); // writes a real, well-formed alert for g.id
+
+    const consumed = m.consumeDeadMissionAlerts();
+    assert.deepEqual(consumed.map((a) => a.id), [g.id], "only the well-formed alert is consumed this round");
+    assert.ok(
+      fs.existsSync(path.join(alerts, "m-torn.dead.json")),
+      "an unparseable alert must survive to be retried, not be silently destroyed"
+    );
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
 test("OI-034: consumeDeadMissionAlerts returns [] when the alerts dir does not exist at all", async () => {
   const { m, dir } = await loadMission();
   // A dedicated, never-touched subdirectory -- other tests in this file

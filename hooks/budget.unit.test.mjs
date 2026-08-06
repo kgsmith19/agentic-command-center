@@ -92,6 +92,26 @@ test("a lock's release never deletes it if another holder has since reclaimed an
   );
 });
 
+test("Adversarial review (2026-08-06) regression: withStateLock self-creates its lock directory, matching its sibling lock functions", () => {
+  // withDecisionLock (kernel/ledger.mjs), withAutonomyLock (kernel/
+  // autonomy.mjs), and withMissionLock (hooks/mission.mjs) all open with
+  // fs.mkdirSync(dir, { recursive: true }) before attempting to create the
+  // lock file. withStateLock skipped that line entirely, relying on its
+  // sole current caller (reserveAgentSlot) having already called
+  // ensureDirs() -- untested because every OTHER test of this function
+  // happens to use a lock path under runner/state, which the test file's
+  // own setup already creates. A genuinely fresh, not-yet-existing
+  // directory exposes the gap: ENOENT, not EEXIST/EPERM, so it isn't even
+  // in the retry set -- it would throw immediately instead of self-healing
+  // like its siblings.
+  const lockPath = path.join(BASE, "runner", "never-created-yet", "fresh.lock");
+  assert.doesNotThrow(
+    () => withStateLock(lockPath, () => "ok"),
+    "withStateLock must create its own lock directory, not depend on a caller having done it first"
+  );
+  assert.equal(fs.existsSync(lockPath), false, "the lock is released after the callback runs");
+});
+
 test("readJson returns the parsed file, or the default on missing/corrupt", () => {
   const f = path.join(BASE, "runner", "state", "rj-test.json");
   fs.writeFileSync(f, JSON.stringify({ a: 1 }));

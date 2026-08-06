@@ -273,7 +273,11 @@ export function consoleAlive(pid) {
 function writeDeadAlert(g, why) {
   try {
     fs.mkdirSync(alertsDir(), { recursive: true });
-    fs.writeFileSync(
+    // Adversarial review (2026-08-06): was a bare fs.writeFileSync, the one
+    // shared JSON state file this session left non-atomic. A reader racing
+    // a half-written file got a parse failure -- see consumeDeadMissionAlerts'
+    // own fix below for why that used to be unrecoverable.
+    atomicWrite(
       path.join(alertsDir(), `${safeId(g.id)}.dead.json`),
       JSON.stringify({ id: g.id, text: g.text || "", why, at: nowIso() }, null, 2) + "\n"
     );
@@ -296,8 +300,18 @@ export function consumeDeadMissionAlerts() {
   for (const f of files) {
     const p = path.join(alertsDir(), f);
     const a = readJson(p, null);
-    fs.rmSync(p, { force: true });
-    if (a && a.id) out.push(a);
+    // Adversarial review (2026-08-06): used to delete unconditionally,
+    // before checking whether the read even parsed -- a dead-mission alert
+    // is explicitly one-shot with no "resume" command to re-trigger it, so
+    // a reader that raced a half-written file (or any other on-disk
+    // corruption) got a parse failure and the alert was gone forever,
+    // silently. Only delete what was actually consumed; an unparseable
+    // file is left for the NEXT call to retry, self-healing the same way
+    // every other JSON state file in this codebase already does.
+    if (a && a.id) {
+      fs.rmSync(p, { force: true });
+      out.push(a);
+    }
   }
   return out;
 }
@@ -564,7 +578,12 @@ export function reapCeilings(now = Date.now(), dials = {}) {
     setStatus(g.id, "paused", `CEILING REACHED: ${verdict.dimension} (${verdict.detail})`);
     try {
       fs.mkdirSync(alertsDir(), { recursive: true });
-      fs.writeFileSync(
+      // Adversarial review (2026-08-06): consistency with writeDeadAlert's
+      // own fix above -- statusline.mjs only checks this file's EXISTENCE
+      // (readdir, not its content), so a torn write was never actually
+      // exploitable here, but every other shared JSON state file in this
+      // codebase uses atomicWrite and this one shouldn't be the exception.
+      atomicWrite(
         path.join(alertsDir(), `${safeId(g.id)}.ceiling.json`),
         JSON.stringify({ id: g.id, dimension: verdict.dimension, detail: verdict.detail, at: nowIso() }, null, 2) + "\n"
       );
