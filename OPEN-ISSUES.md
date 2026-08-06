@@ -119,6 +119,45 @@ line under `## Resolved`.
   satisfy a stale request, verified against a real reboot/recycle on
   Kyle's machine.
 
+## OI-037 [RESOLVED 2026-08-06] a torn ledger append can silently corrupt the NEXT record too, not just itself
+- opened and resolved 2026-08-06, found via pre-approved fault injection
+  (Kyle: "For fault injection let's put that in the guards and I
+  /approve-kgs ahead of time") on `kernel/ledger.mjs`, the load-bearing
+  audit trail (run records + decisions) every kernel enforcement point and
+  the kernel README's own crash-recovery claims depend on.
+- where: `kernel/ledger.mjs`'s `appendLine()`
+- what: `readLines()` already tolerates a torn TRAILING line (a process
+  killed mid-`fs.appendFileSync` — SIGKILL, power loss, OOM, exactly the
+  scenario a lane timeout or a hard ceiling can trigger) — it skips the
+  unparseable line and keeps everything before it, and a test already
+  proved that. What was NOT tested, and turned out to be broken: the
+  RETRY that follows such a crash. `appendOnce`'s idempotency check
+  (AC-G4, "the first record for a run wins") correctly doesn't see the
+  torn line as an existing record, so the retry proceeds — but the torn
+  line has no trailing newline of its own, and the retry's clean JSON
+  landed on the SAME line, concatenating two JSON objects into one
+  unparseable blob. Reproduced directly: append a deliberately truncated
+  `run_started` line, call the real `appendStarted()` again, and the
+  retried record was unreadable — `readRuns()` returned zero rows for
+  that run, not one. The crash didn't just lose itself; it silently ate
+  the recovery attempt too.
+- fix: `appendLine()` now checks the file's last byte before every append
+  (`fs.openSync`/`fs.readSync` on a single trailing byte, cheap) and
+  prepends a newline if it's missing, self-healing the line structure at
+  the very next write regardless of how the prior one died. Verified: the
+  fault-injection test now passes (exactly one usable record after the
+  retry, idempotency still holds for a genuine duplicate afterward),
+  `kernel/ledger.mjs` stays at 100/100/97.4 (lines/funcs/branches) in
+  isolated `node --test --experimental-test-coverage`, and the full
+  kernel/ suite (174 tests) is green.
+- other `fs.appendFileSync` call sites checked and NOT at risk of this
+  class of bug: `hooks/budget.mjs` (an error log and a `clearbot-status`
+  path — plain human-readable text, never re-parsed as structured data),
+  `hooks/goal.mjs` (per-goal Markdown log — same, human-readable only),
+  `runner/runner.mjs`'s `log()` (same). The risk is specific to a file
+  whose lines get parsed back as records program logic depends on —
+  `ledger.mjs` was the only one.
+
 ## OI-033 usage.mjs/budget.mjs/statusline.mjs/engine.mjs cannot clear covgate's floor today
 - opened: 2026-08-06, found while shipping Phase 1 (docs/2026-08-03-full-
   remediation-prompt.md) — NOT introduced by that work, pre-existing.

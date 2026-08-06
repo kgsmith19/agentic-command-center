@@ -96,6 +96,41 @@ test("a truncated trailing line does not lose the records before it", () => {
   assert.equal(L.readRuns().length, 1);
 });
 
+// Fault injection (pre-approved, 2026-08-06): a process killed mid-
+// appendFileSync — power loss, OOM kill, a lane-timeout SIGKILL — leaves
+// exactly the truncated-line state the test above proves readLines()
+// tolerates. What was NOT tested: what happens on the NEXT retry after that
+// crash. This file's own header comment states the contract explicitly
+// ("the launch lane retries transport failures and a resumed kernel must
+// not double-write, so the FIRST record for a run wins", AC-G4), and the
+// clean-duplicate case is tested above — but a torn first write is
+// INVISIBLE to appendOnce's own readRuns()-based existence check (the
+// truncated line is silently skipped, same as any reader), so the crashed
+// write doesn't count as "already recorded." The retry must therefore
+// still succeed and land a clean, complete, USABLE record — proving actual
+// crash recovery, not just "reading a torn file doesn't throw."
+test("fault injection: a crash mid-appendStarted (torn line) does not block the retry from landing a real record", () => {
+  fs.mkdirSync(L.ledgerDir(), { recursive: true });
+  // Simulates the exact byte-level state a SIGKILL mid-fs.appendFileSync
+  // leaves: a syntactically incomplete JSON line, no trailing newline.
+  fs.appendFileSync(L.runsFile(), '{"event":"run_started","runId":"r-crash","started');
+  assert.equal(L.readRuns().length, 0, "the torn write is invisible, same as any other reader");
+
+  const retried = L.appendStarted(started("r-crash"));
+  assert.equal(retried, true, "the retry must not be treated as a duplicate of an unreadable torn write");
+
+  const rows = L.readRuns().filter((r) => r.runId === "r-crash");
+  assert.equal(rows.length, 1, "exactly one USABLE record must exist after the retry");
+  assert.equal(rows[0].event, "run_started");
+  assert.equal(rows[0].contract.goal, "g", "the retried record must be the real, complete payload, not more torn data");
+
+  // The crash must not have wedged idempotency for the record that DID
+  // land cleanly: a second real retry after the successful one is still
+  // correctly treated as a duplicate.
+  assert.equal(L.appendStarted(started("r-crash")), false);
+  assert.equal(L.readRuns().filter((r) => r.runId === "r-crash").length, 1);
+});
+
 function seed() {
   L.appendStarted({ runId: "q1", startedAt: "2026-08-01T00:00:00.000Z", contract: {}, settingsSha256: "a" });
   L.appendFinalized({ runId: "q1", finishedAt: "2026-08-01T01:00:00.000Z", outcome: "accepted",

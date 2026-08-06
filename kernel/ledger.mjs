@@ -20,9 +20,34 @@ export const runsFile = () => path.join(ledgerDir(), "runs.jsonl");
 export const decisionsFile = (runId) => path.join(ledgerDir(), `${runId}.decisions.jsonl`);
 export const autonomyFile = () => path.join(ledgerDir(), "autonomy.json");
 
+// Fault injection (pre-approved, 2026-08-06): a process killed mid-write
+// (SIGKILL, power loss, OOM) can leave the file's last line torn -- without
+// its own trailing newline. readLines() already tolerates a torn TRAILING
+// line (skips it, keeps everything before it), but the retry that follows
+// a crash appends its clean record right onto that same unterminated line,
+// concatenating two JSON objects into one unparseable line and losing BOTH
+// -- not just the torn one. Reproduced directly: append a torn line, then
+// a real appendStarted() retry, and the retried record was unreadable.
+// Checking for (and repairing) a missing trailing newline before every
+// append is cheap insurance against this exact class of crash, and keeps
+// every FUTURE append on its own line regardless of how the prior one died.
 function appendLine(file, obj) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(obj) + "\n");
+  let prefix = "";
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (size > 0) {
+        const buf = Buffer.alloc(1);
+        fs.readSync(fd, buf, 0, 1, size - 1);
+        if (buf[0] !== 0x0a) prefix = "\n";
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { /* file does not exist yet — nothing to repair */ }
+  fs.appendFileSync(file, prefix + JSON.stringify(obj) + "\n");
 }
 
 function readLines(file) {
