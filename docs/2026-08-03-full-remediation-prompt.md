@@ -81,7 +81,7 @@ light of.
 
 ## Phase 1 — The loop ceiling
 
-**Status: DONE — commit (pending, see OPEN-ISSUES.md OI-033)**
+**Status: DONE — commit 06c3e4c**
 
 Shipped 2026-08-06, as specified: `ceilingReached`/`reapCeilings`/`resumeGoal`
 in `hooks/goal.mjs`, wired into the `pending` CLI before `pendingKicks`; the
