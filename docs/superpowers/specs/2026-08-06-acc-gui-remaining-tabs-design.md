@@ -464,6 +464,93 @@ reasoning (Shape A recommended, four specific Windows-verification steps
 named, none of it authorable-and-trustable from this sandbox) is
 unchanged and still the reason the launch/Terminal half stays spec-only.
 
+### 7e. EXECUTION CHECKLIST for Shape A (added 2026-08-06, not run tonight)
+
+Written for the same reason OI-026's own execution checklist was: so a
+future session with real Windows/PowerShell in hand has an ordered plan
+instead of a file list to re-derive from scratch. Deliberately NOT
+attempted blind tonight — see the risk note at the end of this list for
+why, which is a materially different judgment call than every other
+"authored, not verified" Windows edit this session made.
+
+1. **Decide the WebSocket implementation path FIRST, explicitly — this
+   blocks everything else.** `package.json`'s own description states this
+   repo's design principle: "No runtime dependencies — pure node:test,
+   plain PowerShell/C#; `@playwright/test` is the one devDependency (GUI
+   e2e)." Node has no built-in WebSocket SERVER primitive (only an
+   outbound client, `global.WebSocket`, added in recent Node — useless
+   here, `gui/server.mjs` needs to ACCEPT connections). Two honest
+   options, and this spec is not deciding between them on Kyle's behalf:
+   (a) hand-roll the RFC 6455 handshake (the `Sec-WebSocket-Accept`
+   SHA-1/base64 dance over the `Upgrade` header) and frame parser
+   (opcode/mask/payload-length, including the 126/127 extended-length
+   encoding and CLIENT-frame unmasking — server-sent frames are never
+   masked, client-sent frames always are) by hand against the raw TCP
+   socket `http.Server`'s `upgrade` event exposes; or (b) add a small,
+   well-known WebSocket library (e.g. `ws`) as a considered, named
+   EXCEPTION to the no-runtime-deps principle, the same way
+   `@playwright/test` was already accepted as the one considered
+   devDependency exception. (a) keeps the principle intact but is real,
+   security-sensitive protocol code with no test coverage from this
+   sandbox proving it interops with a real browser's WebSocket client —
+   exactly the kind of bug class (frame masking, fragmented-message
+   reassembly, ping/pong keepalive) that looks fine in a diff and breaks
+   silently in practice. (b) is lower-risk code but changes a stated
+   architectural principle — Kyle's call, not a default to slide past.
+2. **The pty-hosting side** (Shape A, §7b): a small, dedicated process
+   (new `.exe`/`.ps1`, or `PtyHost.cs` invoked headlessly with no WinForms
+   window) that speaks the EXACT `TEXT`/`TEXTB64`/`SUBMIT`/`ESC`/output-
+   line protocol `ServePipe` already validates today (control-char and
+   2100-char payload checks, DACL-restricted to the current user SID —
+   Phase 6 hardened this exact pipe this session). `gui/server.mjs`'s new
+   WebSocket route becomes a second client of that SAME pipe protocol,
+   alongside clearbot — it does not change the protocol, only adds a
+   second speaker of it. Verify `hooks/clearbot.test.mjs`'s existing pipe-
+   transport tests still pass unmodified before touching anything else;
+   they are the proof the protocol itself is untouched.
+3. **`gui/term.html` rewrite**: replace the `window.chrome.webview`
+   `postMessage` bridge (current file, WebView2-only) with a plain
+   `new WebSocket("ws://127.0.0.1:<port>/pty/<sessionId>")` — same
+   `{type:'out'|'in'|'resize'|'ready',data,cols,rows}` message shape the
+   current bridge protocol comment already documents, so xterm.js/
+   FitAddon wiring underneath is unchanged, only the transport swaps.
+4. **`guards-gui.ps1`'s Go-button launch path**: today's `Start-PtySession`
+   spawns `Acc.PtyHost` in-process and wires it straight to the WinForms
+   Terminal tab's WebView2 control. This needs to instead launch step 2's
+   dedicated pty-hosting process and tell `gui/server.mjs` (already
+   running, hosting every other migrated tab) which session id to route a
+   new WebSocket connection to — the exact wiring shape is a real design
+   decision this checklist intentionally leaves open rather than guessing,
+   since it depends on the answer to step 1.
+5. **Tear-down**: wire the WebSocket's `close` event (browser tab closed)
+   to the same `Dispose()`/`Kill()` cleanup path `FormClosed` triggers
+   today — §7c point 4's own words, "only a real close-and-check-the-
+   process-list test proves it does." No amount of code review substitutes
+   for actually closing a tab and checking the process list.
+6. **Definition of done, per §7c, all FOUR points, each one requiring a
+   human at a real Windows machine, not a diff review:** (a) a plain
+   browser tab renders a real `claude` TUI identically to today's WebView2
+   rendering; (b) typing, resize, and the deck buttons (`Esc`/`Ctrl+C`/
+   `/clear`/`/compact`) all work through the new path; (c) clearbot's
+   existing named-pipe client still works unmodified against whatever now
+   hosts `ServePipe`; (d) closing the browser tab cleanly kills the child
+   process, verified by actually checking the process list after.
+- **Why this stays a checklist, not code, even under a strong "finish
+  everything" instruction**: every OTHER Windows-only change accepted as
+  "authored, not verified" this session (`clearbot.ps1`'s `$KICK` rename,
+  `guards-gui.ps1`'s control renames, `gui/ptyhost.e2e.ps1`'s env var) was
+  a small, easily-hand-verified text change to code that already worked,
+  where a mistake would show up immediately as a glaring diff error. A
+  hand-rolled WebSocket frame parser is neither: it is new, binary-
+  protocol, security-sensitive code (frame masking exists specifically to
+  prevent cache-poisoning attacks through misbehaving proxies) with a
+  failure mode — silent data corruption or a hung connection under a
+  specific fragmentation pattern — that a code reading alone cannot catch,
+  and that would land directly in the terminal Kyle uses for actual daily
+  work. Shipping it unverified is a different risk category than every
+  other deferred-verification decision made tonight, not a bigger version
+  of the same one.
+
 ## 8. Sequencing (what ships tonight vs. what doesn't)
 
 1. **Tonight:** §4 (Protected paths, Vault, Runbox) — `gui/engine.html`,
