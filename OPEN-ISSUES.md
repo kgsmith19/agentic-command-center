@@ -390,6 +390,33 @@ line under `## Resolved`.
   path that CAN throw. Left in place, under-covered, honestly documented
   — the same choice this entry already makes for `hooks/budget.mjs`'s
   un-mockable dispatch layer.
+- UPDATE 2026-08-06 (OI-026 rename, incidental): `hooks/lane.mjs` and
+  `hooks/prompts.mjs` joined this entry's signature for the first time,
+  for a reason worth naming precisely since it's NEITHER of the two
+  causes already on file here (subprocess-only dispatch, or CI-batch-
+  size instability): both files got a one-line COMMENT-only edit as
+  part of the goal->mission rename ("the goal loop" ->
+  "the mission loop" in lane.mjs; "runner/goals convention" ->
+  "runner/missions convention" in prompts.mjs), which made them
+  "changed files" under covgate's `git diff` scoping for the first
+  time — and that's all it took to expose gaps that were ALREADY there,
+  unmeasured, before either file was ever touched this session.
+  Confirmed real and pre-existing, not introduced or CI-scale-related:
+  ran both files' own test suites in ISOLATION (not the CI batch) and
+  got the identical numbers CI reported. `hooks/prompts.mjs` (90.8%
+  lines / 92.3% funcs / 83.3% branches, isolated) is missing exactly
+  its `main()` CLI entrypoint (lines 88-96) — the same un-unit-tested-
+  dispatch shape as `budget.mjs`'s handlers and `engine.mjs`'s CLI
+  switch, only ever exercised via subprocess elsewhere. `hooks/lane.mjs`
+  (96.6% lines / 97.9% funcs / 85% branches, isolated) is missing
+  exactly `queryClaudeProcesses` — the Windows-only CIM-query function
+  (already Windows-CI-only-tested, `{ skip: process.platform !==
+  "win32" }` on its own test) plus its own small pocket of dead lines
+  around it, unreachable on this Linux sandbox by construction, same
+  class of gap OI-010 already established precedent for. Neither file's
+  actual logic changed; both gaps would have shown up on the very next
+  unrelated touch to either file regardless of this rename. Not fixed
+  here — named, so it isn't mistaken for something the rename broke.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
