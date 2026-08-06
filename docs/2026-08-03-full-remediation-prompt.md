@@ -674,7 +674,7 @@ entries survive without a comment proving they're still needed post-parser-fix.
 
 ## Phase 8 — Whatever Track A deliberately deferred
 
-**Status: DONE (all 3 items) — commit (see next commit in this branch)**
+**Status: DONE (all 3 items) — commit b3fb73b**
 
 1. Phase 5 didn't fully land (step 1, wiring, only — the keystroke
    mechanism itself is untouched, confirmed by a dedicated research pass:
