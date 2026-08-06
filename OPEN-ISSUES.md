@@ -146,6 +146,29 @@ line under `## Resolved`.
   `switch` cases that didn't resolve to an obviously worthwhile additional
   test in the time spent here. `budget.mjs`'s dispatch-handler gap (above)
   is the one still fully open piece of this entry.
+- UPDATE 2026-08-06 (post-Phase-7, real CI data): Phase 7's own local
+  verification was genuine — running `budget.unit.test.mjs`/
+  `engine.test.mjs` in isolation, or alongside a moderate batch of other
+  hooks/ test files, produces real, non-zero lcov data for both files
+  (documented above: budget.mjs 39.8/50/78.4, engine.mjs 100/89.7/71.1).
+  But the FULL CI `covgate` job — every test file in the repo, ~30+, one
+  `node --test` invocation — still reports both at a flat `0%, no test
+  imports it` (PR #9, commit 4208a6a, 2026-08-06), the identical symptom
+  as before Phase 7 shipped. This is not Phase 7 being a no-op: it's a
+  SEPARATE, larger-scale instance of the exact node `--experimental-test-
+  coverage` instability OI-017 already bisected and named ("tied to total
+  file/process count per invocation") — there, degraded a file's branch %;
+  here, at CI's larger file count, drops two files' coverage data
+  entirely rather than merely degrading it. `hooks/route.mjs` and
+  `hooks/usage.mjs` show the milder, non-zero version of the same
+  large-batch degradation in that same CI run. No parser fix can help when
+  the data never reaches the lcov file at all — the earlier parseLcov bug
+  (fixed, see OI-017's own update) was about MERGING data that arrived;
+  this is data not arriving. A real fix needs `covgate.mjs`'s test
+  invocation split into smaller batches with results merged across
+  batches (bigger, separate change to the gate's own mechanics, not a
+  coverage-honesty fix to an individual hooks/ file) — out of scope for
+  tonight, named here rather than silently absorbed into "Phase 7 done."
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
