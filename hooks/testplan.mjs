@@ -11,7 +11,7 @@
 //
 // ADVISORY BY DESIGN, same philosophy as route.mjs — and here it is load-
 // bearing, not taste: a blocking verdict needs replay machinery (route has
-// clearbot; this has none), and a blocked prompt inside a goal session stalls
+// clearbot; this has none), and a blocked prompt inside a mission session stalls
 // the autonomous loop. The contract's teeth are in its GATES (fast tier green,
 // covgate green), not in eating prompts.
 //
