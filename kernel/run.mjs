@@ -58,7 +58,6 @@ export async function runTask(contractPath, { adapter, afterStage, tickMs = 6000
     return { runId: null, outcome: "refused", errors };
   }
 
-  const harnessAdapter = adapter || (await resolveAdapter());
   const runId = newRunId();
   const startedAt = Date.now();
   const guardhookPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "guardhook.mjs");
@@ -82,6 +81,23 @@ export async function runTask(contractPath, { adapter, afterStage, tickMs = 6000
     console.error(`kernel: ${message}`);
     return finalize({ outcome: "failed-to-start", harness, error: message, criteria: [], tokens: 0 });
   };
+
+  // OI-019: resolveAdapter() used to run BEFORE runId/staged/appendStarted
+  // even existed, with no try/catch — an unavailable harness (e.g. a
+  // policy.json kernel.harness typo naming an adapter module that doesn't
+  // exist) crashed runTask's own promise with no ledger entry at all, not
+  // even the "failed-to-start... IS a run and it gets the full started/
+  // finalized pair" this file's own header promises for every other
+  // post-contract failure. Moved below the scaffolding and wrapped in the
+  // same failClosed() identity() already uses just below — resolving the
+  // adapter and asking its identity are both "can this harness even start,"
+  // and both now get identical fail-closed treatment.
+  let harnessAdapter;
+  try {
+    harnessAdapter = adapter || (await resolveAdapter());
+  } catch (e) {
+    return failClosed(e.message);
+  }
 
   let harness;
   try {

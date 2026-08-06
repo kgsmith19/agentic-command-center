@@ -341,11 +341,53 @@ line under `## Resolved`.
   calls, launch-lane retries, concurrent kernel runs) — recorded here as an
   accepted, much-lower-probability risk rather than force-fitting a fourth
   lock onto a path that doesn't need one yet, not silently skipped.
-  Progress: 7/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  UPDATE 2026-08-06 (same cycle): `kernel/credentials.mjs` reviewed — no
+  gap found. Already fail-closed by design (any vault-read error, including
+  a directory in place of the file, degrades to "no keys," which DENIES
+  rather than grants); checked vaultKeys type-safety (a non-string entry
+  degrades to a clean "not available" error via `in`/property-access
+  coercion, never a throw — unlike the `path.resolve()` case fixed in
+  `contract.mjs` above, since this file never calls `path.resolve` on
+  caller-controlled input) and a `"__proto__"`-named key (`Object.fromEntries`
+  uses `CreateDataPropertyOrThrow`, which sets a real own property literally
+  named `__proto__`, not the special prototype-assignment behavior — no
+  pollution risk). Recorded per this OI's own done-when clause ("or recorded
+  an explicit, ledgered reason none is needed") rather than force-fitting a
+  change onto a module that doesn't need one.
+  Eighth module done, `kernel/adapter.mjs` (bug found while reviewing it;
+  fix landed in `run.mjs`, its only caller, crediting both together since
+  `adapter.mjs` itself was clean — `adapterSpecifier`'s traversal guard,
+  `assertAdapterShape`'s member checks, and `resolveAdapter`'s own try/catch
+  around the dynamic `import()` are all already solid). Found a seventh REAL,
+  live bug, a variant of this session's "uncaught throw before a ledger
+  entry exists" pattern (verifier.mjs, contract.mjs above): `run.mjs` called
+  `adapter || (await resolveAdapter())` BEFORE `runId`/staged settings/
+  `appendStarted()` even existed, with no try/catch. A `policy.json`
+  `kernel.harness` naming an adapter module that doesn't exist — a plausible
+  operator typo, not a hypothetical — crashed `runTask`'s own promise with NO
+  ledger entry at all, not even the "failed-to-start... IS a run and it gets
+  the full started/finalized pair" this file's own header promises for every
+  OTHER post-contract failure (this exact case, `identity()` throwing, is
+  already handled gracefully via `failClosed` a few lines below — resolution
+  itself was the one gap). Fixed: moved adapter resolution below the run
+  scaffolding (staging dir + `appendStarted` now exist first) and wrapped it
+  in the same `failClosed()` pattern `identity()` already uses — resolving
+  the adapter and asking its identity are both "can this harness even
+  start," now both fail closed identically. New test in `kernel/run.test.mjs`
+  deliberately does NOT inject an adapter (every existing "failed-to-start"
+  test does, which skips `resolveAdapter()` entirely) so it exercises the
+  real resolution path — proven red beforehand (reproduced the exact
+  uncaught rejection live) and green and stable across 3 repeated runs
+  after. Verified: `node --test kernel/run.test.mjs` (3 repeated runs, all
+  green, 23/23), full `npm test` (436/437 excluding known skips, same
+  pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched file (`kernel/run.mjs`
+  100%/100%/93.3%, above its existing OI-017 override, PASS).
+  Progress: 9/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
   `kernel/run.mjs`, `kernel/ledger.mjs`, `kernel/verifier.mjs`,
-  `kernel/autonomy.mjs`, `kernel/contract.mjs`). Remaining, in rough risk
-  order: `kernel/policy.mjs` (the `saveKernelPolicy` race noted above is the
-  only open item there), `kernel/credentials.mjs`, `kernel/adapter.mjs`,
+  `kernel/autonomy.mjs`, `kernel/contract.mjs`, `kernel/credentials.mjs`,
+  `kernel/adapter.mjs`). Remaining, in rough risk order: `kernel/policy.mjs`
+  (the `saveKernelPolicy` race noted above is the only open item there),
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5

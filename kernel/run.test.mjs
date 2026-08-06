@@ -79,6 +79,40 @@ test("a harness that cannot start is recorded as failed-to-start, fail closed (A
   assert.match(f.error, /ENOENT/);
 });
 
+test("OI-019: an adapter that cannot be RESOLVED is recorded as failed-to-start, not an uncaught crash (AC-A3)", async () => {
+  // Every existing "failed-to-start" test injects a fake adapter, which
+  // skips resolveAdapter() entirely (adapter || await resolveAdapter()) and
+  // only exercises identity()/startTask() throwing. resolveAdapter() itself
+  // — reached whenever no adapter is injected, i.e. real production usage —
+  // was called with no try/catch, BEFORE runId/staged files/appendStarted
+  // even exist. A policy.json kernel.harness naming an adapter module that
+  // doesn't exist (a plausible operator typo, not a hypothetical) crashed
+  // runTask's own promise with no ledger entry at all — not even the
+  // "failed-to-start... IS a run and it gets the full started/finalized
+  // pair" this file's own header promises for every other post-contract
+  // failure. Deliberately does NOT inject an adapter, to hit the real
+  // resolveAdapter() path; a nonexistent module name fails identically
+  // whether or not the `claude` CLI happens to be on PATH.
+  const badPolicy = path.join(BASE, "bad-harness-policy.json");
+  fs.writeFileSync(badPolicy, JSON.stringify({
+    kernel: { harness: "no-such-harness", hardCaps: { wallClockMin: 240 } },
+    lane: { slots: 1, minGapMs: 0, pollMs: 10, breakerThreshold: 100000 },
+  }));
+  const saved = process.env.ACC_POLICY;
+  process.env.ACC_POLICY = badPolicy;
+  try {
+    const r = await R.runTask(contractFile(good()));
+    assert.equal(r.outcome, "failed-to-start");
+    const rows = L.readRuns().filter((x) => x.runId === r.runId);
+    assert.equal(rows.filter((x) => x.event === "run_started").length, 1, "still gets the full started/finalized pair");
+    const f = rows.find((x) => x.event === "run_finalized");
+    assert.equal(f.outcome, "failed-to-start");
+    assert.match(f.error, /no-such-harness/);
+  } finally {
+    process.env.ACC_POLICY = saved;
+  }
+});
+
 test("harness identity and version reach the ledger for every run (AC-A2)", async () => {
   await R.runTask(contractFile(good()), { adapter: fakeAdapter() });
   const f = L.readRuns().find((x) => x.event === "run_finalized");
