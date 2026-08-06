@@ -158,6 +158,29 @@ test("pendingKicks refuses: dead console", async () => {
   assert.equal(m.pendingKicks(Date.now() + 10000).length, 0);
 });
 
+// Full-repo review (2026-08-06): policy.json's missions.autoResume was pure
+// documentation -- no production code ever read it. A human setting it to
+// false, believing that disarms unattended resumption, got the loop anyway,
+// bounded only by whichever ceiling happened to still be enabled. This is
+// the master off-switch, not a ceiling, which makes silently ignoring it
+// worse than a soft limit drifting: it's the control a human reaches for
+// FIRST when they want the loop to stop.
+test("pendingKicks refuses everything when autoResume is explicitly false, even an otherwise fully-eligible mission", async () => {
+  const { m } = await loadMission();
+  const g = m.createMission({ text: "t" });
+  m.bindSession({ sessionId: SID(1), consolePid: LIVE, missionId: g.id });
+  assert.equal(m.pendingKicks(Date.now() + 10000).length, 1, "sanity: eligible without the dial");
+  assert.equal(m.pendingKicks(Date.now() + 10000, { autoResume: false }).length, 0, "autoResume:false must suppress every kick, unconditionally");
+});
+
+test("pendingKicks still kicks normally when autoResume is true or omitted (default-on, no behavior change)", async () => {
+  const { m } = await loadMission();
+  const g = m.createMission({ text: "t" });
+  m.bindSession({ sessionId: SID(1), consolePid: LIVE, missionId: g.id });
+  assert.equal(m.pendingKicks(Date.now() + 10000, { autoResume: true }).length, 1);
+  assert.equal(m.pendingKicks(Date.now() + 10000, {}).length, 1, "omitted must mean on, matching every mission created before this dial existed");
+});
+
 test("pendingKicks refuses: within the cooldown", async () => {
   const { m } = await loadMission();
   const g = m.createMission({ text: "t" });
@@ -555,6 +578,35 @@ test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when
   }
 });
 
+test("CLI: main() 'pending' honors a real policy.json's missions.autoResume:false end to end", () => {
+  const g = m.createMission({ text: "t" });
+  m.bindSession({ sessionId: SID(41), consolePid: LIVE, missionId: g.id });
+  // Back-date boundAt past the TUI-ready-settle window (see the identical
+  // technique and comment a few hundred lines below, "stale kick" test) --
+  // without this, pendingKicks' own settle filter rejects the mission for
+  // an UNRELATED reason (bound only milliseconds ago), which would make
+  // this test pass even without wiring autoResume at all. Caught for real:
+  // an earlier version of this test asserted an empty result and passed
+  // for exactly that wrong reason.
+  const raw = JSON.parse(fs.readFileSync(path.join(MISSIONS_DIR, `${g.id}.json`), "utf8"));
+  raw.boundAt = new Date(Date.now() - 10_000).toISOString();
+  fs.writeFileSync(path.join(MISSIONS_DIR, `${g.id}.json`), JSON.stringify(raw, null, 2) + "\n");
+
+  const savedPolicy = process.env.ACC_POLICY;
+  const polPath = path.join(MISSIONS_DIR, "autoresume-policy.json");
+  try {
+    process.env.ACC_POLICY = polPath;
+    fs.writeFileSync(polPath, JSON.stringify({ missions: { autoResume: true, maxCycles: 0 } }));
+    assert.equal(JSON.parse(runMain(["pending"])).length, 1, "sanity: kickable with autoResume:true and settle satisfied");
+
+    fs.writeFileSync(polPath, JSON.stringify({ missions: { autoResume: false, maxCycles: 0 } }));
+    assert.deepEqual(JSON.parse(runMain(["pending"])), [], "a human's autoResume:false must actually stop the kick, not just be displayed");
+  } finally {
+    if (savedPolicy === undefined) delete process.env.ACC_POLICY;
+    else process.env.ACC_POLICY = savedPolicy;
+  }
+});
+
 // OI-026 rename regression: the real repo policy.json must key its ceiling
 // dials under "missions" (matching hooks/mission.mjs's own `pol?.missions?.*`
 // reads at the 'pending' CLI verb), not the pre-rename "goals". A stale key
@@ -833,18 +885,35 @@ test("Phase 4 D2: concurrent appendCycle calls against the SAME mission from sep
   // can't race synchronous code) landed 24/30 and 27/30 cycles -- read
   // (mission.cycles) / modify / write with nothing serializing it across
   // processes silently lost updates.
+  //
+  // Real CI flake (2026-08-06, Windows): 30-way process-spawn contention
+  // against the default 3000ms LOCK_TIMEOUT_MS occasionally exceeds it
+  // under a loaded/slower runner, throwing inside the child's .then() --
+  // an unhandled rejection this fixture didn't check for, so a timed-out
+  // child still resolved via 'close' and the lost update looked identical
+  // to a real regression (24/30). Same root cause and same fix already
+  // applied once tonight for kernel/autonomy.test.mjs's own N-way lock
+  // race: a generous timeout for the spawned children (this is testing
+  // the LOCK's correctness under contention, not tuning the production
+  // default) plus explicit exit-code checking so a genuine failure is
+  // visible instead of silently swallowed as a false "lost update".
   const g = m.createMission({ text: "race probe" });
   const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "mission.mjs");
   const N = 30;
   const fireAsync = () => new Promise((resolve) => {
+    let stderr = "";
     const child = spawn(process.execPath, ["-e", `
       import(${JSON.stringify("file://" + HOOK)}).then((mm) => {
         mm.appendCycle(${JSON.stringify(g.id)}, { sessionId: "s", ctx: 1, text: "x" });
-      });
-    `], { env: { ...process.env, ACC_MISSIONS_DIR: MISSIONS_DIR } });
-    child.on("close", resolve);
+        process.exit(0);
+      }).catch((e) => { console.error(e.stack || e); process.exit(1); });
+    `], { env: { ...process.env, ACC_MISSIONS_DIR: MISSIONS_DIR, ACC_MISSION_LOCK_TIMEOUT_MS: "15000" } });
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", (code) => resolve({ code, stderr }));
   });
-  await Promise.all(Array.from({ length: N }, fireAsync));
+  const results = await Promise.all(Array.from({ length: N }, fireAsync));
+  const failed = results.filter((r) => r.code !== 0);
+  assert.equal(failed.length, 0, `expected all ${N} children to succeed; failures: ${failed.map((f) => f.stderr).join("\n")}`);
   assert.equal(m.readMission(g.id).cycles, N, `expected all ${N} concurrent cycles counted, none lost to the race`);
 });
 

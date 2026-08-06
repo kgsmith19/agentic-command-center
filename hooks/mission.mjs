@@ -454,6 +454,14 @@ export function setStatus(id, status, why) {
 //   - the binding must have settled (TUI ready)
 //   - the cooldown must have expired
 export function pendingKicks(now = Date.now(), opts = {}) {
+  // Full-repo review (2026-08-06): missions.autoResume was pure
+  // documentation in policy.json -- no production code read it. It's the
+  // master off-switch, not a ceiling, so silently ignoring it is worse
+  // than a soft limit drifting: it's the control a human reaches for
+  // FIRST when they want the loop to stop. Explicit false only -- omitted
+  // or true means on, matching every mission created before this dial
+  // existed.
+  if (opts.autoResume === false) return [];
   const tuiReadyMs =
     opts.tuiReadySettleMs != null ? Number(opts.tuiReadySettleMs) : TUI_READY_MS_DEFAULT;
   const settleMs =
@@ -658,6 +666,7 @@ export function main() {
         humanHoldMinutes: pol?.missions?.humanHoldMinutes,
         tuiReadySettleMs: pol?.tui?.readySettleMs,
         kickStaleMinutes: pol?.missions?.kickStaleMinutes,
+        autoResume: pol?.missions?.autoResume,
       };
       ceilingDials = {
         maxCycles: pol?.missions?.maxCycles,
