@@ -1101,6 +1101,50 @@ line under `## Resolved`.
   suite green. `package.json`'s `test`/`test:windows` scripts and
   `.github/workflows/ci.yml`'s `ACC_COVGATE_TESTS` list updated to
   reference `hooks/mission.test.mjs`.
+- UPDATE 2026-08-06 (a genuine bug this rename left behind, found by
+  an adversarial second-pass review, not by the original checklist):
+  `policy.json`'s ceiling-dial block was never renamed from `"goals"`
+  to `"missions"`. `hooks/mission.mjs`'s `pending` CLI verb reads
+  `pol?.missions?.maxCycles`/`maxWallClockMinutes`/`maxCostUsd` —
+  against the real key `"goals"` every one of those resolved to
+  `undefined`, which `ceilingReached()` treats as "disabled". Net
+  effect: Phase 1's loop-runaway ceiling — this repo's own words for
+  it, "the single most evidence-backed fix in either review" — was
+  silently OFF in production while `policy.json` still showed real
+  numbers (12 cycles / 180 min / $50) to a human reading it.
+  `kickSettleSeconds`/`humanHoldMinutes` happened to match their
+  hardcoded fallback defaults by coincidence, which is exactly why
+  this didn't surface as an obvious behavior change. Not caught by
+  the original checklist because `policy.json` was never in its file
+  list — it's data, not one of the `.mjs`/`.ps1`/`.cmd` files the
+  checklist's own definition-of-done grep covered. Not caught by the
+  existing test suite because every test exercising these dials
+  builds its own synthetic policy fixture with the correct key; the
+  one test that loads the real repo `policy.json` only asserted
+  `doesNotThrow`, never that a dial value was actually picked up.
+  Fixed: the block key and its `_note` text (goal.mjs/runner-goals/
+  "goal PAUSED" references), plus the `tui` block's `_note` referencing
+  `hooks/goal.mjs`'s kick default. New regression test in
+  `hooks/mission.test.mjs` loads the REAL repo `policy.json` (not a
+  fixture) and proves an at-ceiling mission actually gets paused via
+  the CLI `pending` path end to end, proven RED against the un-fixed
+  file first. A second, smaller real issue from the same review:
+  `.gitignore` still ignored `runner/goals/` instead of the new
+  default `runner/missions/`, meaning live mission data was no longer
+  excluded from git after the rename — fixed. Plus cosmetic cleanup
+  the review flagged (no functional effect, but the original commit
+  should have caught them): `hooks/budget.test.mjs`'s `seedGoal()` ->
+  `seedMission()`, `"s-live-nogoal"` -> `"s-live-nomission"`;
+  `guards-gui.ps1`'s `$grpGoal`/`$btnGoalDone`/`$btnGoalStop`/
+  `$btnGoalLog` -> `$grpMission`/`$btnMissionDone`/`$btnMissionStop`/
+  `$btnMissionLog`. Deliberately left alone: `mission.mjs`'s internal
+  single-letter `g` locals for "the mission object at hand" — renaming
+  dozens of one-letter occurrences carries real diff-review risk for
+  no behavioral or readability gain. Verified: full `npm test`,
+  514/515 non-skipped green (same pre-existing `lane.test.mjs` flake).
+  Lesson worth keeping: a checklist scoped to code files will miss a
+  data file that encodes the same renamed concept — the definition-
+  of-done grep needs to cover config/data files too, not just source.
 
 ## Resolved
 
