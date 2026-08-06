@@ -247,6 +247,33 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-045 [RESOLVED 2026-08-06] hooks/guard.mjs's runbox-exemption comment and deny message overclaimed under autoApprove
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (MEDIUM, documentation-only).
+- where: `hooks/guard.mjs`'s runbox-exemption comment and its
+  `protected`-path deny message.
+- what: both described "write a script into the runbox, the user reviews
+  and runs it (`/approve` or the Guards GUI)" as if that's always a real
+  human checkpoint. OI-032 (accepted risk, 2026-08-06) already
+  established — and `AGENTS.md`'s guard-enforcement section already
+  documents — that with `policy.autoApprove.enabled:true`, `clearbot`
+  auto-executes a runbox script with the user's full authority ~2s later,
+  unsupervised (demonstrated live at the time: this exact deny fired on a
+  direct edit to a protected path, and a runbox script achieved the same
+  change minutes later via auto-approve). `AGENTS.md` got the honest
+  wording; this file's own comment and the deny message a model actually
+  sees at guard-refusal time did not.
+- fix: updated both to match — "agents may not edit the rules that
+  constrain them" now reads as true of the direct-edit path specifically,
+  not as a claim about the system as a whole while autoApprove is on.
+  Docs/message-only change, no logic change.
+- verified: `hooks/guard.mjs` has no dedicated test file (confirmed via
+  search — untested legacy code, the same reason OI-032's own resolution
+  was docs-only with no test); verified via `node --check` and a full
+  `npm test` run (539 pass, 1 pre-existing unrelated failure,
+  `hooks/lane.test.mjs`'s chmod-based test).
+
 ## OI-044 [RESOLVED 2026-08-06] a genuine appendCycle failure was fully swallowed while the checkpoint/clear fired anyway
 
 - opened and resolved 2026-08-06, found by one of the three parallel
