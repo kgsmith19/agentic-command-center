@@ -196,14 +196,37 @@ export function totalTokens(a) {
   return a.input + a.cacheCreate + a.cacheRead + a.output;
 }
 
+// Full-repo review (2026-08-06): a main transcript's own subagent (Task
+// tool) runs land in a SEPARATE file, <project>/<sid>/subagents/agent-
+// *.jsonl (isSidechain=true, see this file's own header comment) -- the
+// same derivation listSessions() already uses for the weekly spending scan.
+// costOfTranscript used to read only the ONE file passed in, so a mission
+// that spent heavily entirely through subagents looked free to its own cost
+// ceiling. Derived here from the main file's own path rather than threading
+// a session id through, since the one production caller (budget.mjs's Stop
+// handler) only has p.transcript_path on hand.
+function subagentFilesFor(mainFile) {
+  const sid = path.basename(mainFile, ".jsonl");
+  const subDir = path.join(path.dirname(mainFile), sid, "subagents");
+  try {
+    return fs.readdirSync(subDir).filter((f) => f.endsWith(".jsonl")).map((f) => path.join(subDir, f));
+  } catch {
+    return [];
+  }
+}
+
 // Real per-transcript cost, reused by mission.mjs's per-run dollar ceiling
 // (Phase 1, full-remediation-prompt.md). Deliberately NOT an approximation --
 // turns()/costOf() are the exact same accounting the usage dashboard uses,
-// just summed over one file instead of a whole project scan, so a mission's
-// accumulated cost is real spend, not a rough proxy.
+// just summed over one file (plus its subagent files, see subagentFilesFor)
+// instead of a whole project scan, so a mission's accumulated cost is real
+// spend, not a rough proxy.
 export function costOfTranscript(file, rates = loadPolicy().rates) {
   const agg = emptyAgg();
   for (const t of turns(file)) addUsage(agg, t.usage, t.model, rates);
+  for (const sub of subagentFilesFor(file)) {
+    for (const t of turns(sub)) addUsage(agg, t.usage, t.model, rates);
+  }
   return { costUsd: agg.cost, tokens: totalTokens(agg) };
 }
 

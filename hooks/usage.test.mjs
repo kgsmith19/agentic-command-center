@@ -214,6 +214,43 @@ test("costOfTranscript sums real cost/tokens for ONE file, matching an independe
   assert.equal(tokens, 1000 + 500 + 2000 + 1000 + 500); // input+output+cacheRead across both turns
 });
 
+test("Full-repo review (2026-08-06) regression: costOfTranscript includes subagent spend, not just the main session's own transcript", async () => {
+  // Corroborated by the review as MEDIUM-HIGH: hooks/mission.mjs's Phase 1
+  // dollar ceiling (maxCostUsd) is fed entirely by costOfTranscript(p.
+  // transcript_path, ...) in budget.mjs's Stop handler -- but a session that
+  // spends heavily by launching subagents (the Task tool) has that spend
+  // land in a SEPARATE transcript file (<project>/<sid>/subagents/agent-
+  // *.jsonl, isSidechain=true -- see this file's own header comment and
+  // listSessions()'s subFiles derivation, already used by the weekly
+  // spending scan). costOfTranscript only ever read the ONE main file, so a
+  // mission that burned real money entirely through subagents looked
+  // completely free to its own cost ceiling -- the ceiling this file's
+  // header comment explicitly calls "real spend, not a rough proxy" was a
+  // rough proxy exactly when subagents were involved.
+  const sb = sandbox();
+  const u = await loadUsage(sb);
+  const sid = "main-with-subagents";
+  const file = path.join(sb.projects, `${sid}.jsonl`);
+  fs.writeFileSync(file, turn("2026-08-06T01:00:00.000Z", { input: 1000, out: 500 }, "claude-sonnet-5") + "\n");
+  const subDir = path.join(sb.projects, sid, "subagents");
+  fs.mkdirSync(subDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(subDir, "agent-1.jsonl"),
+    turn("2026-08-06T01:01:00.000Z", { input: 5000, out: 2000 }, "claude-sonnet-5") + "\n"
+  );
+  fs.writeFileSync(
+    path.join(subDir, "agent-2.jsonl"),
+    turn("2026-08-06T01:02:00.000Z", { input: 3000, out: 1000 }, "claude-sonnet-5") + "\n"
+  );
+  const rates = { sonnet: { in: 3, out: 15 }, unknown: { in: 3, out: 15 } };
+  const result = u.costOfTranscript(file, rates);
+  // Independent hand calc, main file: 1000*3 + 500*15 = 10500.
+  // agent-1: 5000*3 + 2000*15 = 45000; agent-2: 3000*3 + 1000*15 = 24000.
+  // Full expected total: 10500 + 45000 + 24000 = 79500 -> 0.0795.
+  assert.ok(Math.abs(result.costUsd - 0.0795) < 1e-9, `costOfTranscript must include subagent transcripts, not just the main file; expected ~0.0795, got ${result.costUsd}`);
+  assert.equal(result.tokens, (1000 + 500) + (5000 + 2000) + (3000 + 1000), "tokens must include subagent turns too");
+});
+
 test("costOfTranscript on a missing/unreadable file returns zero, not a throw", async () => {
   const sb = sandbox();
   const u = await loadUsage(sb);
