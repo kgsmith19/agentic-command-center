@@ -247,6 +247,35 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-046 [RESOLVED 2026-08-06] statePath let an unsanitized session_id escape runner/state via path traversal
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (MEDIUM, defense-in-depth).
+- where: `hooks/budget.mjs`'s `statePath()`.
+- what: the only defense against an untrusted `session_id` was a bare
+  `.slice(0, 40)` — no character filtering at all, unlike
+  `hooks/mission.mjs`'s own `safeId()` (allowlists `[A-Za-z0-9_-]`) for
+  the structurally identical problem of turning an untrusted id into a
+  filename. `p.session_id` is a Claude Code-generated UUID under normal
+  operation, but this hook trusts whatever JSON arrives on stdin — the
+  actual boundary this file sits behind. `path.join` does NOT stop `".."`
+  segments from escaping the intended directory
+  (`path.join("/a/b", "../../etc/passwd")` → `"/etc/passwd"`), so a
+  `session_id` containing `".."` could reach `fs.writeFileSync` with a
+  target entirely outside `runner/state`. Reproduced directly:
+  `statePath("../../../../etc/evil", "window")` returned
+  `"/etc/evil.window"`, nowhere near `runner/state`.
+- fix: `statePath` now applies the same `[A-Za-z0-9_-]` allowlist
+  `mission.mjs`'s `safeId` already uses, for consistency across the
+  codebase's two id-to-filename conversions.
+- verified: new test in `hooks/budget.unit.test.mjs` RED against the
+  unfixed code (the traversal payload escaped to `/etc`), GREEN after the
+  fix (19/19 in the file's own suite; the pre-existing "truncates to 40
+  chars, falls back to unknown" test is unaffected since its fixtures use
+  only safe characters). `hooks/budget.test.mjs` (the subprocess suite):
+  27/27. Full `npm test`: 539 pass, 1 pre-existing unrelated failure
+  (`hooks/lane.test.mjs`'s chmod-based test, root-sandbox limitation).
+
 ## OI-045 [RESOLVED 2026-08-06] hooks/guard.mjs's runbox-exemption comment and deny message overclaimed under autoApprove
 
 - opened and resolved 2026-08-06, found by one of the three parallel
