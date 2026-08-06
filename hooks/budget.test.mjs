@@ -176,6 +176,52 @@ test("further over-budget stops re-request the clear; the goal cycle is one-shot
   assert.equal(gm.readGoal(g.id).cycles, 1, "cycle logged exactly once across latched stops");
 });
 
+test("Phase 1: the checkpoint stop accumulates the transcript's REAL cost onto the goal, not an estimate", async () => {
+  const sb = sandbox();
+  const sid = SID(90);
+  seedWindow(sb, sid);
+  const t = writeTranscript(sb, sid, 60000); // turn() writes input:60000, output:10, model claude-opus-5
+
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_GOALS_DIR = "";
+  const g = gm.createGoal({ text: "cost tracked", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+
+  runStop(sb, { sid, transcript: t, active: false }); // block + latch
+  runStop(sb, { sid, transcript: t, active: true }); // latched stop: appendCycle fires here
+
+  // DEFAULT_POLICY.rates.opus = {in:15, out:75} (this sandbox's policy fixture
+  // carries no rates block, so usage.mjs's defaults apply): (60000*15 +
+  // 10*75) / 1e6 = 0.90075.
+  assert.ok(
+    Math.abs(gm.readGoal(g.id).totalCostUsd - 0.90075) < 1e-9,
+    `expected ~0.90075, got ${gm.readGoal(g.id).totalCostUsd}`
+  );
+});
+
+test("Phase 1: SessionStart warns instead of saying nothing when the adopted goal is paused at a ceiling", () => {
+  const sb = sandbox();
+  const sid = SID(91);
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_GOALS_DIR = "";
+  const g = gm.createGoal({ text: "will hit a ceiling", cwd: sb.root });
+  gm.bindSession({ sessionId: SID(92), consolePid: process.pid, goalId: g.id }); // any prior console
+  gm.setStatus(g.id, "paused", "CEILING REACHED: cycles (5/5 cycles)");
+
+  const out = execFileSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
+    env: {
+      ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "",
+      ACC_GOAL: g.id, ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+      CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"), CLAUDE_CODE_RUNNER: "1",
+    },
+    encoding: "utf8",
+  });
+  assert.match(out, new RegExp(`PAUSED at a ceiling`));
+  assert.match(out, /CEILING REACHED: cycles/);
+  assert.match(out, new RegExp(`resume ${g.id}`));
+});
+
 test("under hard: stop passes silently", () => {
   const sb = sandbox();
   const sid = "s-under";

@@ -193,3 +193,43 @@ test("cache entries for deleted transcripts are pruned", async () => {
   assert.equal(files.length, 1);
   assert.ok(files[0].endsWith("s1.jsonl"));
 });
+
+test("costOfTranscript sums real cost/tokens for ONE file, matching an independent hand calc (Phase 1)", async () => {
+  const sb = sandbox();
+  const u = await loadUsage(sb);
+  const file = path.join(sb.projects, "one.jsonl");
+  fs.writeFileSync(
+    file,
+    [
+      turn("2026-08-06T01:00:00.000Z", { input: 1000, out: 500 }, "claude-sonnet-5"),
+      turn("2026-08-06T01:05:00.000Z", { input: 2000, out: 1000, read: 500 }, "claude-sonnet-5"),
+    ].join("\n") + "\n"
+  );
+  const rates = { sonnet: { in: 3, out: 15 }, unknown: { in: 3, out: 15 } };
+  const { costUsd, tokens } = u.costOfTranscript(file, rates);
+  // Independent hand calc: turn1 = 1000*3 + 500*15 = 10500; turn2 = 2000*3 +
+  // 1000*15 + 500*3*0.1(cache-read mult) = 6000+15000+150 = 21150. Total
+  // 31650 / 1e6 = 0.03165.
+  assert.ok(Math.abs(costUsd - 0.03165) < 1e-9, `expected ~0.03165, got ${costUsd}`);
+  assert.equal(tokens, 1000 + 500 + 2000 + 1000 + 500); // input+output+cacheRead across both turns
+});
+
+test("costOfTranscript on a missing/unreadable file returns zero, not a throw", async () => {
+  const sb = sandbox();
+  const u = await loadUsage(sb);
+  const { costUsd, tokens } = u.costOfTranscript(path.join(sb.projects, "nope.jsonl"), { unknown: { in: 3, out: 15 } });
+  assert.equal(costUsd, 0);
+  assert.equal(tokens, 0);
+});
+
+test("costOfTranscript defaults to the live policy's rates when none are passed", async () => {
+  const sb = sandbox();
+  process.env.ACC_POLICY = path.join(sb.dir, "policy.json");
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ rates: { unknown: { in: 1, out: 1 } } }));
+  const u = await loadUsage(sb);
+  const file = path.join(sb.projects, "d.jsonl");
+  fs.writeFileSync(file, turn("2026-08-06T01:00:00.000Z", { input: 1000000 }, "some-unknown-model") + "\n");
+  const { costUsd } = u.costOfTranscript(file);
+  assert.equal(costUsd, 1); // 1,000,000 input tokens * $1/M
+  delete process.env.ACC_POLICY;
+});

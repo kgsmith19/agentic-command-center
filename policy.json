@@ -60,10 +60,13 @@
                   },
     "goals":  {
                   "autoResume":  true,
-                  "maxCycles":  0,
+                  "maxCycles":  12,
+                  "maxWallClockMinutes":  180,
+                  "maxCostUsd":  50,
+                  "onCeiling":  "pause",
                   "kickSettleSeconds":  90,
                   "humanHoldMinutes":  10,
-                  "_note":  "A goal (runner/goals/) carries work across a /clear: SessionStart adopts it by CONSOLE PID and injects it, the Stop hook logs the cycle, clearbot types a constant to restart the turn. Kyle\u0027s call 2026-07-31: unbounded - the loop ends only when the model runs \u0027goal.mjs done \u003cid\u003e\u0027 or \u0027blocked \u003cid\u003e\u0027. maxCycles 0 = no cap; set a number to stop after N continuations. A RED week tier holds all resumes regardless. Liveness (2026-07-31): a turn ending UNDER budget also re-arms the kick, so the loop no longer dies when a session simply finishes its turn - kickSettleSeconds is how long after a turn end a kick may fire, humanHoldMinutes is how long a prompt Kyle typed suppresses it (it expires, so walking away self-heals)."
+                  "_note":  "A goal (runner/goals/) carries work across a /clear: SessionStart adopts it by CONSOLE PID and injects it, the Stop hook logs the cycle, clearbot types a constant to restart the turn. Kyle\u0027s call 2026-07-31: the loop ends only when the model runs \u0027goal.mjs done \u003cid\u003e\u0027 or \u0027blocked \u003cid\u003e\u0027 -- OR one of the ceilings below pauses it first (Phase 1, full-remediation-prompt.md, 2026-08-06: policy-only fix, zero code changes needed to roll back -- set all three ceilings to 0 and the pre-Phase-1 unbounded behavior reproduces exactly). maxCycles 12 / maxWallClockMinutes 180 / maxCostUsd 50 are generous-but-real: they exist to catch ONE runaway goal, not to bound normal work -- the pre-existing week kill switch is the coarser, whole-week brake this does not replace. onCeiling is currently informational only (the mechanism is always \u0027pause\u0027; the key exists so a future stricter mode has somewhere to live without a schema change). A RED week tier holds all resumes regardless. Liveness (2026-07-31): a turn ending UNDER budget also re-arms the kick, so the loop no longer dies when a session simply finishes its turn - kickSettleSeconds is how long after a turn end a kick may fire, humanHoldMinutes is how long a prompt Kyle typed suppresses it (it expires, so walking away self-heals). A goal PAUSED at a ceiling: SessionStart warns instead of saying nothing, the status line shows \u0027goal PAUSED\u0027 while the alert is unread, and \u0027node hooks/goal.mjs resume \u003cid\u003e\u0027 re-arms it."
               },
     "autoApprove":  {
                         "enabled":  true,

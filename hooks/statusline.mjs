@@ -55,6 +55,18 @@ function agentCount(sid) {
   }
 }
 
+// Phase 1 (full-remediation-prompt.md): any unread ceiling alert shows here.
+// "Unread" = the file still exists -- goal.mjs's resumeGoal deletes it, so
+// resuming the goal is what clears the warning, no separate ack needed.
+function goalPaused() {
+  try {
+    const dir = process.env.ACC_ALERTS_DIR || path.join(ROOT, "runner", "alerts");
+    return fs.readdirSync(dir).some((f) => f.endsWith(".ceiling.json"));
+  } catch {
+    return false; // no alerts dir at all = nothing paused
+  }
+}
+
 function weekPct() {
   try {
     const t = JSON.parse(fs.readFileSync(path.join(STATE, "tier.json"), "utf8"));
@@ -86,6 +98,7 @@ function main() {
   }
 
   if (botDead()) parts.push(`${RED}bot DEAD${RESET}`);
+  if (goalPaused()) parts.push(`${RED}goal PAUSED${RESET}`);
 
   const wk = weekPct();
   if (wk) {

@@ -81,7 +81,28 @@ light of.
 
 ## Phase 1 — The loop ceiling
 
-**Status: not started**
+**Status: DONE — commit (pending, see OPEN-ISSUES.md OI-033)**
+
+Shipped 2026-08-06, as specified: `ceilingReached`/`reapCeilings`/`resumeGoal`
+in `hooks/goal.mjs`, wired into the `pending` CLI before `pendingKicks`; the
+new `resume` verb; a real (not estimated) per-goal dollar ceiling via
+`hooks/usage.mjs`'s new `costOfTranscript` (reuses the exact accounting the
+usage dashboard already uses, summed over one transcript instead of a whole
+project scan) fed into `appendCycle` from `budget.mjs`'s Stop handler;
+`statusline.mjs`'s `goal PAUSED` segment; `budget.mjs onSessionStart`'s
+paused-goal warning. `policy.json`: `maxCycles: 12`, `maxWallClockMinutes:
+180`, `maxCostUsd: 50`, `onCeiling: "pause"` — a **policy-only** change, so
+rollback is exactly as trivial as this doc specified: all three back to `0`
+reproduces today's pre-Phase-1 unbounded behavior with zero code changes.
+`ceilingReached`/`reapCeilings`/`resumeGoal`/`costOfTranscript` were built
+red-first (RED test committed alongside GREEN, per this repo's doctrine);
+`goal.mjs` covgate 100%/100%/97.7%. One honest gap found and NOT fixed here,
+tracked separately: `usage.mjs`/`budget.mjs`/`statusline.mjs` cannot
+currently clear covgate's floor at all — pre-existing (not introduced by this
+phase; `costOfTranscript` itself is fully unit-tested and covgate-visible),
+structural (subprocess-only testing for the latter two; `usage.mjs`'s
+CLI/scan surface has never had a unit suite), and is exactly what Phase 7
+below exists to fix. See OI-033.
 
 The single most evidence-backed fix in either review, and the one Tier-1 item
 from the 08-02 ROI plan that was designed and never shipped —

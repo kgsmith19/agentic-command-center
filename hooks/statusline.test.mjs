@@ -128,3 +128,16 @@ test("no heartbeat file at all does not cry wolf", () => {
   const sb = sandbox(BASE_POLICY);
   assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /bot DEAD/);
 });
+
+test("Phase 1: an unread ceiling alert shows 'goal PAUSED' on the status line", () => {
+  const sb = sandbox(BASE_POLICY);
+  const alerts = path.join(sb.root, "runner", "alerts");
+  fs.mkdirSync(alerts, { recursive: true });
+  fs.writeFileSync(path.join(alerts, "g-test.ceiling.json"), JSON.stringify({ id: "g-test" }));
+  assert.match(run(sb, writeTranscript(sb, 10000)), /goal PAUSED/);
+});
+
+test("Phase 1: no ceiling alert -> no goal PAUSED segment", () => {
+  const sb = sandbox(BASE_POLICY);
+  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /goal PAUSED/);
+});

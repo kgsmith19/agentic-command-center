@@ -524,6 +524,159 @@ test("CLI: main() prints usage for an unrecognized command", () => {
   assert.match(runMain(["frobnicate"]), /^usage: goal\.mjs/);
 });
 
+// ---------------------------------------------------------- Phase 1: ceilings
+
+test("ceilingReached: cycles-over, wall-over, dollar-over, both-under, and every dial disabled (0/missing)", async () => {
+  const { m } = await loadGoal();
+  const now = Date.now();
+  const created = (agoMin) => new Date(now - agoMin * 60000).toISOString();
+
+  const overCycles = { cycles: 5, createdAt: created(1), totalCostUsd: 0 };
+  assert.equal(m.ceilingReached(overCycles, now, { maxCycles: 5 }).reached, true);
+  assert.equal(m.ceilingReached(overCycles, now, { maxCycles: 5 }).dimension, "cycles");
+
+  const underCycles = { cycles: 4, createdAt: created(1), totalCostUsd: 0 };
+  assert.equal(m.ceilingReached(underCycles, now, { maxCycles: 5 }).reached, false);
+
+  const overWall = { cycles: 0, createdAt: created(200), totalCostUsd: 0 };
+  assert.equal(m.ceilingReached(overWall, now, { maxWallClockMinutes: 180 }).reached, true);
+  assert.equal(m.ceilingReached(overWall, now, { maxWallClockMinutes: 180 }).dimension, "wallClock");
+
+  const underWall = { cycles: 0, createdAt: created(10), totalCostUsd: 0 };
+  assert.equal(m.ceilingReached(underWall, now, { maxWallClockMinutes: 180 }).reached, false);
+
+  const overCost = { cycles: 0, createdAt: created(1), totalCostUsd: 12.5 };
+  assert.equal(m.ceilingReached(overCost, now, { maxCostUsd: 10 }).reached, true);
+  assert.equal(m.ceilingReached(overCost, now, { maxCostUsd: 10 }).dimension, "cost");
+
+  const underCost = { cycles: 0, createdAt: created(1), totalCostUsd: 2 };
+  assert.equal(m.ceilingReached(underCost, now, { maxCostUsd: 10 }).reached, false);
+
+  // Every dial 0/missing (today's unbounded default) never reports reached,
+  // whatever the goal's own numbers are.
+  const huge = { cycles: 999, createdAt: created(999999), totalCostUsd: 999999 };
+  assert.equal(m.ceilingReached(huge, now, {}).reached, false);
+  assert.equal(m.ceilingReached(huge, now, { maxCycles: 0, maxWallClockMinutes: 0, maxCostUsd: 0 }).reached, false);
+});
+
+test("reapCeilings: transitions an over-ceiling ACTIVE goal to paused with an alert file; leaves an under-ceiling one alone", async () => {
+  const { m, dir } = await loadGoal();
+  const alerts = path.join(dir, "alerts");
+  process.env.ACC_ALERTS_DIR = alerts;
+  try {
+    const over = m.createGoal({ text: "runaway" });
+    m.bindSession({ sessionId: SID(50), consolePid: LIVE, goalId: over.id });
+    for (let i = 0; i < 5; i++) m.appendCycle(over.id, { sessionId: SID(50), ctx: 1000, text: "cycle" });
+    assert.equal(m.readGoal(over.id).cycles, 5);
+
+    const under = m.createGoal({ text: "fine" });
+    m.bindSession({ sessionId: SID(51), consolePid: LIVE, goalId: under.id });
+
+    const reaped = m.reapCeilings(Date.now(), { maxCycles: 5 });
+    assert.deepEqual(reaped, [over.id]);
+    assert.equal(m.readGoal(over.id).status, "paused");
+    assert.match(m.readGoal(over.id).why, /CEILING REACHED.*cycles/);
+    assert.equal(m.readGoal(under.id).status, "active", "a goal under every ceiling is untouched");
+
+    const alertFile = path.join(alerts, `${over.id}.ceiling.json`);
+    assert.ok(fs.existsSync(alertFile), "an alert file is written for the paused goal");
+    const alert = JSON.parse(fs.readFileSync(alertFile, "utf8"));
+    assert.equal(alert.id, over.id);
+    assert.equal(alert.dimension, "cycles");
+
+    // A paused goal must not be kickable — pendingKicks reads only activeGoals().
+    // The still-active "fine" goal legitimately remains kickable, so assert
+    // on membership, not on the whole list being empty.
+    const kickable = m.pendingKicks(Date.now() + 999999).map((k) => k.id);
+    assert.ok(!kickable.includes(over.id), "the paused goal must not appear in pendingKicks");
+    assert.ok(kickable.includes(under.id), "the still-active goal remains kickable");
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
+test("reapCeilings does nothing when every dial is disabled (today's default, unchanged behavior)", async () => {
+  const { m, dir } = await loadGoal();
+  process.env.ACC_ALERTS_DIR = path.join(dir, "alerts");
+  try {
+    const g = m.createGoal({ text: "t" });
+    m.bindSession({ sessionId: SID(52), consolePid: LIVE, goalId: g.id });
+    for (let i = 0; i < 50; i++) m.appendCycle(g.id, { sessionId: SID(52), ctx: 1, text: "x" });
+    assert.deepEqual(m.reapCeilings(Date.now(), {}), []);
+    assert.equal(m.readGoal(g.id).status, "active");
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
+test("resumeGoal: paused -> active, re-arms needsKick, clears the alert file; refuses a non-paused goal", async () => {
+  const { m, dir } = await loadGoal();
+  const alerts = path.join(dir, "alerts");
+  process.env.ACC_ALERTS_DIR = alerts;
+  try {
+    const g = m.createGoal({ text: "t" });
+    m.bindSession({ sessionId: SID(53), consolePid: LIVE, goalId: g.id });
+    m.reapCeilings(Date.now(), { maxCycles: 0 }); // no-op, dial disabled
+    m.setStatus(g.id, "paused", "CEILING REACHED: cycles (test)");
+    fs.mkdirSync(alerts, { recursive: true });
+    fs.writeFileSync(path.join(alerts, `${g.id}.ceiling.json`), "{}");
+
+    const resumed = m.resumeGoal(g.id);
+    assert.equal(resumed.status, "active");
+    assert.equal(resumed.needsKick, true);
+    assert.equal(fs.existsSync(path.join(alerts, `${g.id}.ceiling.json`)), false, "the alert is cleared on resume");
+
+    // An active (non-paused) goal cannot be "resumed" — refuse, don't corrupt it.
+    assert.equal(m.resumeGoal(g.id), null);
+    // A nonexistent id also refuses cleanly.
+    assert.equal(m.resumeGoal("g-nope"), null);
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
+test("CLI: main() 'resume <id>' unpauses a goal; refuses without a resolvable id", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(54), consolePid: LIVE, goalId: g.id });
+  m.setStatus(g.id, "paused", "test pause");
+  assert.equal(runMain(["resume", g.id]), `goal ${g.id} -> active`);
+  assert.equal(m.readGoal(g.id).status, "active");
+
+  assert.equal(runMain(["resume", "g-nope"]), "goal g-nope could not be resumed (not paused, or does not exist)");
+});
+
+test("appendCycle accumulates totalCostUsd across cycles when a cost is passed, and tolerates none being passed", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.appendCycle(g.id, { sessionId: SID(55), ctx: 100, text: "c1", costUsd: 0.5 });
+  assert.equal(m.readGoal(g.id).totalCostUsd, 0.5);
+  m.appendCycle(g.id, { sessionId: SID(55), ctx: 200, text: "c2", costUsd: 1.25 });
+  assert.equal(m.readGoal(g.id).totalCostUsd, 1.75);
+  m.appendCycle(g.id, { sessionId: SID(55), ctx: 300, text: "c3" }); // no costUsd passed
+  assert.equal(m.readGoal(g.id).totalCostUsd, 1.75, "an omitted cost does not corrupt the running total");
+});
+
+test("CLI: main() 'pending' calls reapCeilings before pendingKicks, using the same policy dials", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(56), consolePid: LIVE, goalId: g.id });
+  for (let i = 0; i < 20; i++) m.appendCycle(g.id, { sessionId: SID(56), ctx: 1, text: "x" });
+
+  const savedPolicy = process.env.ACC_POLICY;
+  const savedAlerts = process.env.ACC_ALERTS_DIR;
+  const polPath = path.join(GOALS_DIR, "pending-ceiling-policy.json");
+  process.env.ACC_POLICY = polPath;
+  process.env.ACC_ALERTS_DIR = path.join(GOALS_DIR, "alerts");
+  fs.writeFileSync(polPath, JSON.stringify({ goals: { maxCycles: 3 } }));
+  try {
+    const printed = JSON.parse(runMain(["pending"]));
+    assert.deepEqual(printed, [], "a goal reaped to paused by THIS SAME pending call must not be kicked");
+    assert.equal(m.readGoal(g.id).status, "paused");
+  } finally {
+    if (savedPolicy === undefined) delete process.env.ACC_POLICY; else process.env.ACC_POLICY = savedPolicy;
+    if (savedAlerts === undefined) delete process.env.ACC_ALERTS_DIR; else process.env.ACC_ALERTS_DIR = savedAlerts;
+  }
+});
+
 test("a goal persists correctly after its directory is moved to a new location", async () => {
   const { m, dir } = await loadGoal();
 

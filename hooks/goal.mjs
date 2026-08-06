@@ -42,6 +42,13 @@ export function goalsDir() {
 function doneDir() {
   return path.join(goalsDir(), "done");
 }
+// Phase 1 (full-remediation-prompt.md): where reapCeilings writes a
+// <id>.ceiling.json when a goal pauses at a ceiling, for statusline.mjs and
+// budget.mjs to notice. Same env-override pattern as ACC_GOALS_DIR, for the
+// same reason -- test hermeticity.
+function alertsDir() {
+  return process.env.ACC_ALERTS_DIR || path.join(root(), "runner", "alerts");
+}
 
 // A kick is only sent once the binding has had time to settle. SessionStart runs
 // before the TUI is ready to accept input, so firing the instant a goal binds
@@ -186,6 +193,7 @@ export function createGoal({ text, cwd, profile }) {
     consolePid: 0,
     sessionId: "",
     cycles: 0,
+    totalCostUsd: 0,
     needsKick: false,
     boundAt: "",
     lastKickAt: "",
@@ -240,10 +248,16 @@ export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   return write(goal);
 }
 
-export function appendCycle(id, { sessionId, ctx, text }) {
+export function appendCycle(id, { sessionId, ctx, text, costUsd }) {
   const goal = readGoal(id);
   if (!goal) return null;
   goal.cycles = Number(goal.cycles || 0) + 1;
+  // Phase 1: real per-cycle cost (budget.mjs computes it via usage.mjs's
+  // costOfTranscript before calling this), accumulated for the dollar
+  // ceiling. Omitted/non-finite is treated as 0 -- an unpriced cycle must
+  // never corrupt the running total into NaN.
+  const add = Number.isFinite(costUsd) ? costUsd : 0;
+  goal.totalCostUsd = Number(goal.totalCostUsd || 0) + add;
   write(goal);
   const body = String(text || "").trim().slice(0, 4000);
   try {
@@ -316,6 +330,70 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     .filter((g) => !g.humanPromptAt || now - Date.parse(g.humanPromptAt) >= holdMs)
     .filter((g) => !g.lastKickAt || now - Date.parse(g.lastKickAt) >= KICK_COOLDOWN_MS)
     .map((g) => ({ id: g.id, consolePid: g.consolePid, cycles: g.cycles, sessionId: g.sessionId }));
+}
+
+// Phase 1 (full-remediation-prompt.md) -- the loop ceiling. policy.json's
+// goals.maxCycles was still 0 (unbounded) after the original 08-02 design
+// specified this exact mechanism and it was never shipped; "the single most
+// evidence-backed fix in either review." 0/missing on any dial disables that
+// dimension, which is what makes today's unbounded default reproduce exactly
+// when every dial is left at 0 -- pure opt-in tightening, no behavior change
+// until Kyle sets a real number.
+export function ceilingReached(goal, now = Date.now(), dials = {}) {
+  const maxCycles = Number(dials.maxCycles || 0);
+  if (maxCycles > 0 && Number(goal.cycles || 0) >= maxCycles) {
+    return { reached: true, dimension: "cycles", detail: `${goal.cycles}/${maxCycles} cycles` };
+  }
+  const maxWallClockMinutes = Number(dials.maxWallClockMinutes || 0);
+  if (maxWallClockMinutes > 0) {
+    const elapsedMin = (now - Date.parse(goal.createdAt)) / 60000;
+    if (elapsedMin >= maxWallClockMinutes) {
+      return { reached: true, dimension: "wallClock", detail: `${Math.round(elapsedMin)}/${maxWallClockMinutes} min` };
+    }
+  }
+  const maxCostUsd = Number(dials.maxCostUsd || 0);
+  if (maxCostUsd > 0 && Number(goal.totalCostUsd || 0) >= maxCostUsd) {
+    return { reached: true, dimension: "cost", detail: `$${Number(goal.totalCostUsd).toFixed(2)}/$${maxCostUsd}` };
+  }
+  return { reached: false, dimension: null, detail: "" };
+}
+
+// Called at the top of the `pending` CLI, before pendingKicks -- a goal this
+// call itself just paused must not be kicked by the SAME call, which is why
+// this runs first rather than being folded into pendingKicks's own filters.
+export function reapCeilings(now = Date.now(), dials = {}) {
+  const paused = [];
+  for (const g of activeGoals()) {
+    const verdict = ceilingReached(g, now, dials);
+    if (!verdict.reached) continue;
+    setStatus(g.id, "paused", `CEILING REACHED: ${verdict.dimension} (${verdict.detail})`);
+    try {
+      fs.mkdirSync(alertsDir(), { recursive: true });
+      fs.writeFileSync(
+        path.join(alertsDir(), `${safeId(g.id)}.ceiling.json`),
+        JSON.stringify({ id: g.id, dimension: verdict.dimension, detail: verdict.detail, at: nowIso() }, null, 2) + "\n"
+      );
+    } catch {}
+    paused.push(g.id);
+  }
+  return paused;
+}
+
+// The `resume`/`unpause` CLI verb's implementation. Only a genuinely paused
+// goal can be resumed -- resuming an active goal (or a nonexistent id) is
+// refused rather than silently no-op'd, so a caller can tell success from
+// "there was nothing to do".
+export function resumeGoal(id) {
+  const goal = readGoal(id);
+  if (!goal || goal.status !== "paused") return null;
+  goal.status = "active";
+  goal.needsKick = true;
+  goal.why = "";
+  write(goal);
+  try {
+    fs.rmSync(path.join(alertsDir(), `${safeId(id)}.ceiling.json`), { force: true });
+  } catch {}
+  return goal;
 }
 
 // Called from the Stop hook on every turn end of a goal session that did NOT go
@@ -392,6 +470,7 @@ export function main() {
     // Dials live in policy.json so they can be tuned without a restart; a
     // missing or broken policy just uses the defaults (fail open).
     let dials = {};
+    let ceilingDials = {};
     try {
       const pol = JSON.parse(
         fs.readFileSync(process.env.ACC_POLICY || path.join(root(), "policy.json"), "utf8")
@@ -401,8 +480,22 @@ export function main() {
         humanHoldMinutes: pol?.goals?.humanHoldMinutes,
         tuiReadySettleMs: pol?.tui?.readySettleMs,
       };
+      ceilingDials = {
+        maxCycles: pol?.goals?.maxCycles,
+        maxWallClockMinutes: pol?.goals?.maxWallClockMinutes,
+        maxCostUsd: pol?.goals?.maxCostUsd,
+      };
     } catch {}
+    // Phase 1: a goal THIS SAME call just paused must not be kicked below --
+    // reap runs first, so pendingKicks's activeGoals() read never sees it.
+    reapCeilings(Date.now(), ceilingDials);
     console.log(JSON.stringify(pendingKicks(Date.now(), dials)));
+    return;
+  }
+  if (cmd === "resume") {
+    const id = resolveId(argv);
+    const g = id ? resumeGoal(id) : null;
+    console.log(g ? `goal ${id} -> active` : `goal ${id || "(no id given)"} could not be resumed (not paused, or does not exist)`);
     return;
   }
   if (cmd === "kicked") {
@@ -433,7 +526,7 @@ export function main() {
     return;
   }
   console.log(
-    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
+    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | resume [id] | pending | kicked [id] | reap"
   );
 }
 

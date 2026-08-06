@@ -23,6 +23,34 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-033 usage.mjs/budget.mjs/statusline.mjs cannot clear covgate's floor today
+- opened: 2026-08-06, found while shipping Phase 1 (docs/2026-08-03-full-
+  remediation-prompt.md) — NOT introduced by that work, pre-existing.
+- where: `hooks/usage.mjs`, `hooks/budget.mjs`, `hooks/statusline.mjs`
+- what: `budget.mjs`/`statusline.mjs` measure 0% ("no test imports it") —
+  both are single-dispatch hook binaries only ever exercised via
+  `execFileSync` subprocess spawns (their own test files' own comments
+  explain why: `NODE_V8_COVERAGE` is deliberately stripped from those
+  spawns so their volume doesn't degrade an unrelated gated file's merged
+  branch coverage — confirmed 2026-08-02). `usage.mjs` measures ~44%
+  lines/24% funcs even combined with several other test files' imports —
+  its CLI dispatch (`main()`) and whole-project `scan()`/`aggregateSession`
+  path have no direct unit suite, only indirect exercise through whatever
+  individual functions other files' tests happen to call.
+- why open: this is precisely Phase 7 of the full-remediation-prompt
+  ("Coverage-gate honesty" — "Un-blind budget.mjs... Restructure so at
+  least the pure logic... is importable and measured") — not something to
+  half-fix as a side effect of an unrelated phase. Phase 1 added
+  `usage.mjs`'s `costOfTranscript` fully unit-tested (3 dedicated tests,
+  confirmed covgate-visible and covered in isolation) and touched
+  `budget.mjs`/`statusline.mjs` with the SAME subprocess-integration test
+  pattern every other line in those files already uses — this entry is not
+  about anything shipped without a test, only about `node hooks/covgate.mjs`
+  being structurally unable to confirm it for these three files.
+- done when: Phase 7 lands (parseLcov merge fix, budget.mjs restructured so
+  its pure logic is importable, `engine.test.mjs` added) and
+  `node hooks/covgate.mjs` genuinely gates all three files on a normal diff.
+
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
   `powershell.exe` (unlike when this entry was opened). Added

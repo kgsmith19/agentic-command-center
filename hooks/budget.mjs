@@ -13,8 +13,8 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd } from "./goal.mjs";
+import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain, costOfTranscript } from "./usage.mjs";
+import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, readGoal, listGoals } from "./goal.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
@@ -320,6 +320,23 @@ const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt.
 // the work is finished, so the two exit commands are stated as the last thing in
 // the block, in full, with the id already substituted - there is no id to look
 // up and no ambiguity about what "done" means.
+// Phase 1: bindSession only finds ACTIVE goals, so a goal paused at a
+// ceiling produces no goal context at all -- silently, from this session's
+// point of view, since it never got as far as being told why. This is the
+// definition-of-done's explicit ask: warn instead of saying nothing.
+// Checked by ACC_GOAL first (a fresh launch aimed straight at a specific
+// goal), then by consolePid (the resume-after-clear path, since a paused
+// goal keeps the consolePid it had when it paused).
+function pausedGoalWarning(p, win) {
+  const wanted = process.env.ACC_GOAL || "";
+  const pid = win && win.consolePid;
+  const paused = listGoals().find(
+    (g) => g.status === "paused" && (wanted ? g.id === wanted : pid && Number(g.consolePid) === Number(pid))
+  );
+  if (!paused) return "";
+  return `[ACC GOAL ${paused.id}] PAUSED at a ceiling (${paused.why || "reason not recorded"}). This session was NOT resumed for it. Review the goal (\`node C:/code/guards/hooks/goal.mjs show ${paused.id}\`) and, if the work should continue, run \`node C:/code/guards/hooks/goal.mjs resume ${paused.id}\`.`;
+}
+
 function goalContext(p, win, policy) {
   const goal = bindSession({
     sessionId: p.session_id,
@@ -448,6 +465,10 @@ function onSessionStart(p, policy) {
   try {
     const goal = goalContext(p, win, policy);
     if (goal) lines.push(goal);
+    else {
+      const paused = pausedGoalWarning(p, win);
+      if (paused) lines.push(paused);
+    }
   } catch {}
   try {
     const queued = queuedPromptContext(win);
@@ -617,7 +638,11 @@ function onStop(p, policy) {
     goal = goalForSession(p.session_id);
     const cycled = statePath(p.session_id, "cycled");
     if (goal && !fs.existsSync(cycled)) {
-      appendCycle(goal.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path) });
+      // Phase 1: real cost for THIS session's transcript, for the goal's
+      // dollar ceiling. costOfTranscript never throws (empty/unreadable file
+      // -> {costUsd:0}), so this can't cost the checkpoint its clean exit.
+      const { costUsd } = p.transcript_path ? costOfTranscript(p.transcript_path, policy.rates) : { costUsd: 0 };
+      appendCycle(goal.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path), costUsd });
       fs.writeFileSync(cycled, "1");
     }
   } catch {}
