@@ -23,6 +23,17 @@ test("absent policy file yields the defaults", () => {
   assert.equal(loadKernelPolicy().budget.wallClockMin, KERNEL_DEFAULTS.budget.wallClockMin);
 });
 
+// OI-019 scenario-enumeration pass: a policy.json that EXISTS and parses
+// fine, but simply has no "kernel" key at all -- the real first-time-setup
+// case (a policy.json that predates the kernel feature, or one only ever
+// used for the non-kernel hooks), distinct from the missing-file case
+// above. Not a bug (verified correct beforehand), but was untested.
+test("a present policy file with no 'kernel' key at all also yields the defaults", () => {
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ context: { softK: 100 } }));
+  assert.equal(loadKernelPolicy().budget.wallClockMin, KERNEL_DEFAULTS.budget.wallClockMin);
+  assert.equal(loadKernelPolicy().autonomy.window, KERNEL_DEFAULTS.autonomy.window);
+});
+
 test("a policy edit applies to the NEXT call with no restart (AC-G9, AC-U2)", () => {
   writePolicy({ budget: { toolCalls: 7 } });
   assert.equal(loadKernelPolicy().budget.toolCalls, 7);
@@ -131,4 +142,17 @@ test("an invalid block is rejected atom-for-atom: throws, file byte-identical", 
 test("saveKernelPolicy with no policy file fails closed instead of inventing one", () => {
   fs.rmSync(process.env.ACC_POLICY, { force: true });
   assert.throws(() => saveKernelPolicy(goodBlock()), /cannot edit/);
+});
+
+// OI-019 scenario-enumeration pass: the file EXISTS (so saveKernelPolicy
+// doesn't fail closed above) but has no "kernel" key yet -- first-time
+// kernel setup through the GUI settings tab (OI-022), distinct from the
+// no-file case. Not a bug (verified correct beforehand), but was untested.
+test("saveKernelPolicy creates the kernel block fresh when the file exists but has no kernel key yet", () => {
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ context: { softK: 100 } }));
+  const saved = saveKernelPolicy(goodBlock());
+  assert.equal(saved.harness, "claude-code");
+  const onDisk = JSON.parse(fs.readFileSync(process.env.ACC_POLICY, "utf8"));
+  assert.equal(onDisk.kernel.harness, "claude-code");
+  assert.equal(onDisk.context.softK, 100, "the pre-existing non-kernel block survives");
 });

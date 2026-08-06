@@ -345,8 +345,22 @@ line under `## Resolved`.
   can never reach `updateAfterRun` as `0` in practice (schema-validated to
   `(0, 1]` in `kernel/policy.mjs`), so the permanent-tightening edge case
   that value would cause is unreachable, not a live bug.
-  Progress: 6/12 modules done. Remaining, in rough risk order:
-  `kernel/policy.mjs`, `kernel/contract.mjs`,
+  `kernel/policy.mjs` pass (2026-08-06): no bug found — enumerated the
+  first-time-kernel-setup scenario (a policy.json that EXISTS and parses
+  fine but has no `"kernel"` key at all yet, distinct from the
+  already-tested missing-file case) for both `loadKernelPolicy` (falls
+  back to defaults, verified correct beforehand) and `saveKernelPolicy`
+  (creates the kernel block fresh, preserves the pre-existing non-kernel
+  content, verified correct beforehand) — both already worked, just
+  hadn't been pinned by a test, and this is the exact path OI-022's GUI
+  settings tab exercises the first time anyone configures the kernel.
+  Everything else already had strong coverage (every `validateKernelBlock`
+  rejection case individually tested, atomic-reject-on-invalid tested, BOM
+  handling tested, corrupt-file-throws tested). Verified: `node --test
+  kernel/policy.test.mjs` (14/14), `node hooks/covgate.mjs` (policy.mjs
+  100%/100%/98.1%, up from 90.4%).
+  Progress: 7/12 modules done. Remaining, in rough risk order:
+  `kernel/contract.mjs`,
   `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
