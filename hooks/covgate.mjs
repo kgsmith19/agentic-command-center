@@ -182,7 +182,7 @@ function main() {
   // the REAL guards/hooks tests while gating a throwaway fixture.
   const tests = process.env.ACC_COVGATE_TESTS
     ? process.env.ACC_COVGATE_TESTS.split(/[ ,]+/).filter(Boolean)
-    : ["hooks", "runner", "kernel", "kernel/adapters", "gui", "tools"].flatMap((d) => {
+    : ["hooks", "runner", "kernel", "kernel/adapters", "gui", "tools", "core"].flatMap((d) => {
         let files = [];
         try { files = fs.readdirSync(path.join(cwd, d)).filter((f) => f.endsWith(".test.mjs")); } catch {}
         return files.map((f) => path.join(d, f));

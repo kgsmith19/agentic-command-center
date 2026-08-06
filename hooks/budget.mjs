@@ -14,12 +14,12 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, activeGoals } from "./goal.mjs";
+import { bindSession, appendCycle, logTail, standingForSession, recordTurnEnd, activeStanding } from "../core/standing.mjs";
 import { buildConsoleTable } from "./consoletable.mjs";
 import { resolve } from "../core/paths.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
+// ACC_ROOT redirects every runner/ path (state, logs, standing orders, clear-requests) at a
 // throwaway tree. It exists so the tests can exercise THIS file instead of a
 // copy: a test that reset the live runner/state would delete the .window files
 // running sessions depend on, which is precisely how auto-clear died once.
@@ -27,7 +27,7 @@ const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.re
 const STATE = path.join(ROOT, "runner", "state");
 const LOGS = path.join(ROOT, "runner", "logs");
 const CLEARREQ = path.join(ROOT, "runner", "clear-requests");
-const GOALSDIR = path.join(ROOT, "runner", "goals");
+const STANDINGDIR = path.join(ROOT, "runner", "standing");
 const QUEUEDIR = path.join(ROOT, "runner", "queued");
 const HEADLESS = process.env.CLAUDE_CODE_RUNNER === "1";
 
@@ -89,7 +89,7 @@ function ensureClearbot() {
 }
 
 // SELF-HEALING (guards OI-007): the watcher is the only thing that can clear or
-// resume a session, and when it dies the goal loop dies silently with it. A
+// resume a session, and when it dies the standing order loop dies silently with it. A
 // turn boundary is exactly where that matters, so check there: one stat, and
 // ensureClearbot() is idempotent (start-clearbot.cmd no-ops when a watcher is
 // already up) and still honours the deliberate kill switch. A MISSING heartbeat
@@ -310,11 +310,11 @@ function lastUserText(transcript) {
 
 // Exactly the constants clearbot types (watcher/clearbot.ps1 $KICK and
 // $QUEUEKICK). Anything else came from a human, so the kick backs off.
-const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt."];
+const KICK_CONSTANTS = ["Continue the active ACC standing order.", "Run the queued prompt."];
 
 // ------------------------------------------------------------- handlers
 
-// Bind this session to the goal that owns its console (or the one the Command
+// Bind this session to the standing order that owns its console (or the one the Command
 // Center launched it for) and hand the model everything it needs to carry on
 // without a human retyping anything.
 //
@@ -322,45 +322,45 @@ const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt.
 // the work is finished, so the two exit commands are stated as the last thing in
 // the block, in full, with the id already substituted - there is no id to look
 // up and no ambiguity about what "done" means.
-function goalContext(p, win, policy) {
-  const goal = bindSession({
+function standingContext(p, win, policy) {
+  const standing = bindSession({
     sessionId: p.session_id,
     consolePid: win && win.consolePid,
     cwd: p.cwd,
-    goalId: process.env.ACC_GOAL || "",
-    consoles: buildConsoleTable(win, { activeGoals, execFileSync, here: HERE }),
+    standingId: process.env.ACC_STANDING || "",
+    consoles: buildConsoleTable(win, { activeStanding, execFileSync, here: HERE }),
   });
-  if (!goal) return "";
+  if (!standing) return "";
 
-  const cycle = Number(goal.cycles || 0);
+  const cycle = Number(standing.cycles || 0);
   const head =
     cycle === 0
-      ? `[ACC GOAL ${goal.id}] The Command Center started this session to do the following. Begin work on it now.`
-      : `[ACC GOAL ${goal.id}] RESUMED - this is continuation ${cycle + 1}. The previous session hit the context budget and was cleared; you are the same work, not a new task. Pick up where the progress log stops.`;
+      ? `[ACC STANDING ${standing.id}] The Command Center started this session to do the following. Begin work on it now.`
+      : `[ACC STANDING ${standing.id}] RESUMED - this is continuation ${cycle + 1}. The previous session hit the context budget and was cleared; you are the same work, not a new task. Pick up where the progress log stops.`;
 
-  const parts = [head, "", goal.text, ""];
-  if (goal.cwd) parts.push(`Working folder: ${goal.cwd}`);
+  const parts = [head, "", standing.text, ""];
+  if (standing.cwd) parts.push(`Working folder: ${standing.cwd}`);
   if (cycle > 0) {
     parts.push(
       "",
-      `Progress so far (from ${path.join(GOALSDIR, goal.id + ".log.md")}, most recent last):`,
+      `Progress so far (from ${path.join(STANDINGDIR, standing.id + ".log.md")}, most recent last):`,
       "",
-      logTail(goal.id, 3000).trim()
+      logTail(standing.id, 3000).trim()
     );
   }
   parts.push(
     "",
-    `[ACC GOAL] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
-    `  - finished, everything verified:  node ${resolve("hooks/goal.mjs")} done ${goal.id}`,
-    `  - genuinely blocked on a human:   node ${resolve("hooks/goal.mjs")} blocked ${goal.id} --why "<one line>"`,
-    `Until one of those runs, ACC will keep resuming this goal after every clear.`
+    `[ACC STANDING] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
+    `  - finished, everything verified:  node ${resolve("core/standing.mjs")} done ${standing.id}`,
+    `  - genuinely blocked on a human:   node ${resolve("core/standing.mjs")} blocked ${standing.id} --why "<one line>"`,
+    `Until one of those runs, ACC will keep resuming this standing order after every clear.`
   );
   return parts.join("\n");
 }
 
 // A prompt that route.mjs could not hand back as keystrokes - multi-line, or
 // longer than the injector's limit. It travels as a FILE keyed by console pid
-// (the same thread of continuity goals use, because the session id dies with the
+// (the same thread of continuity standing orders use, because the session id dies with the
 // clear) and is injected here, into the session that comes up after the clear.
 //
 // Consumed once: the file is deleted as it is read, so a queued prompt can never
@@ -405,12 +405,12 @@ function onSessionStart(p, policy) {
   } catch {}
   // Interactive only: learn which terminal window to type /clear into later.
   let win = null;
-  // A capture that blips must not cost the session its goal or its queued
+  // A capture that blips must not cost the session its standing order or its queued
   // prompt: both are addressed by console pid, and a previously recorded one is
   // still the right console. Fall back to what was written last time.
   if (!HEADLESS) {
     // An ACC-hosted pty session has no HWND to find: the GUI is the terminal.
-    // The persistent process across /clear (what consolePid means to goal
+    // The persistent process across /clear (what consolePid means to standing order
     // binding) is the claude process - NOT this hook's raw parent, which is a
     // transient bash/cmd wrapper that dies with the turn (recording it gave
     // clearbot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
@@ -444,13 +444,13 @@ function onSessionStart(p, policy) {
       `[ACC] Profile: ${policy.activeProfile} (launched from the Command Center). Its subagent rules apply to this session; the context budget comes from the Process-tab dials.`
     );
   }
-  // A goal is what makes this session a continuation rather than a fresh start.
+  // A standing order is what makes this session a continuation rather than a fresh start.
   // It is adopted by CONSOLE, so this fires identically on the launch and on
   // every session that comes up after a /clear. Failing here costs auto-resume
   // and nothing else - hooks fail open.
   try {
-    const goal = goalContext(p, win, policy);
-    if (goal) lines.push(goal);
+    const standing = standingContext(p, win, policy);
+    if (standing) lines.push(standing);
   } catch {}
   try {
     const queued = queuedPromptContext(win);
@@ -458,7 +458,7 @@ function onSessionStart(p, policy) {
   } catch {}
 
   // If the watcher is down, this session has no auto-clear and no auto-resume.
-  // Say it once, at the top, instead of letting the goal loop fail silently.
+  // Say it once, at the top, instead of letting the standing order loop fail silently.
   try {
     const hb = path.join(ROOT, "watcher", "clearbot.heartbeat");
     if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
@@ -580,13 +580,13 @@ function onStop(p, policy) {
   const ctx = contextOf(p.transcript_path);
   const { hardK } = policy.context;
   if (ctx < hardK * 1000) {
-    // LIVENESS (guards OI-002): a goal session that ends its turn UNDER the
+    // LIVENESS (guards OI-002): a standing order session that ends its turn UNDER the
     // ceiling gets no clear, and therefore no resume - the loop used to die
-    // right here, silently. Re-arm the kick and let goal.mjs decide when
+    // right here, silently. Re-arm the kick and let standing order.mjs decide when
     // firing it is safe. Fails open: liveness must never cost a turn its
     // clean exit.
     try {
-      const g = goalForSession(p.session_id);
+      const g = standingForSession(p.session_id);
       if (g) recordTurnEnd(g.id, { human: !KICK_CONSTANTS.includes(lastUserText(p.transcript_path)) });
     } catch {}
     allow();
@@ -607,20 +607,20 @@ function onStop(p, policy) {
   }
 
   // Latched: the checkpoint turn is done. Budget WINS from here (OI-011): a
-  // /goal Stop hook may keep blocking the turn, so this path must fire on
+  // /standing order Stop hook may keep blocking the turn, so this path must fire on
   // every Stop until the clear actually lands - stop_hook_active no longer
   // short-circuits it. appendCycle is one-shot so blocked loops don't spam.
   if (HEADLESS) allow(); // the runner relaunch IS the clear
 
-  // If a goal owns this session, its closing summary IS the handoff to the next
+  // If a standing order owns this session, its closing summary IS the handoff to the next
   // continuation. Captured automatically from the checkpoint turn the block above
   // just forced, so the model carries no extra burden and cannot forget to do it.
-  let goal = null;
+  let standing = null;
   try {
-    goal = goalForSession(p.session_id);
+    standing = standingForSession(p.session_id);
     const cycled = statePath(p.session_id, "cycled");
-    if (goal && !fs.existsSync(cycled)) {
-      appendCycle(goal.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path) });
+    if (standing && !fs.existsSync(cycled)) {
+      appendCycle(standing.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path) });
       fs.writeFileSync(cycled, "1");
     }
   } catch {}
@@ -638,9 +638,9 @@ function onStop(p, policy) {
             `    node ${resolve("hooks/budget.mjs")} clearbot-status\n`
           : `\n    >>> TYPE /clear NOW <<<\n\n` +
             `  (auto-clear unavailable - no window captured for this session)\n`) +
-        (goal
-          ? `  Goal ${goal.id} is active - the next session adopts it automatically and\n` +
-            `  is resumed by the Command Center. Cycle ${goal.cycles} logged.\n`
+        (standing
+          ? `  Standing order ${standing.id} is active - the next session adopts it automatically and\n` +
+            `  is resumed by the Command Center. Cycle ${standing.cycles} logged.\n`
           : `  The next session re-primes itself from ${policy.runner.statusFile}.\n`) +
         `  Verify the clear was real: node ${resolve("hooks/usage.mjs")} clears\n`,
     })

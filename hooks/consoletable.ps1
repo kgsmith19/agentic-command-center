@@ -5,7 +5,7 @@
 # Unlike clearbot.ps1's per-cycle table (a full process enumeration, cheap when
 # amortised over the watcher's continuous loop), SessionStart only needs to
 # know about a handful of specific pids - the console it just resolved plus
-# every currently-bound goal's console - so this checks exactly those, by id,
+# every currently-bound standing order's console - so this checks exactly those, by id,
 # rather than enumerating every process on the machine.
 #
 # A pid that does not exist, or whose StartTime cannot be read (AccessDenied),

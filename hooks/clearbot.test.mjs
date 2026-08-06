@@ -23,7 +23,7 @@ const REPO = path.resolve(HERE, "..");
 
 // Every powershell/cmd child this suite spawns below inherits process.env
 // unmodified (none pass an explicit `env:`), and clearbot.ps1 itself shells
-// out to `node hooks/goal.mjs` / `usage.mjs` / `engine.mjs` repeatedly per
+// out to `node core/standing.mjs` / `usage.mjs` / `engine.mjs` repeatedly per
 // -Once pass — so under `node hooks/covgate.mjs` (coverage-instrumented),
 // every one of those nested node invocations would inherit and dump into
 // the real run's live NODE_V8_COVERAGE directory WHILE it is still being
@@ -173,7 +173,7 @@ test("an off-table cd destination is refused and never typed", () => {
 
 // guards OI-003: the non-clear /cd settle used to be a hardcoded 1200ms that
 // failed a real-token repro; it now reads policy.json's tui.readySettleMs
-// (watcher/clearbot.ps1 Get-TuiReadyMs), the same dial hooks/goal.mjs's kick
+// (watcher/clearbot.ps1 Get-TuiReadyMs), the same dial core/standing.mjs's kick
 // delay falls back to. Get-AllowedPaths needs a real ROUTING.md match to let
 // a cd through at all, so this is the one test in the file that also needs
 // the ACC_ROUTING_MD override (mirrors hooks/route.mjs's own override) -
@@ -420,12 +420,12 @@ test("OI-009: a pty window never confirmed alive is not falsely flagged as a dea
 });
 
 // OI-034, Task 5: clearbot builds the console table and pipes it to
-// goal.mjs pending on stdin - a static-content contract, since exercising it
+// standing.mjs pending on stdin - a static-content contract, since exercising it
 // live would mean asserting on the caller's own real process table.
-test("clearbot pipes a console table into goal.mjs pending", () => {
+test("clearbot pipes a console table into standing.mjs pending", () => {
   const ps = fs.readFileSync(path.join(REPO, "watcher", "clearbot.ps1"), "utf8");
   assert.match(ps, /ToUniversalTime\(\)\.ToString\('o'\)/, "start times must be ISO-8601 UTC");
-  assert.match(ps, /\$json \| & node .*goal\.mjs.*'pending'/, "the table must reach goal.mjs on stdin");
+  assert.match(ps, /\$json \| & node .*standing\.mjs.*'pending'/, "the table must reach standing.mjs on stdin");
 });
 
 test("clearbot no longer gates a kick on a bare Get-Process existence check", () => {
@@ -435,6 +435,6 @@ test("clearbot no longer gates a kick on a bare Get-Process existence check", ()
   assert.doesNotMatch(
     kicks,
     /if \(-not \(Get-Process -Id \$cpid/,
-    "existence is not identity - goal.mjs decides, per its own header"
+    "existence is not identity - standing.mjs decides, per its own header"
   );
 });

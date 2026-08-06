@@ -102,7 +102,7 @@ test("policyPath and settingsPath honour their env overrides, and fall back pred
 
 // main() is exercised in-process, not as a subprocess: a spawned process is
 // invisible to this file's own coverage instrumentation (the lesson OI-006 paid
-// for on goal.mjs, and the reason budget.mjs still measures 0%).
+// for on standing.mjs, and the reason budget.mjs still measures 0%).
 test("main() returns 1 and names the divergence, 0 when clean", () => {
   const savedPolicy = process.env.ACC_POLICY;
   const savedSettings = process.env.ACC_SETTINGS;

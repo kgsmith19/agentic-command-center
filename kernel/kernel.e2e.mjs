@@ -137,21 +137,21 @@ async function scenario2() {
 }
 
 // ------------------------------------------------------------- pollution check
-// Neither scenario is allowed to leave a mark on the live ACC goal-loop state
+// Neither scenario is allowed to leave a mark on the live ACC standing-order-loop state
 // this kernel effort shares a repo with. A user-level hook firing inside a
 // kernel run would show up here — if it does, this is NOT fixed silently
 // (plan Task 19 step 4): it is ledgered and reported instead.
 function checkNoPollution(before) {
-  const after = listSafe(path.join(REPO, "runner", "goals"));
+  const after = listSafe(path.join(REPO, "runner", "standing"));
   const pass = JSON.stringify(before) === JSON.stringify(after);
-  report("pollution", "no new file appears under the LIVE runner/goals/ during kernel runs", pass,
+  report("pollution", "no new file appears under the LIVE runner/standing/ during kernel runs", pass,
     `before: ${JSON.stringify(before)}\nafter:  ${JSON.stringify(after)}`);
 }
 
-const liveGoalsBefore = listSafe(path.join(REPO, "runner", "goals"));
+const liveStandingBefore = listSafe(path.join(REPO, "runner", "standing"));
 await scenario1();
 await scenario2();
-checkNoPollution(liveGoalsBefore);
+checkNoPollution(liveStandingBefore);
 
 console.log(`\n${results.filter((r) => r.pass).length}/${results.length} scenarios passed`);
 process.exit(results.some((r) => !r.pass) ? 1 : 0);

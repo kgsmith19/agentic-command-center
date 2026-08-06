@@ -119,14 +119,14 @@ deny-by-default boundary the harness cannot widen, verifies the real
 end-state independently of what the harness claims, records every run in one
 structured ledger (`node kernel/ledger.mjs query ...`), and tightens its own
 ceilings after a run of failures — all separate from, and untouched by, the
-interactive ConPTY/goal-loop path above. See `kernel/README.md` for the
+interactive ConPTY/standing-order-loop path above. See `kernel/README.md` for the
 contract shape, the harness-swap procedure (one config value plus one new
 file under `kernel/adapters/`), and the honest guard ceilings.
 
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/pre-push.test.mjs hooks/dialcheck.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs tools/inventory.test.mjs tools/workflows.test.mjs
+node --test hooks/budget.test.mjs core/standing.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/pre-push.test.mjs hooks/dialcheck.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs tools/inventory.test.mjs tools/workflows.test.mjs
     -> FAST TIER, hermetic (`npm run test:windows`). Run from the repo root;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
@@ -151,7 +151,7 @@ node kernel/kernel.e2e.mjs
        tokens, so run it deliberately. 1 an in-scope edit is allowed, made,
        and independently verified; 2 the same contract with writeRoots
        elsewhere is denied, the file stays untouched, and the run is
-       rejected; a third check confirms no ACC goal-loop state leaks from a
+       rejected; a third check confirms no ACC standing-order-loop state leaks from a
        kernel run into the live repo.
 powershell -File gui/ptyhost.test.ps1
     -> INTEGRATION. Acc.PtyHost against a real cmd.exe on a ConPTY - pipe
@@ -179,9 +179,9 @@ npm run e2e:gui
        sandbox; runs headless in CI (gui-e2e job).
 ```
 
-**Never run a hook by hand against live state.** `bindSession` adopts a goal by
+**Never run a hook by hand against live state.** `bindSession` adopts a standing order by
 console PID, so piping a fake SessionStart into `budget.mjs` from a console
-that owns a goal used to rebind that goal to whatever session id the payload
+that owns a standing order used to rebind that standing order to whatever session id the payload
 carried and quietly break the real session's loop (guards OI-006 — it
 happened). `bindSession` now refuses to rebind on anything that isn't
 UUID-shaped, closing that specific hijack — but a hand-run hook can still
@@ -197,7 +197,7 @@ window whenever the GUI changes.
 ## The launch lane — why automated claude spawns never race
 
 `hooks/lane.mjs`. One account, many loops: the slice-runner (`claude -p` per
-board task), the proof tier, and the goal loop all open real API streams, and
+board task), the proof tier, and the standing order loop all open real API streams, and
 concurrent bursts died in transport as `econnreset` (2026-07-31, during test
 firing). Every AUTOMATED spawn now goes through `withLaunchSlot`: a
 machine-wide slot semaphore (`policy.json lane.slots`, default 1 — strict
@@ -215,7 +215,7 @@ Tests: `node --test hooks/lane.test.mjs` (14).
 ## Testing doctrine — the contract every implementation carries
 
 `hooks/testplan.mjs` (UserPromptSubmit, advisory like route.mjs — blocking
-would stall the goal loop, which has no replay for it) injects the contract
+would stall the standing order loop, which has no replay for it) injects the contract
 once per session when a prompt starts implementation planning. The contract,
 which is also simply the house rule: every acceptance criterion maps 1:1 to
 tests — unit (pure logic) and integration (process/filesystem boundary) in
@@ -255,23 +255,23 @@ fix is bloat; it earns its keep when two or more chunks would otherwise
 collide on the same files/branch at once, or a chunk is large enough that
 keeping the main tree clean for other work matters.
 
-## Goals — how a session survives its own context limit
+## Standing orders — how a session survives its own context limit
 
-A **goal** is a piece of work that outlives the session doing it. The GUI's GO
-button creates one (`hooks/goal.mjs new --text-file`) and launches Claude with
-`ACC_GOAL=<id>`; from then on the loop runs with no human in it:
+A **standing order** is a piece of work that outlives the session doing it. The GUI's GO
+button creates one (`core/standing.mjs new --text-file`) and launches Claude with
+`ACC_STANDING=<id>`; from then on the loop runs with no human in it:
 
 `budget.mjs` Stop (over budget) → captures the closing checkpoint as the next
 cycle's handoff → clearbot types `/clear` → the new session's SessionStart adopts
-the goal and injects it → clearbot types `Continue the active ACC goal.`
+the standing order and injects it → clearbot types `Continue the active ACC standing order.`
 
 Two decisions carry the whole design:
 
-1. **A goal binds to the CONSOLE PID, not the session id.** A `/clear` ends the
+1. **A standing order binds to the CONSOLE PID, not the session id.** A `/clear` ends the
    session id; the terminal process is the same throughout. Every session that
-   starts in that console adopts the goal, which is what makes resumption survive
+   starts in that console adopts the standing order, which is what makes resumption survive
    the clear. Queued prompts (above) are keyed the same way for the same reason.
-2. **Goal text never becomes keystrokes.** It reaches the model through
+2. **Standing order text never becomes keystrokes.** It reaches the model through
    SessionStart context; the only thing ever typed is a constant.
 
 **ACC-hosted sessions run on a ConPTY inside the GUI** (spec
@@ -284,32 +284,32 @@ keystroke injection; `sendconsole.ps1` remains the transport for external
 sessions and the fallback when the pipe is dead. Without the WebView2 runtime
 the Go button falls back to the legacy `cmd /k claude` console launch.
 
-State: `runner\goals\<id>.json` plus a running `<id>.log.md`, archived to
-`runner\goals\done\` on completion. **The loop only ends because the model ends
-it** — `goal.mjs done <id>` or `goal.mjs blocked <id> --why "..."`, both stated
+State: `runner\standing\<id>.json` plus a running `<id>.log.md`, archived to
+`runner\standing\done\` on completion. **The loop only ends because the model ends
+it** — `standing.mjs done <id>` or `standing.mjs blocked <id> --why "..."`, both stated
 in full in the injected block. The week kill switch is the cost brake; a red week
-holds all kicks. `goal.mjs pending` decides every condition that makes a kick
+holds all kicks. `standing.mjs pending` decides every condition that makes a kick
 unsafe (active? console alive? binding settled? cooldown?) so there is one place
 to audit, and `clearbot.ps1` stays a dumb executor.
 
-A goal whose console is gone is **reaped**, not left active (guards OI-031).
-`goal.mjs reapDeadGoals()` archives it to `runner\goals\done\` as `abandoned` —
+A standing order whose console is gone is **reaped**, not left active (guards OI-031).
+`standing.mjs reapDeadStanding()` archives it to `runner\standing\done\` as `abandoned` —
 a third status, deliberately distinct from `done`/`blocked`, because a ledger
 that cannot tell "the model finished" from "the console died" cannot tell a
 completed loop from a lost one. It runs from SessionStart **before**
-`bindSession`, since adoption falls back to "whatever active goal owns this
+`bindSession`, since adoption falls back to "whatever active standing order owns this
 console pid" and a recycled pid is exactly how a fresh session would inherit
-last week's task. A goal that has never bound gets a grace window (the GUI
-creates the goal, *then* launches the console); one that has bound gets none,
-because its console provably existed. CLI: `goal.mjs reap`.
+last week's task. A standing order that has never bound gets a grace window (the GUI
+creates the standing order, *then* launches the console); one that has bound gets none,
+because its console provably existed. CLI: `standing.mjs reap`.
 
-Tests: `node --test hooks/goal.test.mjs` (50).
+Tests: `node --test core/standing.test.mjs` (50).
 
 Two things keep the loop from stalling, added 2026-07-31 after it stalled
-twice in one day. **Liveness:** a goal session that ends its turn UNDER the
+twice in one day. **Liveness:** a standing order session that ends its turn UNDER the
 ceiling gets no clear, so the Stop hook re-arms the kick instead
-(`goal.mjs recordTurnEnd`), and `pendingKicks` decides when firing it is safe —
-after `goals.kickSettleSeconds` (90), and not within `goals.humanHoldMinutes`
+(`standing.mjs recordTurnEnd`), and `pendingKicks` decides when firing it is safe —
+after `standing.kickSettleSeconds` (90), and not within `standing.humanHoldMinutes`
 (10) of a prompt Kyle typed, so it stays quiet during a conversation and
 self-heals when he walks away. A turn is "his" unless the last user message is
 exactly one of clearbot's constants. Before this, a turn simply finishing ended
@@ -321,13 +321,13 @@ boundary (honouring the kill switch), and a Startup-folder launcher covers
 logon. The external Scheduled Task version is optional and needs an elevated
 shell — `watcher/watchdog/` holds it and its undo scripts.
 
-`/goal <condition>` (user skill `~\.claude\skills\goal\`) is ACC-native: it
-logs `CONDITION: <text>` into the active goal's log via `goal.mjs log`, so the
-directive rides the goal store and survives every `/clear` with the rest of
-the handoff; `/goal clear` logs `CONDITION MET`. It never registers a session
+`/goal-kgs <condition>` (user skill `~\.claude\skills\goal-kgs\`) is ACC-native: it
+logs `CONDITION: <text>` into the active standing order's log via `standing.mjs log`, so the
+directive rides the standing store and survives every `/clear` with the rest of
+the handoff; `/goal-kgs clear` logs `CONDITION MET`. It never registers a session
 Stop hook: a Stop-gate fights the budget gate (OI-011) — the loop continues BY
-ending turns — so conditions live in goal state, not hooks. With no active
-goal the condition is session-local only.
+ending turns — so conditions live in standing-order state, not hooks. With no active
+standing order the condition is session-local only.
 
 ## Folder routing (Start work tab)
 

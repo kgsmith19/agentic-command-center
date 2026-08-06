@@ -178,7 +178,7 @@ export function realIo() {
 
 // Exported and called directly by tests, in-process — a spawned subprocess is
 // invisible to this file's own coverage instrumentation (same fix already
-// applied to hooks/goal.mjs for OI-006). Returns the exit code rather than
+// applied to core/standing.mjs for OI-006). Returns the exit code rather than
 // calling process.exit itself, so a test can call this without killing the
 // test runner.
 export function main(argv = process.argv.slice(2)) {
@@ -191,5 +191,5 @@ export function main(argv = process.argv.slice(2)) {
 // (triple slash); comparing it directly against a `file://${argv[1]}`
 // template string never matches on Windows. Resolve both sides to plain
 // paths instead, matching the idiom this repo already uses
-// (hooks/covgate.mjs:243, hooks/goal.mjs:456).
+// (hooks/covgate.mjs:243, core/standing.mjs:456).
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) process.exit(main());

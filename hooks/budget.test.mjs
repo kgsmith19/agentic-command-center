@@ -1,9 +1,9 @@
 // Tests for the Stop-gate precedence in hooks/budget.mjs (OI-011).
 //
 // The bug being pinned: onStop early-allowed whenever stop_hook_active was set,
-// so after the forced checkpoint turn the latched path (clear request + goal
+// so after the forced checkpoint turn the latched path (clear request + standing order
 // cycle) never ran - auto-clear deadlocked even with no other Stop hook, and a
-// /goal Stop hook that kept blocking pinned the session over the ceiling
+// /standing order Stop hook that kept blocking pinned the session over the ceiling
 // forever. Once the budget latch exists, budget must win on EVERY stop.
 //
 // The hook process.exit()s on every path, so each case runs it as a child
@@ -20,14 +20,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ptyAnchorPid } from "./usage.mjs";
-// goal.mjs resolves its store from ACC_ROOT/ACC_GOALS_DIR on every call, not
-// at import time (see hooks/goal.mjs), specifically so a single shared import
+// standing.mjs resolves its store from ACC_ROOT/ACC_STANDING_DIR on every call, not
+// at import time (see hooks/standing.mjs), specifically so a single shared import
 // works across many tests each pointed at their own sandbox -- important here
 // beyond just tidiness: when covgate.mjs runs this file in the same node
-// process as goal.test.mjs, a second, differently-parameterized import of
-// goal.mjs would collide with goal.test.mjs's own coverage instance (node's
+// process as standing order.test.mjs, a second, differently-parameterized import of
+// standing.mjs would collide with standing order.test.mjs's own coverage instance (node's
 // lcov merge is last-write-wins per file path, not a union -- see OI-006).
-import * as gm from "./goal.mjs";
+import * as gm from "../core/standing.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, "budget.mjs");
@@ -55,11 +55,11 @@ const POLICY = {
   review: { fullLeanReview: "manual-only", localFullSuiteInReview: false, maxFinders: 3 },
   runner: { stopOnRed: true, statusFile: "SLICE-RUNNER.md", waitingGuard: true },
   autoClear: { enabled: true },
-  goals: { autoResume: true, maxCycles: 0 },
+  standing: { autoResume: true, maxCycles: 0 },
 };
 
 // Real Claude Code session ids are UUIDs, and OI-006's bindSession guard now
-// rejects anything else as a rebind source, so tests that seed a goal via
+// rejects anything else as a rebind source, so tests that seed a standing order via
 // bindSession (and later look it up by that exact sessionId) need one.
 const SID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -118,7 +118,7 @@ function runStop(sb, { sid, transcript, active, profile }) {
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
-      ACC_GOALS_DIR: "",
+      ACC_STANDING_DIR: "",
       ACC_PROFILE: profile || "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
@@ -153,18 +153,18 @@ test("latched + stop_hook_active: clear request still fires (the OI-011 deadlock
   assert.ok(fs.existsSync(clearReq(sb, sid)), "clear request written despite stop_hook_active");
 });
 
-test("further over-budget stops re-request the clear; the goal cycle is one-shot", async () => {
+test("further over-budget stops re-request the clear; the standing order cycle is one-shot", async () => {
   const sb = sandbox();
   const sid = SID(1);
   seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
 
-  // Seed a goal in the sandbox tree and bind this session to it, the same way
-  // SessionStart would. goal.mjs resolves its store from ACC_ROOT on every call.
+  // Seed a standing order in the sandbox tree and bind this session to it, the same way
+  // SessionStart would. standing.mjs resolves its store from ACC_ROOT on every call.
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "finish the thing", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  process.env.ACC_STANDING_DIR = "";
+  const g = gm.createStanding({ text: "finish the thing", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, standingId: g.id });
 
   runStop(sb, { sid, transcript: t, active: false }); // block + latch
   runStop(sb, { sid, transcript: t, active: true }); // latched stop 1
@@ -173,7 +173,7 @@ test("further over-budget stops re-request the clear; the goal cycle is one-shot
   const out = runStop(sb, { sid, transcript: t, active: true }); // latched stop 2
   assert.match(out, /systemMessage/);
   assert.ok(fs.existsSync(clearReq(sb, sid)), "request re-written for the stuck turn");
-  assert.equal(gm.readGoal(g.id).cycles, 1, "cycle logged exactly once across latched stops");
+  assert.equal(gm.readStanding(g.id).cycles, 1, "cycle logged exactly once across latched stops");
 });
 
 test("under hard: stop passes silently", () => {
@@ -208,9 +208,9 @@ test("profile context (when present) still overrides for that session", () => {
 });
 
 // --- liveness: an under-budget turn end must re-arm the kick ---------------
-// The 2026-07-31 stall, pinned. A goal session that simply finishes its turn
+// The 2026-07-31 stall, pinned. A standing order session that simply finishes its turn
 // well under the ceiling used to get nothing: no clear, no resume, dead air
-// until a human typed. The Stop hook must report that turn end to the goal
+// until a human typed. The Stop hook must report that turn end to the standing order
 // store - silently, without changing its own output.
 
 // The classifier reads the LAST USER message, so these transcripts need one.
@@ -225,26 +225,26 @@ function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
   return f;
 }
 
-// Seed a goal in the sandbox and bind this session to it, as SessionStart does.
-function seedGoal(sb, sid) {
+// Seed a standing order in the sandbox and bind this session to it, as SessionStart does.
+function seedStanding(sb, sid) {
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "keep going", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  process.env.ACC_STANDING_DIR = "";
+  const g = gm.createStanding({ text: "keep going", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, standingId: g.id });
   gm.markKicked(g.id); // a kick already fired; needsKick is false
   return { gm, g };
 }
 
-test("under budget with an active goal: the turn end re-arms the kick", async () => {
+test("under budget with an active standing order: the turn end re-arms the kick", async () => {
   const sb = sandbox();
   const sid = SID(2);
-  const { gm, g } = await seedGoal(sb, sid);
-  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC goal.");
+  const { gm, g } = await seedStanding(sb, sid);
+  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC standing order.");
 
   const out = runStop(sb, { sid, transcript: t, active: false });
   assert.equal(out.trim(), "", "still silent - liveness must not add output");
 
-  const after = gm.readGoal(g.id);
+  const after = gm.readStanding(g.id);
   assert.equal(after.needsKick, true, "kick re-armed");
   assert.ok(after.turnEndedAt, "turn end stamped");
   assert.ok(!after.humanPromptAt, "the kick constant is a MACHINE turn");
@@ -253,15 +253,15 @@ test("under budget with an active goal: the turn end re-arms the kick", async ()
 test("a human-prompted turn end is classified as human", async () => {
   const sb = sandbox();
   const sid = SID(3);
-  const { gm, g } = await seedGoal(sb, sid);
+  const { gm, g } = await seedStanding(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
 
   runStop(sb, { sid, transcript: t, active: false });
-  assert.ok(gm.readGoal(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
+  assert.ok(gm.readStanding(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
 });
 
 // --- self-healing watcher --------------------------------------------------
-// A dead clearbot means no clear and no resume, and a goal session cannot
+// A dead clearbot means no clear and no resume, and a standing order session cannot
 // notice on its own. The Stop hook is the right place to check: it IS the turn
 // boundary where a clear or a kick is about to be needed. The sandbox gets a
 // FAKE start-clearbot.cmd, so these prove the decision without starting a real
@@ -329,9 +329,9 @@ test("a deliberate stop is never overridden by the revive", () => {
   assert.equal(appears(marker, 2500), false, "the kill switch wins");
 });
 
-test("no goal: an under-budget stop still does nothing at all", () => {
+test("no standing order: an under-budget stop still does nothing at all", () => {
   const sb = sandbox();
-  const sid = "s-live-nogoal";
+  const sid = "s-live-nostanding";
   const t = writeTranscriptWithUser(sb, sid, 10000, "hello");
   assert.equal(runStop(sb, { sid, transcript: t, active: false }).trim(), "");
 });
@@ -349,7 +349,7 @@ test("SessionStart with ACC_PTY records a pty window bound to the parent pid", (
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
-      ACC_GOALS_DIR: "",
+      ACC_STANDING_DIR: "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
       CLAUDE_CODE_RUNNER: "",
@@ -364,27 +364,27 @@ test("SessionStart with ACC_PTY records a pty window bound to the parent pid", (
     "consolePid must be the hook's PARENT (the claude process; here, the test runner)");
 });
 
-// guards OI-031, wiring proof. reapDeadGoals() living in goal.mjs is worth
+// guards OI-031, wiring proof. reapDeadStanding() living in standing.mjs is worth
 // nothing unless something actually calls it, and it has to run BEFORE
-// adoption: bindSession falls back to "whatever active goal owns this console
-// pid", so a stale goal whose pid was recycled is exactly what a fresh session
-// picks up. Six such goals were live on 2026-08-04, the oldest from 07-31.
-test("SessionStart reaps a stale goal instead of adopting it (OI-031)", () => {
+// adoption: bindSession falls back to "whatever active standing order owns this console
+// pid", so a stale standing order whose pid was recycled is exactly what a fresh session
+// picks up. Six such standing orders were live on 2026-08-04, the oldest from 07-31.
+test("SessionStart reaps a stale standing order instead of adopting it (OI-031)", () => {
   const sb = sandbox({ autoClear: { enabled: false } });
   const sid = "sid-reap";
 
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const stale = gm.createGoal({ text: "LAST WEEK'S WORK - must not be injected", cwd: sb.root });
+  process.env.ACC_STANDING_DIR = "";
+  const stale = gm.createStanding({ text: "LAST WEEK'S WORK - must not be injected", cwd: sb.root });
   // Bound to a console that is long gone, then its pid recycled onto THIS
   // process - the exact collision that makes a fresh session adopt old work.
   // Must be a real UUID: OI-006's guard treats a non-UUID sessionId as inert, so
-  // boundAt would stay empty, the goal would count as never-bound, and the grace
+  // boundAt would stay empty, the standing order would count as never-bound, and the grace
   // window would (correctly) protect it - proving nothing about reaping.
-  gm.bindSession({ sessionId: SID(70), consolePid: process.pid, goalId: stale.id });
+  gm.bindSession({ sessionId: SID(70), consolePid: process.pid, standingId: stale.id });
   fs.writeFileSync(
-    path.join(sb.root, "runner", "goals", `${stale.id}.json`),
-    JSON.stringify({ ...gm.readGoal(stale.id), consolePid: 999999 })
+    path.join(sb.root, "runner", "standing", `${stale.id}.json`),
+    JSON.stringify({ ...gm.readStanding(stale.id), consolePid: 999999 })
   );
 
   const out = execFileSync("node", [HOOK], {
@@ -393,7 +393,7 @@ test("SessionStart reaps a stale goal instead of adopting it (OI-031)", () => {
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
-      ACC_GOALS_DIR: "",
+      ACC_STANDING_DIR: "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
       CLAUDE_CODE_RUNNER: "",
@@ -401,7 +401,7 @@ test("SessionStart reaps a stale goal instead of adopting it (OI-031)", () => {
     encoding: "utf8",
   });
 
-  assert.equal(gm.readGoal(stale.id), null, "the stale goal was reaped, not left active");
+  assert.equal(gm.readStanding(stale.id), null, "the stale standing order was reaped, not left active");
   assert.ok(!out.includes("LAST WEEK'S WORK"), "and its text was never injected into the new session");
 });
 

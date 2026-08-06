@@ -189,7 +189,7 @@ test("the real ledgers parse and rank without throwing", { skip: !haveAll }, () 
 
 // main() is a spawned subprocess's entry point in real use, invisible to this
 // file's own coverage instrumentation when spawned — so it's called directly,
-// in-process, the same way hooks/goal.test.mjs exercises hooks/goal.mjs's
+// in-process, the same way core/standing.test.mjs exercises core/standing.mjs's
 // exported main(). It writes real stdout as a side effect; that's expected.
 test("main() runs --check against the real ledgers and returns run()'s exit code", { skip: !haveAll }, () => {
   assert.equal(m.main(["--check"]), 0);

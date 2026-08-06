@@ -15,8 +15,8 @@ workflow is mapped" — see `docs/dod-mapping.md`, sub-project A).
 |---|---|---|---|
 | Write protection (PreToolUse guard) | Any `Edit`/`Write`/`NotebookEdit`/`Read` tool call, every Claude Code project on this machine | `config.json` (secrets globs, protected paths, cell repo map), `vault.json` (read-blocked) | none — `guards#OI-037` |
 | Secret handoff + runbox lifecycle | Agent runs `engine.mjs vault-keys`/`apply`; user runs `/approve` (or GUI "Claude's requests") to execute a runbox script | `vault.json`, `runbox/` (central + per-project `.guards/runbox`), `.trash/`, `watcher/approvals.log` | none — `guards#OI-038` |
-| Goal / standing-order loop | GUI GO button creates a goal; `budget.mjs` Stop (over budget) drives clear → adopt → kick | `runner/goals/`, `policy.json`, `watcher/clearbot.ps1` | `hooks/goal.test.mjs` (50), `hooks/budget.test.mjs` |
-| Launch lane (concurrency serialization) | Any AUTOMATED `claude` spawn (slice-runner, proof tier, goal loop) | `os.tmpdir()/acc-lane` slot state | `hooks/lane.test.mjs` (14) |
+| Standing order loop | GUI GO button creates a standing order; `budget.mjs` Stop (over budget) drives clear → adopt → kick | `runner/standing/`, `policy.json`, `watcher/clearbot.ps1` | `core/standing.test.mjs` (50), `hooks/budget.test.mjs` |
+| Launch lane (concurrency serialization) | Any AUTOMATED `claude` spawn (slice-runner, proof tier, standing order loop) | `os.tmpdir()/acc-lane` slot state | `hooks/lane.test.mjs` (14) |
 | Folder routing / auto-cd | Every `UserPromptSubmit` | `ROUTING.md`, `runner/clear-requests`, `runner/queued` | `hooks/route.test.mjs` (21) |
 | Dial/hook coherence check | `node hooks/dialcheck.mjs` (manual or gate-integrated) | `policy.json` dials vs `~/.claude/settings.json` registrations | `hooks/dialcheck.test.mjs` (10) |
 | Testing-contract injection | `UserPromptSubmit` on an implementation-planning prompt | injects contract text into context, no persistent state | `hooks/testplan.test.mjs` (11) |

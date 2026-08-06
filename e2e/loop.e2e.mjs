@@ -12,7 +12,7 @@
 //   node e2e/loop.e2e.mjs --only 2   # one scenario
 //
 // ISOLATION, and its deliberate limits:
-//   ACC_ROOT   -> a throwaway runner tree (state, goals, clear-requests), so
+//   ACC_ROOT   -> a throwaway runner tree (state, standing, clear-requests), so
 //                 live sessions are untouched.
 //   ACC_POLICY -> a sandbox policy file, so live dials cannot change what these
 //                 scenarios mean.
@@ -47,7 +47,7 @@ function sandbox(hardK) {
   try {
     fs.copyFileSync(path.resolve(REPO, "..", "ROUTING.md"), path.join(base, "ROUTING.md"));
   } catch {}
-  for (const d of [["runner", "state"], ["runner", "clear-requests"], ["runner", "goals"], ["watcher"]])
+  for (const d of [["runner", "state"], ["runner", "clear-requests"], ["runner", "standing"], ["watcher"]])
     fs.mkdirSync(path.join(root, ...d), { recursive: true });
   const policyPath = path.join(root, "policy.json");
   fs.writeFileSync(
@@ -60,7 +60,7 @@ function sandbox(hardK) {
       runner: { stopOnRed: false, statusFile: "SLICE-RUNNER.md", waitingGuard: false },
       autoClear: { enabled: true },
       // Short windows: these scenarios must not wait 90s+ to observe a kick.
-      goals: { autoResume: true, maxCycles: 0, kickSettleSeconds: 5, humanHoldMinutes: 0 },
+      standing: { autoResume: true, maxCycles: 0, kickSettleSeconds: 5, humanHoldMinutes: 0 },
       autoApprove: { enabled: false },
     })
   );
@@ -68,25 +68,26 @@ function sandbox(hardK) {
   // by it; start-clearbot.cmd is deliberately absent (see header).
   for (const f of ["clearbot.ps1", "sendconsole.ps1"])
     fs.copyFileSync(path.join(REPO, "watcher", f), path.join(root, "watcher", f));
-  // clearbot also shells to <root>/hooks/goal.mjs (pending kicks) and
-  // usage.mjs (live context for the escalation guard). Without these the
+  // clearbot also shells to <root>/core/standing.mjs (pending kicks) and
+  // hooks/usage.mjs (live context for the escalation guard). Without these the
   // watcher silently never kicks and never escalates - both calls are wrapped
   // in try/catch, so a missing file looks exactly like "nothing to do".
+  fs.mkdirSync(path.join(root, "core"), { recursive: true });
   fs.mkdirSync(path.join(root, "hooks"), { recursive: true });
-  for (const f of ["goal.mjs", "usage.mjs"])
-    fs.copyFileSync(path.join(REPO, "hooks", f), path.join(root, "hooks", f));
+  fs.copyFileSync(path.join(REPO, "core", "standing.mjs"), path.join(root, "core", "standing.mjs"));
+  fs.copyFileSync(path.join(REPO, "hooks", "usage.mjs"), path.join(root, "hooks", "usage.mjs"));
   return { root, policyPath };
 }
 
 const node = (args, sb) =>
   execFileSync("node", args, {
     encoding: "utf8",
-    env: { ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "" },
+    env: { ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_STANDING_DIR: "" },
     windowsHide: true,
   });
 
-function newGoal(sb, text) {
-  return JSON.parse(node([path.join(REPO, "hooks", "goal.mjs"), "new", "--text", text, "--cwd", REPO], sb));
+function newStanding(sb, text) {
+  return JSON.parse(node([path.join(REPO, "core", "standing.mjs"), "new", "--text", text, "--cwd", REPO], sb));
 }
 
 // A real console running claude with the sandbox environment. `cmd /c start`
@@ -95,17 +96,17 @@ function newGoal(sb, text) {
 //
 // The first turn is started by passing the prompt as an ARGUMENT, not by typing
 // it. Typing it is unreliable and, worse, it is not what these scenarios test:
-// SessionStart fires before the TUI can accept input (the same reason goal.mjs
+// SessionStart fires before the TUI can accept input (the same reason standing.mjs
 // delays its kick), so an injected first prompt lands in a console that is
 // still starting and no turn ever runs - the first version of this harness
 // failed exactly that way. What IS under test is the typing clearbot does
 // later: the /clear and the resume constant.
-function startSession(sb, { goalId, prompt, cwd = REPO, extraEnv = {} }) {
-  const wrapper = path.join(sb.root, `launch-${goalId || "x"}.cmd`);
+function startSession(sb, { standingId, prompt, cwd = REPO, extraEnv = {} }) {
+  const wrapper = path.join(sb.root, `launch-${standingId || "x"}.cmd`);
   const sets = Object.entries({
     ACC_ROOT: sb.root,
     ACC_POLICY: sb.policyPath,
-    ACC_GOAL: goalId || "",
+    ACC_STANDING: standingId || "",
     ACC_PROFILE: "",
     ...extraEnv,
   })
@@ -117,9 +118,9 @@ function startSession(sb, { goalId, prompt, cwd = REPO, extraEnv = {} }) {
   return wrapper;
 }
 
-function goalJson(sb, id) {
+function standingJson(sb, id) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(sb.root, "runner", "goals", `${id}.json`), "utf8"));
+    return JSON.parse(fs.readFileSync(path.join(sb.root, "runner", "standing", `${id}.json`), "utf8"));
   } catch {
     return null;
   }
@@ -264,15 +265,15 @@ function report(n, name, pass, evidence) {
 
 // ---------------------------------------------------------------- scenario 1
 // The happy loop: a session goes over budget, clearbot types /clear, the fresh
-// session adopts the goal, clearbot types the resume constant, the cycle is
+// session adopts the standing order, clearbot types the resume constant, the cycle is
 // logged. This is the whole promise in one run.
 async function scenario1() {
   const sb = sandbox(5); // tiny ceiling: the first real turn is already over it
-  const goal = newGoal(sb, "Reply with exactly: BANANA. Then stop.");
-  startSession(sb, { goalId: goal.id, prompt: "say BANANA and nothing else" });
+  const standing = newStanding(sb, "Reply with exactly: BANANA. Then stop.");
+  startSession(sb, { standingId: standing.id, prompt: "say BANANA and nothing else" });
   const consoles = [];
   try {
-    const sid = waitFor("session binds to the goal", 180000, () => goalJson(sb, goal.id)?.sessionId);
+    const sid = waitFor("session binds to the standing order", 180000, () => standingJson(sb, standing.id)?.sessionId);
     const win = sid && waitFor("console pid recorded", 60000, () => windowOf(sb, sid)?.consolePid);
     if (win) consoles.push(win);
 
@@ -280,19 +281,19 @@ async function scenario1() {
       clearbotOnce(sb);
       return /CLEARED/.test(clearbotLog(sb));
     });
-    const cycled = cleared && waitFor("cycle logged", 60000, () => (goalJson(sb, goal.id)?.cycles || 0) >= 1);
-    const newSid = cycled && waitFor("a NEW session adopts the goal", 180000, () => {
-      const g = goalJson(sb, goal.id);
+    const cycled = cleared && waitFor("cycle logged", 60000, () => (standingJson(sb, standing.id)?.cycles || 0) >= 1);
+    const newSid = cycled && waitFor("a NEW session adopts the standing order", 180000, () => {
+      const g = standingJson(sb, standing.id);
       return g && g.sessionId && g.sessionId !== sid ? g.sessionId : null;
     });
     const resumed = newSid && waitFor("clearbot re-prompts the new session", 120000, () => {
       clearbotOnce(sb);
-      return /RESUMED goal/.test(clearbotLog(sb));
+      return /RESUMED standing/.test(clearbotLog(sb));
     });
 
     if (newSid) consoles.push(windowOf(sb, newSid)?.consolePid);
     report(1, "over-budget clear, adopt, resume", !!resumed,
-      `first session : ${sid}\nsecond session: ${newSid}\ncycles        : ${goalJson(sb, goal.id)?.cycles}\n\n${clearbotLog(sb).trim()}`);
+      `first session : ${sid}\nsecond session: ${newSid}\ncycles        : ${standingJson(sb, standing.id)?.cycles}\n\n${clearbotLog(sb).trim()}`);
   } finally { cleanup(consoles); }
 }
 
@@ -302,25 +303,25 @@ async function scenario1() {
 // for 18 minutes - because only an over-budget Stop could continue the loop.
 async function scenario2() {
   const sb = sandbox(400); // high ceiling: this turn cannot go over budget
-  const goal = newGoal(sb, "Reply with exactly: ok. Then stop.");
-  startSession(sb, { goalId: goal.id, prompt: "say ok and nothing else" });
+  const standing = newStanding(sb, "Reply with exactly: ok. Then stop.");
+  startSession(sb, { standingId: standing.id, prompt: "say ok and nothing else" });
   const consoles = [];
   try {
-    const sid = waitFor("session binds", 180000, () => goalJson(sb, goal.id)?.sessionId);
+    const sid = waitFor("session binds", 180000, () => standingJson(sb, standing.id)?.sessionId);
     const win = sid && waitFor("console pid recorded", 60000, () => windowOf(sb, sid)?.consolePid);
     if (win) consoles.push(win);
 
     // The Stop hook of that under-budget turn is what must re-arm the kick.
     const armed = win && waitFor("under-budget turn end re-arms the kick", 240000, () => {
-      const g = goalJson(sb, goal.id);
+      const g = standingJson(sb, standing.id);
       return g && g.needsKick === true && g.turnEndedAt ? g : null;
     });
     const kicked = armed && waitFor("clearbot re-prompts WITHOUT a clear", 180000, () => {
       clearbotOnce(sb);
-      return /RESUMED goal/.test(clearbotLog(sb));
+      return /RESUMED standing/.test(clearbotLog(sb));
     });
 
-    const g = goalJson(sb, goal.id);
+    const g = standingJson(sb, standing.id);
     report(2, "under-budget turn end is re-prompted (guards OI-002)", !!kicked,
       `needsKick=${g?.needsKick} turnEndedAt=${g?.turnEndedAt} lastKickAt=${g?.lastKickAt}\n` +
       `no CLEARED expected here: ${/CLEARED/.test(clearbotLog(sb)) ? "BUT ONE HAPPENED" : "correct, none"}\n\n` +
@@ -339,14 +340,14 @@ async function scenario2() {
 // ceiling), presses Esc, and the clear then lands.
 async function scenario3() {
   const sb = sandbox(5);
-  const goal = newGoal(sb, "Counting task.");
+  const standing = newStanding(sb, "Counting task.");
   startSession(sb, {
-    goalId: goal.id,
+    standingId: standing.id,
     prompt: "Count from 1 to 40, writing each number on its own line, slowly and one at a time.",
   });
   const consoles = [];
   try {
-    const sid = waitFor("session binds", 180000, () => goalJson(sb, goal.id)?.sessionId);
+    const sid = waitFor("session binds", 180000, () => standingJson(sb, standing.id)?.sessionId);
     const win = sid && waitFor("console pid recorded", 60000, () => windowOf(sb, sid)?.consolePid);
     if (win) consoles.push(win);
     const transcript = sid && waitFor("transcript exists", 120000, () => findTranscript(sid));
@@ -390,12 +391,12 @@ async function scenario3() {
 // the session's own transcript, which records cwd per entry.
 async function scenario4() {
   const sb = sandbox(400);
-  const goal = newGoal(sb, "Directory move test.");
+  const standing = newStanding(sb, "Directory move test.");
   const from = path.resolve(REPO, ".."); // C:\code - on the routes table
-  startSession(sb, { goalId: goal.id, prompt: "say one and nothing else", cwd: from });
+  startSession(sb, { standingId: standing.id, prompt: "say one and nothing else", cwd: from });
   const consoles = [];
   try {
-    const sid = waitFor("session binds", 180000, () => goalJson(sb, goal.id)?.sessionId);
+    const sid = waitFor("session binds", 180000, () => standingJson(sb, standing.id)?.sessionId);
     const win = sid && waitFor("console pid recorded", 60000, () => windowOf(sb, sid)?.consolePid);
     if (win) consoles.push(win);
     const transcript = sid && waitFor("transcript exists", 120000, () => findTranscript(sid));
@@ -442,7 +443,7 @@ async function scenario4() {
 // TUI never reaches the transcript.
 async function scenario5() {
   const sb = sandbox(400); // high ceiling: the kick, not a clear, is under test
-  const goal = newGoal(sb, "Reply with exactly: PTY. Then stop.");
+  const standing = newStanding(sb, "Reply with exactly: PTY. Then stop.");
   const pipeName = `acc-term-e2e-${process.pid}`;
   const pidFile = path.join(sb.root, "pty.pid");
   // ATTACHED on purpose: agent-harness sandboxes kill detached grandchildren
@@ -452,9 +453,9 @@ async function scenario5() {
   const host = spawn(
     "powershell",
     ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(REPO, "gui", "ptyhost.e2e.ps1"),
-     "-PipeName", pipeName, "-GoalId", goal.id, "-Cwd", REPO, "-PidFile", pidFile,
+     "-PipeName", pipeName, "-StandingId", standing.id, "-Cwd", REPO, "-PidFile", pidFile,
      "-TimeoutSeconds", "600", "-Model", MODEL],
-    { env: { ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "" },
+    { env: { ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_STANDING_DIR: "" },
       stdio: ["ignore", hostLog, hostLog], windowsHide: true }
   );
   host.unref();
@@ -464,7 +465,7 @@ async function scenario5() {
       fs.existsSync(pidFile) ? Number(String(fs.readFileSync(pidFile, "utf8")).trim()) : null);
     if (childPid) consoles.push(childPid);
 
-    const sid = childPid && waitFor("session binds to the goal", 180000, () => goalJson(sb, goal.id)?.sessionId);
+    const sid = childPid && waitFor("session binds to the standing order", 180000, () => standingJson(sb, standing.id)?.sessionId);
     // Task 4 end-to-end: the record must say pty + THIS pipe. consolePid is
     // the claude node process (the SessionStart hook's parent), which is a
     // descendant of the cmd-shim child - never assumed equal to it.
@@ -492,7 +493,7 @@ async function scenario5() {
         try {
           const o = JSON.parse(l);
           if (kickAt < 0 && o.type === "user" &&
-              JSON.stringify(o.message?.content ?? "").includes("Continue the active ACC goal.")) kickAt = i;
+              JSON.stringify(o.message?.content ?? "").includes("Continue the active ACC standing order.")) kickAt = i;
           else if (kickAt >= 0 && o.type === "assistant") return true;
         } catch {}
       }

@@ -47,7 +47,7 @@ test("chat, follow-ups, machinery and slash commands do not fire", () => {
   for (const p of [
     "why did scenario 3 time out?",
     "yes do that",
-    "Continue the active ACC goal.",
+    "Continue the active ACC standing order.",
     "Run the queued prompt.",
     "/approve",
     "/clear",

@@ -397,6 +397,46 @@ test("end-to-end: default discovery covers BOTH hooks/ and runner/ (regression, 
   assert.ok(/PASS/.test(out), out);
 });
 
+test("end-to-end: default discovery covers core/ (regression, guards#OI-026/sub-project J, 2026-08-05)", () => {
+  // changedLibFiles already gated core/ (added for core/paths.mjs, Task 1),
+  // but default discovery's directory list was never updated to match - the
+  // exact 2026-08-01 hooks/runner bug recurring for a newer lib dir. A file
+  // under core/ with a real, passing test suite still read as 0% covered
+  // because covgate never ran that suite at all. A SECOND scanned dir
+  // (hooks/) is deliberately present alongside core/: with only one dir in
+  // the fixture, node's own `--test` with an EMPTY explicit file list falls
+  // back to its own auto-discovery and the bug would go unnoticed - proven
+  // by reproducing that false pass while writing this test.
+  const repo = path.join(BASE, "core-dir");
+  fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
+  fs.mkdirSync(path.join(repo, "core"), { recursive: true });
+  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
+  g("init", "-q");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  fs.writeFileSync(path.join(repo, "hooks", "h.mjs"), "export const h = () => 1;\n");
+  fs.writeFileSync(
+    path.join(repo, "hooks", "h.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { h } from "./h.mjs";\ntest("h", () => assert.equal(h(), 1));\n'
+  );
+  fs.writeFileSync(path.join(repo, "core", "c.mjs"), "export const c = () => 1;\n");
+  fs.writeFileSync(
+    path.join(repo, "core", "c.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { c } from "./c.mjs";\ntest("c", () => assert.equal(c(), 1));\n'
+  );
+  let out;
+  try {
+    out = execFileSync("node", [COVGATE], {
+      cwd: repo, encoding: "utf8",
+      env: { ...process.env, ACC_COVGATE_TESTS: undefined, ACC_POLICY: path.join(BASE, "nope.json") },
+    });
+  } catch (e) {
+    out = String(e.stdout || "") + String(e.stderr || "");
+    assert.fail(`expected PASS, got:\n${out}`);
+  }
+  assert.ok(/core\/c\.mjs/.test(out) && / ok /.test(out.match(/.*core\/c\.mjs.*/)[0]), out);
+  assert.ok(/PASS/.test(out), out);
+});
+
 test("end-to-end: ACC_COVGATE_RANGE gates the commit range, ignoring uncommitted working-tree changes", () => {
   // Two real commits: root (lib.mjs, fully covered) then a second commit
   // that ADDS extra.mjs (also fully covered). After that, a THIRD,

@@ -100,7 +100,7 @@ test("profile without a context block: base dials show through (live policy shap
 });
 
 // --- watcher liveness ------------------------------------------------------
-// A dead clearbot means no auto-clear and no goal resume. That was invisible
+// A dead clearbot means no auto-clear and no standing order resume. That was invisible
 // until it was noticed by hand; the status line is where it is cheapest to see.
 function heartbeat(sb, ageMs) {
   const dir = path.join(sb.root, "watcher");

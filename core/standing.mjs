@@ -1,25 +1,25 @@
 #!/usr/bin/env node
-// Agentic Command Center - the GOAL store. This is what makes ACC able to carry
+// Agentic Command Center - the STANDING store. This is what makes ACC able to carry
 // a piece of work across a /clear instead of losing it.
 //
 // THE PROBLEM IT SOLVES: the auto-clear chain (Stop hook -> clear-request ->
 // clearbot -> WriteConsoleInput types "/clear") worked, but it stopped there.
 // The fresh session came up with an empty prompt and no idea what it had been
-// doing, so a human had to retype the task. A goal survives the clear because it
+// doing, so a human had to retype the task. A standing survives the clear because it
 // lives in a FILE, not in context.
 //
 // THE THREAD OF CONTINUITY IS THE CONSOLE PID, not the session id. A /clear ends
 // the session id and starts a new one, but the terminal window - and therefore
 // the console pid that clearbot types into - is the same process throughout. So
-// a goal binds to a console, and every session that starts in that console
+// a standing binds to a console, and every session that starts in that console
 // adopts it.
 //
 // WHY THE TEXT NEVER TRAVELS AS KEYSTROKES: clearbot turns text into real key
 // events, so a newline in a task would submit a fragment (this is OI-004). The
-// goal text goes in this file; the only thing ever typed is a constant. That is
+// standing text goes in this file; the only thing ever typed is a constant. That is
 // also what lets a multi-line task work at all.
 //
-// Fails OPEN, like every other ACC hook helper: a broken goal store must cost
+// Fails OPEN, like every other ACC hook helper: a broken standing store must cost
 // auto-resume and nothing else.
 
 import fs from "node:fs";
@@ -30,21 +30,21 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT: see budget.mjs. Both must honour it or a test would split its state
 // across two trees. Resolved on every call, not captured once at import: a
 // test process that imports this module once and then runs many cases, each
-// against its own ACC_ROOT/ACC_GOALS_DIR sandbox, needs every call to see
+// against its own ACC_ROOT/ACC_STANDING_DIR sandbox, needs every call to see
 // whatever is current -- a module-load-time const would only ever see the
 // first sandbox and silently leak state into every later one.
 function root() {
   return process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
 }
-export function goalsDir() {
-  return process.env.ACC_GOALS_DIR || path.join(root(), "runner", "goals");
+export function standingDir() {
+  return process.env.ACC_STANDING_DIR || path.join(root(), "runner", "standing");
 }
 function doneDir() {
-  return path.join(goalsDir(), "done");
+  return path.join(standingDir(), "done");
 }
 
 // A kick is only sent once the binding has had time to settle. SessionStart runs
-// before the TUI is ready to accept input, so firing the instant a goal binds
+// before the TUI is ready to accept input, so firing the instant a standing binds
 // types into a console that is still starting up. Policy-overridable
 // (`tui.readySettleMs`) and reused verbatim by watcher/clearbot.ps1's
 // Get-TuiReadyMs for the /cd settle (guards OI-003) -- one proven number for
@@ -54,14 +54,14 @@ function doneDir() {
 // real-token repro (OI-003, 2026-08-04) after already failing once with zero
 // settle at all -- so this value now has exactly one source of truth.
 const TUI_READY_MS_DEFAULT = 4000;
-// One kick per goal per minute, whatever happens. A resume loop that somehow
+// One kick per standing per minute, whatever happens. A resume loop that somehow
 // re-armed itself must not be able to machine-gun the console.
 const KICK_COOLDOWN_MS = 60000;
 // A turn that ends UNDER budget used to end the loop: nothing re-armed the
-// kick, so an active goal sat dead until a human typed (observed twice on
+// kick, so an active standing sat dead until a human typed (observed twice on
 // 2026-07-31, once for 18 minutes). These two windows are what make an
 // under-budget turn end resume instead of stall. Both are policy dials
-// (goals.kickSettleSeconds / goals.humanHoldMinutes); these are the fallbacks.
+// (standing.kickSettleSeconds / standing.humanHoldMinutes); these are the fallbacks.
 const KICK_SETTLE_MS_DEFAULT = 90_000;
 // While Kyle is actively prompting this console, stay out of his way. The hold
 // EXPIRES, so walking away mid-conversation still self-heals into autonomy.
@@ -70,7 +70,7 @@ const HUMAN_HOLD_MS_DEFAULT = 10 * 60_000;
 const nowIso = () => new Date().toISOString();
 
 function ensureDirs() {
-  fs.mkdirSync(goalsDir(), { recursive: true });
+  fs.mkdirSync(standingDir(), { recursive: true });
   fs.mkdirSync(doneDir(), { recursive: true });
 }
 
@@ -82,12 +82,12 @@ function readJson(p, dflt) {
   }
 }
 
-function goalPath(id) {
-  return path.join(goalsDir(), `${safeId(id)}.json`);
+function standingPath(id) {
+  return path.join(standingDir(), `${safeId(id)}.json`);
 }
 
 export function logPath(id) {
-  return path.join(goalsDir(), `${safeId(id)}.log.md`);
+  return path.join(standingDir(), `${safeId(id)}.log.md`);
 }
 
 // Ids are used to build file paths and are echoed into injected context, so they
@@ -96,31 +96,31 @@ function safeId(id) {
   return String(id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
 }
 
-function write(goal) {
-  goal.updatedAt = nowIso();
-  fs.writeFileSync(goalPath(goal.id), JSON.stringify(goal, null, 2) + "\n");
-  return goal;
+function write(standing) {
+  standing.updatedAt = nowIso();
+  fs.writeFileSync(standingPath(standing.id), JSON.stringify(standing, null, 2) + "\n");
+  return standing;
 }
 
-export function readGoal(id) {
-  const g = readJson(goalPath(id), null);
+export function readStanding(id) {
+  const g = readJson(standingPath(id), null);
   return g && g.id ? g : null;
 }
 
-export function listGoals() {
+export function listStanding() {
   try {
     return fs
-      .readdirSync(goalsDir())
+      .readdirSync(standingDir())
       .filter((f) => f.endsWith(".json"))
-      .map((f) => readJson(path.join(goalsDir(), f), null))
+      .map((f) => readJson(path.join(standingDir(), f), null))
       .filter((g) => g && g.id);
   } catch {
     return [];
   }
 }
 
-export function activeGoals() {
-  return listGoals().filter((g) => g.status === "active");
+export function activeStanding() {
+  return listStanding().filter((g) => g.status === "active");
 }
 
 // OI-034. A pid is not an identity: Windows recycles them, and the comment
@@ -131,27 +131,27 @@ export function activeGoals() {
 // every cycle and gets StartTime free, so it passes the table in. That keeps
 // this module pure and keeps every kick-safety rule in this one file, which is
 // what its header promises.
-export function consoleState(goal, consoles) {
+export function consoleState(standing, consoles) {
   if (!consoles) return "unknown"; // cannot tell -> do nothing
-  const pid = Number(goal.consolePid || 0);
+  const pid = Number(standing.consolePid || 0);
   if (!pid) return "dead";
   const seen = consoles[String(pid)];
   if (!seen) return "dead"; // pid is gone
-  if (!goal.consoleStartedAt) return "unknown"; // not stamped yet
-  return goal.consoleStartedAt === seen ? "alive" : "dead"; // recycled if it differs
+  if (!standing.consoleStartedAt) return "unknown"; // not stamped yet
+  return standing.consoleStartedAt === seen ? "alive" : "dead"; // recycled if it differs
 }
 
 // Stamped by autopilot on first sighting rather than at bind time: bindSession's
 // caller has the pid but no cheap way to read a start time. Inside the grace
-// window the goal is seconds old, so a recycle here is not credible - and this
-// is the same window reapDeadGoals already protects (REAP_GRACE_MS_DEFAULT).
-// An unstamped goal older than the grace window is left unstamped on purpose:
+// window the standing is seconds old, so a recycle here is not credible - and this
+// is the same window reapDeadStanding already protects (REAP_GRACE_MS_DEFAULT).
+// An unstamped standing older than the grace window is left unstamped on purpose:
 // it predates this change and its identity cannot be reconstructed, so it is
-// left for reapDeadGoals to reap rather than guessed at.
+// left for reapDeadStanding to reap rather than guessed at.
 export function stampConsoles(consoles, { now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT } = {}) {
   if (!consoles) return [];
   const stamped = [];
-  for (const g of activeGoals()) {
+  for (const g of activeStanding()) {
     if (g.consoleStartedAt) continue;
     const seen = consoles[String(Number(g.consolePid || 0))];
     if (!seen) continue;
@@ -164,24 +164,46 @@ export function stampConsoles(consoles, { now = Date.now(), graceMs = REAP_GRACE
   return stamped;
 }
 
-export function goalForSession(sessionId) {
+export function standingForSession(sessionId) {
   if (!sessionId) return null;
-  return activeGoals().find((g) => g.sessionId === sessionId) || null;
+  return activeStanding().find((g) => g.sessionId === sessionId) || null;
 }
 
-export function createGoal({ text, cwd, profile }) {
+// AC-J5/J6/J7: the injected marker format changed from `[ACC GOAL g-...]` to
+// `[ACC STANDING so-...]`. A transcript or log written before this rename
+// still carries the old marker, so it must still be understood for one
+// release rather than silently failing to match - with a deprecation notice
+// so any remaining caller of the old form is visible instead of quiet.
+const LEGACY_MARKER_RE = /^\[ACC GOAL (g-[A-Za-z0-9_-]+)\]/;
+const MARKER_RE = /^\[ACC STANDING (so-[A-Za-z0-9_-]+)\]/;
+
+export function parseInjection(text) {
+  const s = String(text || "");
+  const legacy = s.match(LEGACY_MARKER_RE);
+  if (legacy) {
+    return {
+      id: "so-" + legacy[1].slice("g-".length),
+      deprecation: "[ACC GOAL] is deprecated, use [ACC STANDING so-...] (guards#OI-026)",
+    };
+  }
+  const current = s.match(MARKER_RE);
+  if (current) return { id: current[1], deprecation: null };
+  return { id: null, deprecation: null };
+}
+
+export function createStanding({ text, cwd, profile }) {
   ensureDirs();
   const t = String(text || "").trim();
-  if (!t) throw new Error("a goal needs text");
+  if (!t) throw new Error("a standing order needs text");
   const iso = new Date().toISOString(); // 2026-07-31T04:10:27.123Z
   const id =
-    "g-" +
+    "so-" +
     iso.slice(0, 10).replace(/-/g, "") +
     "-" +
     iso.slice(11, 19).replace(/:/g, "") +
     "-" +
     Math.random().toString(36).slice(2, 6);
-  const goal = {
+  const standing = {
     id,
     text: t,
     cwd: cwd || "",
@@ -198,81 +220,81 @@ export function createGoal({ text, cwd, profile }) {
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
-  write(goal);
+  write(standing);
   fs.writeFileSync(
     logPath(id),
-    `# Goal ${id}\n\n${t}\n\n- folder: ${goal.cwd || "(not set)"}\n- profile: ${goal.profile || "(default)"}\n- opened: ${goal.createdAt}\n\n## Progress\n\n`
+    `# Standing order ${id}\n\n${t}\n\n- folder: ${standing.cwd || "(not set)"}\n- profile: ${standing.profile || "(default)"}\n- opened: ${standing.createdAt}\n\n## Progress\n\n`
   );
-  return goal;
+  return standing;
 }
 
 // Real Claude Code session ids are always UUIDs. bindSession is reachable by
 // hand (piping a fake SessionStart payload into budget.mjs against live
 // state), and a synthetic sessionId there would otherwise silently steal a
-// live console's goal binding (OI-006, reproduced). A non-UUID sessionId is
+// live console's standing binding (OI-006, reproduced). A non-UUID sessionId is
 // therefore treated exactly like none was passed at all.
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Called from SessionStart. Two ways in:
-//   - ACC_GOAL is set   -> the Command Center launched this session for that goal
-//   - otherwise         -> adopt whatever active goal owns this console
+//   - ACC_STANDING is set   -> the Command Center launched this session for that standing
+//   - otherwise         -> adopt whatever active standing owns this console
 // The second case is the one that survives a /clear, and it is deliberately not
-// conditional on how the clear happened: a goal Kyle cleared by hand resumes the
+// conditional on how the clear happened: a standing Kyle cleared by hand resumes the
 // same way an auto-clear does.
-export function bindSession({ sessionId, consolePid, cwd, goalId, consoles }) {
+export function bindSession({ sessionId, consolePid, cwd, standingId, consoles }) {
   ensureDirs();
   // guards OI-031, and it belongs HERE rather than at the SessionStart call site:
-  // the fallback below adopts "whatever active goal owns this console pid", and
-  // Windows recycles pids, so a stale goal is exactly what a fresh session would
-  // inherit -- injecting last week's task into today's work. Six such goals were
+  // the fallback below adopts "whatever active standing owns this console pid", and
+  // Windows recycles pids, so a stale standing is exactly what a fresh session would
+  // inherit -- injecting last week's task into today's work. Six such standing orders were
   // live on 2026-08-04, the oldest from 07-31, every console long dead. Reaping
   // first means there is nothing stale left to adopt, and it keeps every rule
   // about what makes adoption unsafe in this one file, as the header promises.
-  reapDeadGoals({ consoles });
-  let goal = goalId ? readGoal(goalId) : null;
-  if (goal && goal.status !== "active") goal = null;
-  if (!goal && consolePid) {
+  reapDeadStanding({ consoles });
+  let standing = standingId ? readStanding(standingId) : null;
+  if (standing && standing.status !== "active") standing = null;
+  if (!standing && consolePid) {
     // OI-034: matching on pid alone is how a fresh session inherited last
     // week's task. Identity, or no adoption.
-    goal =
-      activeGoals().find(
+    standing =
+      activeStanding().find(
         (g) => Number(g.consolePid) === Number(consolePid) && consoleState(g, consoles) === "alive"
       ) || null;
   }
-  if (!goal) return null;
+  if (!standing) return null;
 
   // A non-UUID id (garbage, or simply absent) never touches sessionId/
   // needsKick/boundAt below -- it is inert, not "no-op with side effects".
   const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
-  const fresh = validId !== null && goal.sessionId !== validId;
-  if (validId !== null) goal.sessionId = validId;
-  if (consolePid) goal.consolePid = Number(consolePid);
-  if (!goal.cwd && cwd) goal.cwd = cwd;
+  const fresh = validId !== null && standing.sessionId !== validId;
+  if (validId !== null) standing.sessionId = validId;
+  if (consolePid) standing.consolePid = Number(consolePid);
+  if (!standing.cwd && cwd) standing.cwd = cwd;
   if (fresh) {
-    // A new session for a live goal is exactly the state that needs a prompt
+    // A new session for a live standing is exactly the state that needs a prompt
     // typed into it - whether this is the launch or the 4th resume.
-    goal.needsKick = true;
-    goal.boundAt = nowIso();
+    standing.needsKick = true;
+    standing.boundAt = nowIso();
   }
-  return write(goal);
+  return write(standing);
 }
 
 export function appendCycle(id, { sessionId, ctx, text }) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.cycles = Number(goal.cycles || 0) + 1;
-  write(goal);
+  const standing = readStanding(id);
+  if (!standing) return null;
+  standing.cycles = Number(standing.cycles || 0) + 1;
+  write(standing);
   const body = String(text || "").trim().slice(0, 4000);
   try {
     fs.appendFileSync(
       logPath(id),
-      `\n### Cycle ${goal.cycles} - ${nowIso()}\n` +
+      `\n### Cycle ${standing.cycles} - ${nowIso()}\n` +
         `_session ${sessionId || "?"} ended at ${Math.round(Number(ctx || 0) / 1000)}k_\n\n` +
         (body || "_(no closing summary captured)_") +
         "\n"
     );
   } catch {}
-  return goal;
+  return standing;
 }
 
 // The tail is what gets injected into the next session, so it is bounded here
@@ -289,12 +311,12 @@ export function logTail(id, maxChars = 3000) {
 }
 
 export function setStatus(id, status, why) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.status = status;
-  goal.needsKick = false;
-  if (why) goal.why = String(why).slice(0, 500);
-  write(goal);
+  const standing = readStanding(id);
+  if (!standing) return null;
+  standing.status = status;
+  standing.needsKick = false;
+  if (why) standing.why = String(why).slice(0, 500);
+  write(standing);
   if (status === "done" || status === "blocked" || status === "abandoned") {
     try {
       fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
@@ -302,40 +324,40 @@ export function setStatus(id, status, why) {
     // Archive so the live directory only ever holds work in flight.
     try {
       ensureDirs();
-      fs.renameSync(goalPath(id), path.join(doneDir(), `${safeId(id)}.json`));
+      fs.renameSync(standingPath(id), path.join(doneDir(), `${safeId(id)}.json`));
       fs.renameSync(logPath(id), path.join(doneDir(), `${safeId(id)}.log.md`));
     } catch {}
   }
-  return goal;
+  return standing;
 }
 
-// guards OI-031. Nothing used to mark a goal dead when its console died, so the
-// store only ever grew: six goals sat "active" from 2026-07-31 onward, every one
+// guards OI-031. Nothing used to mark a standing dead when its console died, so the
+// store only ever grew: six standing orders sat "active" from 2026-07-31 onward, every one
 // bound to a console gone for days, and pendingKicks kept considering work
 // nobody was doing. clearbot even LOGGED the deaths ("GUI-DEAD ... hosting GUI
-// (pid 1620) is gone") and left the goals active - detection without reaping.
+// (pid 1620) is gone") and left the standing orders active - detection without reaping.
 //
 // "abandoned" is deliberately a third status, not done/blocked: the console went
 // away, the model never finished. A ledger that cannot tell those apart cannot
 // tell a completed loop from a lost one.
 const REAP_GRACE_MS_DEFAULT = 120000;
 
-export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT, consoles } = {}) {
+export function reapDeadStanding({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAULT, consoles } = {}) {
   const reaped = [];
-  for (const g of activeGoals()) {
+  for (const g of activeStanding()) {
     // OI-034: identity, not existence. Without a table we cannot prove a pid is
     // gone, so nothing is reaped on a guess - see consoleState's own comment.
     if (consoleState(g, consoles) !== "dead") continue;
-    // Never bound: the GUI creates the goal and THEN launches the console, so
-    // for a moment a healthy goal legitimately has no console. Reaping there
-    // would kill the very launch the goal belongs to. A goal that HAS bound was
+    // Never bound: the GUI creates the standing and THEN launches the console, so
+    // for a moment a healthy standing legitimately has no console. Reaping there
+    // would kill the very launch the standing belongs to. A standing that HAS bound was
     // attached to a console that provably existed, so a dead pid now means that
     // console died - no grace applies.
     if (!g.boundAt) {
       const born = Date.parse(g.createdAt || "");
       if (Number.isFinite(born) && now - born < graceMs) continue;
     }
-    setStatus(g.id, "abandoned", "console gone - reaped by reapDeadGoals");
+    setStatus(g.id, "abandoned", "console gone - reaped by reapDeadStanding");
     reaped.push(g.id);
   }
   return reaped;
@@ -343,7 +365,7 @@ export function reapDeadGoals({ now = Date.now(), graceMs = REAP_GRACE_MS_DEFAUL
 
 // What clearbot asks for every cycle. Everything that makes a kick unsafe is
 // decided HERE, in one place, so the watcher stays a dumb executor:
-//   - goal must be active
+//   - standing must be active
 //   - its console must still exist
 //   - the binding must have settled (TUI ready)
 //   - the cooldown must have expired
@@ -358,7 +380,7 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     opts.kickSettleSeconds != null ? Number(opts.kickSettleSeconds) * 1000 : KICK_SETTLE_MS_DEFAULT;
   const holdMs =
     opts.humanHoldMinutes != null ? Number(opts.humanHoldMinutes) * 60000 : HUMAN_HOLD_MS_DEFAULT;
-  return activeGoals()
+  return activeStanding()
     .filter((g) => g.needsKick)
     .filter((g) => consoleState(g, opts.consoles) === "alive")
     .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= tuiReadyMs)
@@ -371,26 +393,26 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     .map((g) => ({ id: g.id, consolePid: g.consolePid, cycles: g.cycles, sessionId: g.sessionId }));
 }
 
-// Called from the Stop hook on every turn end of a goal session that did NOT go
+// Called from the Stop hook on every turn end of a standing session that did NOT go
 // over budget (the over-budget path has its own clear/resume chain). This is the
 // liveness trigger: it re-arms the kick, and pendingKicks() above decides when
 // firing it is safe. `human` marks a turn Kyle prompted, which backs the kick
 // off - see HUMAN_HOLD_MS_DEFAULT.
 export function recordTurnEnd(id, { human } = {}) {
-  const goal = readGoal(id);
-  if (!goal || goal.status !== "active") return null;
-  goal.needsKick = true;
-  goal.turnEndedAt = nowIso();
-  if (human) goal.humanPromptAt = nowIso();
-  return write(goal);
+  const standing = readStanding(id);
+  if (!standing || standing.status !== "active") return null;
+  standing.needsKick = true;
+  standing.turnEndedAt = nowIso();
+  if (human) standing.humanPromptAt = nowIso();
+  return write(standing);
 }
 
 export function markKicked(id) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.needsKick = false;
-  goal.lastKickAt = nowIso();
-  return write(goal);
+  const standing = readStanding(id);
+  if (!standing) return null;
+  standing.needsKick = false;
+  standing.lastKickAt = nowIso();
+  return write(standing);
 }
 
 // ------------------------------------------------------------- CLI
@@ -400,9 +422,9 @@ function arg(argv, name, dflt = "") {
   return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : dflt;
 }
 
-// Goal text for `new`. --text-file exists because the caller that matters is the
+// Standing text for `new`. --text-file exists because the caller that matters is the
 // GUI, and the GUI's node shim strips double quotes and cannot pass a newline in
-// a command line at all - so a multi-line goal typed in the box would arrive
+// a command line at all - so a multi-line standing typed in the box would arrive
 // mangled or truncated. A file has neither problem.
 export function textFromArgs(argv) {
   const file = arg(argv, "--text-file");
@@ -410,19 +432,19 @@ export function textFromArgs(argv) {
   return arg(argv, "--text");
 }
 
-// Positional id, falling back to the single active goal. Every command a MODEL
+// Positional id, falling back to the single active standing. Every command a MODEL
 // is told to run takes an explicit id (SessionStart injects it), so this fallback
 // only serves a human at a prompt.
 function resolveId(argv) {
-  const pos = argv.find((a) => /^g-/.test(a));
+  const pos = argv.find((a) => /^so-/.test(a));
   if (pos) return pos;
-  const act = activeGoals();
+  const act = activeStanding();
   return act.length === 1 ? act[0].id : "";
 }
 
 // The console table arrives on stdin, not argv: the pid list is unbounded and
 // Windows caps command lines. Empty stdin -> no table -> pendingKicks/
-// reapDeadGoals fail closed, which is the intended behaviour, not a degraded
+// reapDeadStanding fail closed, which is the intended behaviour, not a degraded
 // one.
 function readConsoleTable() {
   try {
@@ -438,7 +460,7 @@ export function main() {
   const cmd = argv[0] || "list";
 
   if (cmd === "new") {
-    const g = createGoal({
+    const g = createStanding({
       text: textFromArgs(argv),
       cwd: arg(argv, "--cwd"),
       profile: arg(argv, "--profile"),
@@ -447,7 +469,7 @@ export function main() {
     return;
   }
   if (cmd === "list") {
-    console.log(JSON.stringify(activeGoals(), null, 2));
+    console.log(JSON.stringify(activeStanding(), null, 2));
     return;
   }
   if (cmd === "pending") {
@@ -459,8 +481,8 @@ export function main() {
         fs.readFileSync(process.env.ACC_POLICY || path.join(root(), "policy.json"), "utf8")
       );
       dials = {
-        kickSettleSeconds: pol?.goals?.kickSettleSeconds,
-        humanHoldMinutes: pol?.goals?.humanHoldMinutes,
+        kickSettleSeconds: pol?.standing?.kickSettleSeconds,
+        humanHoldMinutes: pol?.standing?.humanHoldMinutes,
         tuiReadySettleMs: pol?.tui?.readySettleMs,
       };
     } catch {}
@@ -478,20 +500,20 @@ export function main() {
     // caller can prove is gone. An empty table ({}) is a caller asserting "I
     // enumerated every process and this pid was not among them" - that is
     // still proof. No table at all proves nothing, so nothing is reaped.
-    const ids = reapDeadGoals({ consoles: readConsoleTable() });
+    const ids = reapDeadStanding({ consoles: readConsoleTable() });
     console.log(ids.length ? `reaped ${ids.length}: ${ids.join(" ")}` : "reaped 0");
     return;
   }
   if (cmd === "show") {
-    const g = readGoal(resolveId(argv));
-    console.log(g ? JSON.stringify(g, null, 2) : "no active goal");
+    const g = readStanding(resolveId(argv));
+    console.log(g ? JSON.stringify(g, null, 2) : "no active standing order");
     return;
   }
   if (cmd === "log") {
     const id = resolveId(argv);
-    const text = arg(argv, "--text") || argv.slice(1).filter((a) => !/^g-/.test(a)).join(" ");
-    const g = readGoal(id);
-    if (!g) return console.log("no active goal");
+    const text = arg(argv, "--text") || argv.slice(1).filter((a) => !/^so-/.test(a)).join(" ");
+    const g = readStanding(id);
+    if (!g) return console.log("no active standing order");
     try {
       fs.appendFileSync(logPath(id), `\n- ${nowIso()} ${text}\n`);
     } catch {}
@@ -500,13 +522,13 @@ export function main() {
   }
   if (cmd === "done" || cmd === "blocked" || cmd === "paused") {
     const id = resolveId(argv);
-    if (!id) return console.log("no active goal (pass the id)");
+    if (!id) return console.log("no active standing order (pass the id)");
     setStatus(id, cmd === "paused" ? "paused" : cmd, arg(argv, "--why"));
-    console.log(`goal ${id} -> ${cmd}`);
+    console.log(`standing ${id} -> ${cmd}`);
     return;
   }
   console.log(
-    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
+    "usage: standing.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
   );
 }
 
