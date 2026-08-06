@@ -11,7 +11,7 @@
 //   node hooks/prompts.mjs remove <name>
 //
 // Storage: ACC_PROMPTS_DIR override, else <repo>/runner/prompts/<name>.txt —
-// mirrors the existing runner/jobs, runner/goals convention (a plain folder
+// mirrors the existing runner/jobs, runner/missions convention (a plain folder
 // ACC already owns). Text is stored byte-for-byte: this module never
 // rewrites, reformats, or truncates what it's given.
 

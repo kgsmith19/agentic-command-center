@@ -255,7 +255,7 @@ test("replayable rejects exactly what the injector cannot be trusted with", () =
 
 test("Phase 3: with NO ACC-active env var, the hook produces no output at all, even for a scoring prompt", () => {
   const env = { ...process.env };
-  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  for (const k of ["ACC_SESSION", "ACC_MISSION", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
   const out = execFileSync(process.execPath, [path.join(HERE, "route.mjs")], {
     input: JSON.stringify({ session_id: `t${process.pid}inactive`, prompt: "add a supabase migration", cwd: "C:\\code" }),
     encoding: "utf8", env,
@@ -265,7 +265,7 @@ test("Phase 3: with NO ACC-active env var, the hook produces no output at all, e
 
 test("Phase 3: the --text CLI helper runs unconditionally, with no ACC env set at all", () => {
   const env = { ...process.env };
-  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  for (const k of ["ACC_SESSION", "ACC_MISSION", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
   const out = execFileSync(
     process.execPath,
     [path.join(HERE, "route.mjs"), "--text", "fix the playwright e2e run"],

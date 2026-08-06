@@ -3,11 +3,11 @@
 # writes the child pid to -PidFile, then waits until the child exits or
 # -TimeoutSeconds passes, disposing on the way out. No GUI, no WebView2 - the
 # pty transport alone. ACC_ROOT / ACC_POLICY pass through from the caller's
-# environment; ACC_GOAL / ACC_PTY are set here so SessionStart binds the goal
+# environment; ACC_MISSION / ACC_PTY are set here so SessionStart binds the mission
 # and records the pty window (hooks/budget.mjs).
 param(
     [Parameter(Mandatory)][string]$PipeName,
-    [Parameter(Mandatory)][string]$GoalId,
+    [Parameter(Mandatory)][string]$MissionId,
     [Parameter(Mandatory)][string]$Cwd,
     [Parameter(Mandatory)][string]$PidFile,
     [int]$TimeoutSeconds = 600,
@@ -18,7 +18,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -Path (Join-Path $here 'PtyHost.cs') -ReferencedAssemblies 'System','System.Core','System.Windows.Forms'
 
-$env:ACC_GOAL = $GoalId
+$env:ACC_MISSION = $MissionId
 $env:ACC_PTY = $PipeName
 $env:ACC_PROFILE = ''
 

@@ -114,7 +114,7 @@ export function loadPolicy() {
 // always-on regardless of whether ACC orchestration is active.
 export function accActive() {
   return process.env.ACC_SESSION === "1"
-      || !!process.env.ACC_GOAL
+      || !!process.env.ACC_MISSION
       || !!process.env.ACC_PROFILE
       || !!process.env.ACC_PTY;
 }
@@ -196,10 +196,10 @@ export function totalTokens(a) {
   return a.input + a.cacheCreate + a.cacheRead + a.output;
 }
 
-// Real per-transcript cost, reused by goal.mjs's per-run dollar ceiling
+// Real per-transcript cost, reused by mission.mjs's per-run dollar ceiling
 // (Phase 1, full-remediation-prompt.md). Deliberately NOT an approximation --
 // turns()/costOf() are the exact same accounting the usage dashboard uses,
-// just summed over one file instead of a whole project scan, so a goal's
+// just summed over one file instead of a whole project scan, so a mission's
 // accumulated cost is real spend, not a rough proxy.
 export function costOfTranscript(file, rates = loadPolicy().rates) {
   const agg = emptyAgg();

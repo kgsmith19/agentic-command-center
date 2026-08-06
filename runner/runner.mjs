@@ -11,7 +11,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { withLaunchSlot, retryTransport } from "../hooks/lane.mjs";
 import { spawnSpec } from "../hooks/cmdline.mjs";
-import { createGoal, readGoal, readGoalAnywhere } from "../hooks/goal.mjs";
+import { createMission, readMission, readMissionAnywhere } from "../hooks/mission.mjs";
 import { weekTier } from "../hooks/usage.mjs";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync,
@@ -63,8 +63,8 @@ export function boardState(job) {
 }
 
 // Phase 5 step 1 (full-remediation-prompt.md): "Integrate runner.mjs with
-// the goal store. Set ACC_GOAL=<id> on the spawn... Replace the
-// statusFile-hash + doneMarker progress heuristic with reading goal.mjs's
+// the mission store. Set ACC_MISSION=<id> on the spawn... Replace the
+// statusFile-hash + doneMarker progress heuristic with reading mission.mjs's
 // done/blocked state directly." This is the wiring half only -- additive,
 // alongside the existing statusFile mechanism, not a replacement of it.
 // Deleting the keystroke/ConPTY channel (step 2) is deliberately NOT part
@@ -72,21 +72,21 @@ export function boardState(job) {
 // would remove Kyle's only currently-working nightly automation with no way
 // to prove the replacement works end to end.
 //
-// One goal per job, reused across invocations of the SAME job (a marker
-// file under runner/state/, the same physical directory hooks/goal.mjs and
+// One mission per job, reused across invocations of the SAME job (a marker
+// file under runner/state/, the same physical directory hooks/mission.mjs and
 // hooks/budget.mjs already use by construction -- ACC_RUNNER_ROOT defaults
 // to runner.mjs's own directory and ACC_ROOT defaults to the repo root, so
 // join(ROOT,"state") and join(ACC_ROOT,"runner","state") coincide in
 // production without either subsystem knowing about the other's env var).
-export function ensureJobGoal(job) {
-  const marker = join(ROOT, "state", `${job.name}.goalid`);
+export function ensureJobMission(job) {
+  const marker = join(ROOT, "state", `${job.name}.missionid`);
   let id = null;
   try { id = readFileSync(marker, "utf8").trim() || null; } catch {}
   if (id) {
-    const existing = readGoal(id);
+    const existing = readMission(id);
     if (existing && existing.status === "active") return id;
   }
-  const g = createGoal({ text: job.goalText || job.bootstrap, cwd: job.workdir });
+  const g = createMission({ text: job.missionText || job.bootstrap, cwd: job.workdir });
   mkdirSync(join(ROOT, "state"), { recursive: true });
   writeFileSync(marker, g.id);
   return g.id;
@@ -151,7 +151,7 @@ export function killTree(child, platform = process.platform) {
   else killTreePosix(child);
 }
 
-export function runClaudeOnce(job, goalId) {
+export function runClaudeOnce(job, missionId) {
   return new Promise((resolveRun) => {
     // Deliberately NOT --bare: each session must keep the user's hook stack —
     // guard.mjs is the safety layer that makes bypassPermissions acceptable.
@@ -181,11 +181,11 @@ export function runClaudeOnce(job, goalId) {
       // node process under `node hooks/covgate.mjs` — not that claude itself
       // is ever coverage-instrumented, but the fake stub runner.test.mjs
       // spawns through this exact path is).
-      // ACC_GOAL (Phase 5 step 1): this run belongs to a real goal.mjs
+      // ACC_MISSION (Phase 5 step 1): this run belongs to a real mission.mjs
       // record now, so budget.mjs's Stop-hook logic (ceilings, checkpoint
       // handoff) and Phase 3's accActive() gate both engage for runner-
       // launched sessions exactly as they do for GUI-launched ones.
-      env: { ...process.env, ACC_PTY: "", ACC_GOAL: goalId || "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined },
+      env: { ...process.env, ACC_PTY: "", ACC_MISSION: missionId || "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined },
     };
     const child = sp.args ? spawn(sp.file, sp.args, opts) : spawn(sp.file, opts);
     child.stdin.write(job.bootstrap);
@@ -194,7 +194,7 @@ export function runClaudeOnce(job, goalId) {
     let err = "";
     const timer = setTimeout(() => {
       // Lean review (2026-08-06): every other exceptional runLoop condition
-      // (stuck board, blocked/paused goal, maxRuns exhausted) alerts; a
+      // (stuck board, blocked/paused mission, maxRuns exhausted) alerts; a
       // killed hang only logged, invisible to alerts/ until it repeated
       // maxStuck times. A hang worth killing is worth alerting on its own.
       alert(job, `run timed out after ${job.runTimeoutMin} min — killing (tree)`);
@@ -220,45 +220,45 @@ export function runClaudeOnce(job, goalId) {
 // wiring has its own coverage in hooks/lane.test.mjs; here it only needs
 // proving that runner.mjs actually calls it correctly (runner.test.mjs's
 // "integration" group, against a fake claude binary).
-export function runOnce(job, goalId) {
+export function runOnce(job, missionId) {
   return withLaunchSlot(
     `runner:${job.name}`,
-    () => retryTransport(`runner:${job.name}`, () => runClaudeOnce(job, goalId), { onLog: (l) => log(job, l) }),
+    () => retryTransport(`runner:${job.name}`, () => runClaudeOnce(job, missionId), { onLog: (l) => log(job, l) }),
     { ttlMs: (job.runTimeoutMin + 10) * 60 * 1000, onLog: (l) => log(job, l) }
   );
 }
 
-// Phase 5 step 1: goal.mjs's own status is a more authoritative completion
+// Phase 5 step 1: mission.mjs's own status is a more authoritative completion
 // signal than the file-hash heuristic below -- the model explicitly runs
-// `goal.mjs done`/`blocked`, versus boardState() guessing from whether a
+// `mission.mjs done`/`blocked`, versus boardState() guessing from whether a
 // text file changed. Checked ALONGSIDE boardState, not instead of it (this
 // is additive wiring, not the replacement Phase 5's full deletion step
 // would be) -- either signal can end the loop. null means "still active,
 // keep going".
-export function goalSignal(job, goalId) {
-  // readGoalAnywhere, not readGoal: setStatus archives done/blocked goals
-  // out of the live directory the instant they're set, so a plain readGoal
+export function missionSignal(job, missionId) {
+  // readMissionAnywhere, not readMission: setStatus archives done/blocked missions
+  // out of the live directory the instant they're set, so a plain readMission
   // here would see a false "not found" at the exact moment the model
   // signals completion.
-  const g = readGoalAnywhere(goalId);
+  const g = readMissionAnywhere(missionId);
   if (!g) return null;
   if (g.status === "done") {
-    log(job, `goal ${goalId} marked done — queue complete`);
+    log(job, `mission ${missionId} marked done — queue complete`);
     return 0;
   }
   if (g.status === "blocked") {
-    alert(job, `goal ${goalId} is blocked: ${g.why || "no reason given"}`);
+    alert(job, `mission ${missionId} is blocked: ${g.why || "no reason given"}`);
     return 6;
   }
   if (g.status === "paused") {
-    alert(job, `goal ${goalId} is paused at a ceiling: ${g.why || "no reason given"} — needs 'node hooks/goal.mjs resume ${goalId}'`);
+    alert(job, `mission ${missionId} is paused at a ceiling: ${g.why || "no reason given"} — needs 'node hooks/mission.mjs resume ${missionId}'`);
     return 7;
   }
   return null;
 }
 
 export async function runLoop(job, once, { run = runOnce } = {}) {
-  const goalId = ensureJobGoal(job);
+  const missionId = ensureJobMission(job);
   let stuck = 0;
   for (let n = 1; n <= job.maxRuns; n++) {
     const stopFile = join(ROOT, "stop", job.name + ".stop");
@@ -281,14 +281,14 @@ export async function runLoop(job, once, { run = runOnce } = {}) {
       log(job, `done marker "${job.doneMarker}" present — queue complete`);
       return 0;
     }
-    const preSignal = goalSignal(job, goalId);
+    const preSignal = missionSignal(job, missionId);
     if (preSignal !== null) return preSignal;
     log(job, `run ${n}/${job.maxRuns} starting (stuck ${stuck}/${job.maxStuck})`);
     // Every run goes through the machine-wide launch lane (hooks/lane.mjs):
     // one automated session at a time across runner + e2e, paced starts, and
     // transport-only retries — the econnreset class dies here, and a session
     // that fails for a REAL reason still fails exactly as before.
-    const { code, result, err } = await run(job, goalId);
+    const { code, result, err } = await run(job, missionId);
     log(job, `run ${n} exited ${code}; tail: ${result.slice(-400).replaceAll("\n", " | ")}`);
     if (err) log(job, `stderr tail: ${err.replaceAll("\n", " | ")}`);
     const after = boardState(job);
@@ -296,7 +296,7 @@ export async function runLoop(job, once, { run = runOnce } = {}) {
       log(job, "queue complete");
       return 0;
     }
-    const postSignal = goalSignal(job, goalId);
+    const postSignal = missionSignal(job, missionId);
     if (postSignal !== null) return postSignal;
     stuck = after.hash === before.hash ? stuck + 1 : 0;
     if (stuck >= job.maxStuck) {

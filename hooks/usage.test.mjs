@@ -318,10 +318,10 @@ test("Phase 5: weekTier reports red once the real rolling total reaches redToken
   delete process.env.ACC_POLICY;
 });
 
-test("Phase 3: accActive() is true when ANY of ACC_SESSION/ACC_GOAL/ACC_PROFILE/ACC_PTY is set, false when none are", async () => {
+test("Phase 3: accActive() is true when ANY of ACC_SESSION/ACC_MISSION/ACC_PROFILE/ACC_PTY is set, false when none are", async () => {
   const sb = sandbox();
   const u = await loadUsage(sb);
-  const VARS = ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"];
+  const VARS = ["ACC_SESSION", "ACC_MISSION", "ACC_PROFILE", "ACC_PTY"];
   const saved = {};
   for (const k of VARS) { saved[k] = process.env[k]; delete process.env[k]; }
   try {
@@ -330,9 +330,9 @@ test("Phase 3: accActive() is true when ANY of ACC_SESSION/ACC_GOAL/ACC_PROFILE/
     assert.equal(u.accActive(), true, "ACC_SESSION=1");
     delete process.env.ACC_SESSION;
 
-    process.env.ACC_GOAL = "g-1";
-    assert.equal(u.accActive(), true, "ACC_GOAL set");
-    delete process.env.ACC_GOAL;
+    process.env.ACC_MISSION = "g-1";
+    assert.equal(u.accActive(), true, "ACC_MISSION set");
+    delete process.env.ACC_MISSION;
 
     process.env.ACC_PROFILE = "Normal";
     assert.equal(u.accActive(), true, "ACC_PROFILE set");

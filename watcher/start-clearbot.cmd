@@ -16,7 +16,7 @@ rem every kick and every auto-approval (ACC-HANDOFF.md already documents that
 rem SYMPTOM as a trap; this is a root cause of it, not previously named). A
 rem lock file (New-Item -ErrorAction Stop is atomic create-or-fail -- the same
 rem exclusive-create mutex primitive kernel/ledger.mjs's withDecisionLock and
-rem hooks/goal.mjs's withGoalLock already use) now makes the whole
+rem hooks/mission.mjs's withMissionLock already use) now makes the whole
 rem probe-then-start sequence atomic across processes. A stale lock (left by a
 rem start attempt that crashed before cleaning up) older than 30s is reclaimed
 rem once rather than deadlocking every future start attempt forever. Losing

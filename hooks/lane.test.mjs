@@ -729,8 +729,8 @@ test("formatHolders renders pid/label/startedAt, and falls back to 'unknown' whe
   assert.equal(formatHolders(null), "unknown");
   assert.equal(formatHolders([{ pid: 111, label: null, startedAt: null }]), "pid 111");
   assert.equal(
-    formatHolders([{ pid: 111, label: "goal-loop", startedAt: "2026-08-03T00:00:00Z" }]),
-    "pid 111 [goal-loop] (started 2026-08-03T00:00:00Z)"
+    formatHolders([{ pid: 111, label: "mission-loop", startedAt: "2026-08-03T00:00:00Z" }]),
+    "pid 111 [mission-loop] (started 2026-08-03T00:00:00Z)"
   );
   assert.equal(
     formatHolders([{ pid: 1, label: null, startedAt: null }, { pid: 2, label: "x", startedAt: null }]),

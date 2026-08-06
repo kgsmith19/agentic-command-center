@@ -100,7 +100,7 @@ test("profile without a context block: base dials show through (live policy shap
 });
 
 // --- watcher liveness ------------------------------------------------------
-// A dead clearbot means no auto-clear and no goal resume. That was invisible
+// A dead clearbot means no auto-clear and no mission resume. That was invisible
 // until it was noticed by hand; the status line is where it is cheapest to see.
 function heartbeat(sb, ageMs) {
   const dir = path.join(sb.root, "watcher");
@@ -129,28 +129,28 @@ test("no heartbeat file at all does not cry wolf", () => {
   assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /bot DEAD/);
 });
 
-test("Phase 1: an unread ceiling alert shows 'goal PAUSED' on the status line", () => {
+test("Phase 1: an unread ceiling alert shows 'mission PAUSED' on the status line", () => {
   const sb = sandbox(BASE_POLICY);
   const alerts = path.join(sb.root, "runner", "alerts");
   fs.mkdirSync(alerts, { recursive: true });
   fs.writeFileSync(path.join(alerts, "g-test.ceiling.json"), JSON.stringify({ id: "g-test" }));
-  assert.match(run(sb, writeTranscript(sb, 10000)), /goal PAUSED/);
+  assert.match(run(sb, writeTranscript(sb, 10000)), /mission PAUSED/);
 });
 
-test("Phase 1: no ceiling alert -> no goal PAUSED segment", () => {
+test("Phase 1: no ceiling alert -> no mission PAUSED segment", () => {
   const sb = sandbox(BASE_POLICY);
-  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /goal PAUSED/);
+  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /mission PAUSED/);
 });
 
-test("OI-034: an unread dead-goal alert shows 'goal DIED' on the status line", () => {
+test("OI-034: an unread dead-mission alert shows 'mission DIED' on the status line", () => {
   const sb = sandbox(BASE_POLICY);
   const alerts = path.join(sb.root, "runner", "alerts");
   fs.mkdirSync(alerts, { recursive: true });
   fs.writeFileSync(path.join(alerts, "g-test.dead.json"), JSON.stringify({ id: "g-test" }));
-  assert.match(run(sb, writeTranscript(sb, 10000)), /goal DIED/);
+  assert.match(run(sb, writeTranscript(sb, 10000)), /mission DIED/);
 });
 
-test("OI-034: no dead-goal alert -> no goal DIED segment", () => {
+test("OI-034: no dead-mission alert -> no mission DIED segment", () => {
   const sb = sandbox(BASE_POLICY);
-  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /goal DIED/);
+  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /mission DIED/);
 });

@@ -53,7 +53,7 @@ test("chat, follow-ups, machinery and slash commands do not fire", () => {
   for (const p of [
     "why did scenario 3 time out?",
     "yes do that",
-    "Continue the active ACC goal.",
+    "Continue the active ACC mission.",
     "Run the queued prompt.",
     "/approve",
     "/clear",
@@ -144,7 +144,7 @@ test("fail-open: garbage stdin exits 0 with no output", () => {
 
 test("Phase 3: with NO ACC-active env var, a genuine planning prompt still produces no injection", () => {
   const env = { ...process.env, ACC_ROOT: ROOT };
-  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  for (const k of ["ACC_SESSION", "ACC_MISSION", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
   const out = execFileSync("node", [path.join(HERE, "testplan.mjs")], {
     input: JSON.stringify({ session_id: "tp-inactive", prompt: "plan out the retry queue for the watcher" }),
     encoding: "utf8", env,

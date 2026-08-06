@@ -25,7 +25,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Phase 7 (full-remediation-prompt.md): ACC_ROOT-overridable like every
-// other hooks/ file (goal.mjs, usage.mjs, budget.mjs) -- previously always
+// other hooks/ file (mission.mjs, usage.mjs, budget.mjs) -- previously always
 // resolved relative to this file's own location, so a test could only ever
 // exercise the real repo's own config.json/vault.json (gitignored, but
 // still live state, not a throwaway sandbox).
@@ -39,7 +39,7 @@ const VAULT = path.join(ROOT, "vault.json");
 // config.json) used to hard-crash with a raw JSON.parse stack trace on
 // EVERY engine command, since nothing here caught it -- the fallback
 // existed for the missing-file case but not the exists-but-corrupt one.
-// Same treatment as hooks/goal.mjs's readJson.
+// Same treatment as hooks/mission.mjs's readJson.
 const readJson = (p, fallback) => {
   if (!existsSync(p)) return fallback;
   try {

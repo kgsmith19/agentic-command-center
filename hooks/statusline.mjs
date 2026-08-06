@@ -56,9 +56,9 @@ function agentCount(sid) {
 }
 
 // Phase 1 (full-remediation-prompt.md): any unread ceiling alert shows here.
-// "Unread" = the file still exists -- goal.mjs's resumeGoal deletes it, so
-// resuming the goal is what clears the warning, no separate ack needed.
-function goalPaused() {
+// "Unread" = the file still exists -- mission.mjs's resumeMission deletes it, so
+// resuming the mission is what clears the warning, no separate ack needed.
+function missionPaused() {
   try {
     const dir = process.env.ACC_ALERTS_DIR || path.join(ROOT, "runner", "alerts");
     return fs.readdirSync(dir).some((f) => f.endsWith(".ceiling.json"));
@@ -67,13 +67,13 @@ function goalPaused() {
   }
 }
 
-// OI-034: a goal reaped as dead (console gone -- a reboot, a crash, power
-// loss) writes a `.dead.json` alert the same way a paused goal's ceiling
-// does. Unlike the ceiling alert, nothing "resumes" a dead goal to clear
+// OI-034: a mission reaped as dead (console gone -- a reboot, a crash, power
+// loss) writes a `.dead.json` alert the same way a paused mission's ceiling
+// does. Unlike the ceiling alert, nothing "resumes" a dead mission to clear
 // this one -- hooks/budget.mjs's SessionStart consumes (reads + deletes)
 // it once, inline in chat; this indicator is a secondary, persistent
 // surface for the window between the reap and that next SessionStart.
-function goalDied() {
+function missionDied() {
   try {
     const dir = process.env.ACC_ALERTS_DIR || path.join(ROOT, "runner", "alerts");
     return fs.readdirSync(dir).some((f) => f.endsWith(".dead.json"));
@@ -113,8 +113,8 @@ function main() {
   }
 
   if (botDead()) parts.push(`${RED}bot DEAD${RESET}`);
-  if (goalPaused()) parts.push(`${RED}goal PAUSED${RESET}`);
-  if (goalDied()) parts.push(`${RED}goal DIED${RESET}`);
+  if (missionPaused()) parts.push(`${RED}mission PAUSED${RESET}`);
+  if (missionDied()) parts.push(`${RED}mission DIED${RESET}`);
 
   const wk = weekPct();
   if (wk) {

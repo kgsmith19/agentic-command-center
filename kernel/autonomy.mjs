@@ -42,7 +42,7 @@ export function readAutonomyStrict() {
 // tmp+rename instead of a bare writeFileSync -- a reader (readAutonomy,
 // readAutonomyStrict, another process's own updateAfterRun) must never
 // observe a half-written autonomy.json. Same pattern every other JSON state
-// file in this codebase already uses (hooks/goal.mjs's write(), hooks/
+// file in this codebase already uses (hooks/mission.mjs's write(), hooks/
 // budget.mjs's tier.json, hooks/engine.mjs's vault.json/config.json) --
 // this file was the one left behind.
 export function writeAutonomy(state) {

@@ -30,14 +30,14 @@ process.env.ACC_RUNNER_ROOT = path.join(BASE, "runnerroot");
 process.env.ACC_LANE_DIR = path.join(BASE, "lane");
 process.env.ACC_POLICY = path.join(BASE, "policy.json");
 fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ lane: { slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 5, backoffCapMs: 20, pollMs: 20 } }));
-// Phase 5 step 1: runner.mjs now calls into hooks/goal.mjs directly
-// (ensureJobGoal/goalSignal). goal.mjs resolves its store from ACC_ROOT/
-// ACC_GOALS_DIR, a DIFFERENT env var than ACC_RUNNER_ROOT -- without this,
+// Phase 5 step 1: runner.mjs now calls into hooks/mission.mjs directly
+// (ensureJobMission/missionSignal). mission.mjs resolves its store from ACC_ROOT/
+// ACC_MISSIONS_DIR, a DIFFERENT env var than ACC_RUNNER_ROOT -- without this,
 // every test in this file would silently read/write the real repo's
-// runner/goals directory (route.test.mjs/goal.test.mjs discipline: live
+// runner/missions directory (route.test.mjs/mission.test.mjs discipline: live
 // state must never see test data).
 process.env.ACC_ROOT = process.env.ACC_RUNNER_ROOT;
-process.env.ACC_GOALS_DIR = "";
+process.env.ACC_MISSIONS_DIR = "";
 // usage.mjs resolves CLAUDE_CONFIG_DIR into a MODULE-LEVEL const at import
 // time, not per-call -- must be set before runner.mjs (which imports
 // usage.mjs) is first imported below, or every weekTier() scan in this file
@@ -49,9 +49,9 @@ const RUNNER = path.join(HERE, "runner.mjs");
 const {
   loadJob, boardState, runLoop, install, status, runClaudeOnce, runOnce,
   killTreeWin32, killTreePosix, killTree, log, cli: cliFn,
-  ensureJobGoal, goalSignal,
+  ensureJobMission, missionSignal,
 } = await import("./runner.mjs");
-const { createGoal, readGoal, setStatus } = await import("../hooks/goal.mjs");
+const { createMission, readMission, setStatus } = await import("../hooks/mission.mjs");
 
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
@@ -202,43 +202,43 @@ test("runLoop: once=true with an undefined code falls back to 0, and stderr is l
   assert.ok(logText.includes("stderr tail: boom on stderr"));
 });
 
-// ---------------------------------------------------- Phase 5 step 1: goal wiring
+// ---------------------------------------------------- Phase 5 step 1: mission wiring
 
-test("ensureJobGoal creates a goal on first call and REUSES the same one on a second call for the same job", () => {
+test("ensureJobMission creates a mission on first call and REUSES the same one on a second call for the same job", () => {
   const j = job();
-  const id1 = ensureJobGoal(j);
-  assert.ok(readGoal(id1), "a real goal now exists");
-  assert.equal(readGoal(id1).cwd, j.workdir);
-  const id2 = ensureJobGoal(j);
-  assert.equal(id2, id1, "the same job reuses its goal rather than creating a new one every run");
+  const id1 = ensureJobMission(j);
+  assert.ok(readMission(id1), "a real mission now exists");
+  assert.equal(readMission(id1).cwd, j.workdir);
+  const id2 = ensureJobMission(j);
+  assert.equal(id2, id1, "the same job reuses its mission rather than creating a new one every run");
 });
 
-test("ensureJobGoal creates a FRESH goal once the previous one is no longer active", () => {
+test("ensureJobMission creates a FRESH mission once the previous one is no longer active", () => {
   const j = job();
-  const id1 = ensureJobGoal(j);
+  const id1 = ensureJobMission(j);
   setStatus(id1, "done", "finished");
-  const id2 = ensureJobGoal(j);
-  assert.notEqual(id2, id1, "a done goal is not reused -- a new one is created");
+  const id2 = ensureJobMission(j);
+  assert.notEqual(id2, id1, "a done mission is not reused -- a new one is created");
 });
 
-test("goalSignal: null while active, 0/6/7 for done/blocked/paused, null for a nonexistent goal", () => {
+test("missionSignal: null while active, 0/6/7 for done/blocked/paused, null for a nonexistent mission", () => {
   const j = job();
-  const g = createGoal({ text: "t", cwd: j.workdir });
-  assert.equal(goalSignal(j, g.id), null, "an active goal is not a stop signal");
+  const g = createMission({ text: "t", cwd: j.workdir });
+  assert.equal(missionSignal(j, g.id), null, "an active mission is not a stop signal");
 
-  const done = createGoal({ text: "t2", cwd: j.workdir });
+  const done = createMission({ text: "t2", cwd: j.workdir });
   setStatus(done.id, "done", "shipped");
-  assert.equal(goalSignal(j, done.id), 0);
+  assert.equal(missionSignal(j, done.id), 0);
 
-  const blocked = createGoal({ text: "t3", cwd: j.workdir });
+  const blocked = createMission({ text: "t3", cwd: j.workdir });
   setStatus(blocked.id, "blocked", "needs a human");
-  assert.equal(goalSignal(j, blocked.id), 6);
+  assert.equal(missionSignal(j, blocked.id), 6);
 
-  const paused = createGoal({ text: "t4", cwd: j.workdir });
+  const paused = createMission({ text: "t4", cwd: j.workdir });
   setStatus(paused.id, "paused", "CEILING REACHED: cycles");
-  assert.equal(goalSignal(j, paused.id), 7);
+  assert.equal(missionSignal(j, paused.id), 7);
 
-  assert.equal(goalSignal(j, "g-does-not-exist"), null, "a missing goal is not treated as a stop signal");
+  assert.equal(missionSignal(j, "m-does-not-exist"), null, "a missing mission is not treated as a stop signal");
 });
 
 test("runLoop: a RED week tier holds the loop before ever calling run (exit 5)", async () => {
@@ -278,40 +278,40 @@ test("runLoop: a RED week tier holds the loop before ever calling run (exit 5)",
   }
 });
 
-test("runLoop: the injected run() receives the job's own goal id", async () => {
+test("runLoop: the injected run() receives the job's own mission id", async () => {
   const j = job();
-  let seenGoalId = null;
+  let seenMissionId = null;
   await runLoop(j, true, {
-    run: async (jobArg, goalId) => { seenGoalId = goalId; return { code: 0, result: "", err: "" }; },
+    run: async (jobArg, missionId) => { seenMissionId = missionId; return { code: 0, result: "", err: "" }; },
   });
-  assert.ok(seenGoalId, "a goal id was passed");
-  assert.ok(readGoal(seenGoalId), "and it resolves to a real goal");
-  assert.equal(readGoal(seenGoalId).cwd, j.workdir);
+  assert.ok(seenMissionId, "a mission id was passed");
+  assert.ok(readMission(seenMissionId), "and it resolves to a real mission");
+  assert.equal(readMission(seenMissionId).cwd, j.workdir);
 });
 
-test("runLoop: stops via the goal signal (blocked) even though the board itself shows no progress yet", async () => {
+test("runLoop: stops via the mission signal (blocked) even though the board itself shows no progress yet", async () => {
   const j = job({ maxStuck: 100, maxRuns: 100 }); // high enough that board-stuck logic would never trigger first
-  const goalId = ensureJobGoal(j);
+  const missionId = ensureJobMission(j);
   const code = await runLoop(j, false, {
-    run: async () => { setStatus(goalId, "blocked", "needs Kyle"); return { code: 0, result: "", err: "" }; },
+    run: async () => { setStatus(missionId, "blocked", "needs Kyle"); return { code: 0, result: "", err: "" }; },
   });
   assert.equal(code, 6);
 });
 
-test("runLoop: stops via the goal signal (paused) even though the board itself shows no progress yet", async () => {
+test("runLoop: stops via the mission signal (paused) even though the board itself shows no progress yet", async () => {
   const j = job({ maxStuck: 100, maxRuns: 100 });
-  const goalId = ensureJobGoal(j);
+  const missionId = ensureJobMission(j);
   const code = await runLoop(j, false, {
-    run: async () => { setStatus(goalId, "paused", "CEILING REACHED: cycles"); return { code: 0, result: "", err: "" }; },
+    run: async () => { setStatus(missionId, "paused", "CEILING REACHED: cycles"); return { code: 0, result: "", err: "" }; },
   });
   assert.equal(code, 7);
 });
 
-test("runLoop: the goal reaching done ends the loop even if the board's own doneMarker never appears", async () => {
+test("runLoop: the mission reaching done ends the loop even if the board's own doneMarker never appears", async () => {
   const j = job({ maxStuck: 100, maxRuns: 100 });
-  const goalId = ensureJobGoal(j);
+  const missionId = ensureJobMission(j);
   const code = await runLoop(j, false, {
-    run: async () => { setStatus(goalId, "done", "shipped via the goal, not the board"); return { code: 0, result: "", err: "" }; },
+    run: async () => { setStatus(missionId, "done", "shipped via the mission, not the board"); return { code: 0, result: "", err: "" }; },
   });
   assert.equal(code, 0);
 });
@@ -608,7 +608,7 @@ test("integration: a hung run is killed PROMPTLY at its timeout, not merely even
 });
 
 // Lean-review finding (2026-08-06): every OTHER exceptional runLoop
-// condition (stuck board, blocked/paused goal, maxRuns exhausted) calls
+// condition (stuck board, blocked/paused mission, maxRuns exhausted) calls
 // alert() -- the channel README.md and status() both frame as the
 // notification surface. A killed hang only ever called log(), so a single
 // runTimeoutMin timeout was invisible to anything polling alerts/ until it
