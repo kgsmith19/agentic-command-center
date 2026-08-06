@@ -31,6 +31,68 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-048 hooks/lane.test.mjs is flaky, both under full-suite concurrency and occasionally standalone
+- opened: 2026-08-05
+- rank: reliability
+- where: `hooks/lane.test.mjs` — seen failing at two different assertions
+  across separate runs: a label mismatch ('held-by-breaker' vs
+  'labeled-holder', line ~715) under the full `test:windows`/covgate run,
+  and a real `execFileSync` timeout (SIGTERM) inside `queryClaudeProcesses`
+  (line 371) on a STANDALONE `node --test hooks/lane.test.mjs` run. A
+  second standalone run passed clean, 63/63.
+- what: found running the full suite and covgate while verifying sub-project
+  J's Task 5 (goal-store rename, unrelated file — hooks/lane.mjs's only
+  change from that task was one prose-comment word). Real process
+  enumeration (`queryClaudeProcesses`) makes this file sensitive to
+  whatever else is running on the machine, not just other test files.
+- why open: two different failure shapes on the same file across three runs
+  suggests more than one timing hazard; diagnosing it is its own task, not
+  a drive-by fix during an unrelated rename. Possibly related to
+  guards#OI-045/guards#OI-047 (same "flaky only sometimes, unrelated file
+  touched" pattern) — worth a combined look.
+- done when: the file passes reliably both standalone and inside the full
+  concurrent `test:windows`/covgate run, across several repeats.
+
+## OI-047 kernel/run.test.mjs's "resolves a real adapter when none is injected" is flaky under full-suite concurrency
+- opened: 2026-08-05
+- rank: reliability
+- where: `kernel/run.test.mjs:94` ("runTask resolves a real adapter when
+  none is injected")
+- what: found running the full `test:windows` suite (and separately under
+  `covgate`) while verifying sub-project J's Task 5 (goal-store rename,
+  unrelated file). Fails intermittently with `TypeError: Cannot read
+  properties of null (reading 'name')` at line 101 — some race under
+  concurrent test-file load. Passes reliably in isolation
+  (`node --test kernel/run.test.mjs`, 23/23). Not caused by, or related to,
+  the standing-order rename.
+- why open: a concurrency-sensitive real-adapter-resolution race is a real
+  bug to chase down, not a one-line tweak, and out of scope for the change
+  that surfaced it. Same shape as guards#OI-045 (a different file, same
+  "flaky only under full concurrent load" symptom) — worth checking whether
+  they share a root cause once someone picks this up.
+- done when: the test passes reliably as part of the full concurrent
+  `test:windows` run, not just standalone.
+
+## OI-046 hooks/prompts.mjs is under the changed-file coverage floor and its runner/goals comment is stale
+- opened: 2026-08-05
+- rank: maintainability
+- where: `hooks/prompts.mjs`
+- what: found while renaming the goal store to standing orders (sub-project
+  J, Task 5). Two small things, same file: (1) a header comment says the
+  storage convention "mirrors ... runner/jobs, runner/goals" — the goal
+  store moved to `runner/standing/` this same task, so the comment is now
+  stale. (2) covgate measures the file at lines 90.8% / funcs 92.3% /
+  branches 83.3%, under the 100/100/90 floor — pre-existing, not introduced
+  by this task. Left both alone rather than touch the file: fixing only the
+  comment would make the file "changed" under covgate's git-diff scope and
+  immediately fail the pre-existing coverage gap as a side effect of an
+  unrelated one-line rename.
+- why open: out of scope for the rename itself; fixing the real coverage gap
+  is its own small slice, not a drive-by.
+- done when: `hooks/prompts.mjs` clears 100/100/90 under covgate, and its
+  storage-convention comment names `runner/standing/` instead of
+  `runner/goals/`, landed together in one commit.
+
 ## OI-045 clearbot.test.mjs's OI-003 settle-duration test is flaky under full-suite load
 - opened: 2026-08-05
 - rank: reliability
