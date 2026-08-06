@@ -409,8 +409,35 @@ line under `## Resolved`.
   invalid-name path, since `KERNEL_DEFAULTS.harness` is `null`). Verified:
   `node --test kernel/adapter.test.mjs` (7/7), `node hooks/covgate.mjs`
   (adapter.mjs 100%/100%/100%, unchanged — was already clean).
-  Progress: 10/12 modules done. Remaining:
-  `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
+  `kernel/adapters/claude-code.mjs` pass (2026-08-06): found a REAL, live
+  crash — `startTask` writes the prompt to `child.stdin` with no listener
+  ever attached to that stream. A harness that exits (crashes, fails to
+  launch fully) before consuming a large prompt makes that write throw
+  `EPIPE`; Node surfaces stream write errors on the STREAM itself
+  (`child.stdin`), never on the child PROCESS object, so the existing
+  `child.on("error"/"close", ...)` handlers — which correctly turn every
+  OTHER startup failure into an ordinary `failed-to-start` outcome — never
+  see it. An `'error'` event on an `EventEmitter`/stream with no listener
+  is an UNCAUGHT EXCEPTION: the whole kernel process would crash with no
+  ledger entry at all, discarding whatever the run had already done,
+  instead of the clean rejected/failed-to-start outcome this file exists
+  to produce for every other kind of failure. Reproduced directly (writing
+  a multi-MB payload to a real child process that exits immediately threw
+  uncaught before the fix). Fixed: `child.stdin.on("error", () => {})` —
+  the close/error handlers already decide the real outcome; this only
+  stops the write itself from taking the process down. Also reviewed and
+  found sound (no bug, documented rather than re-litigated per module
+  later): `readState`'s per-event token summation matches
+  `hooks/usage.mjs`'s own established `turns()` pattern exactly (each
+  assistant-type JSONL/event record carries its own incremental usage, not
+  a running total, so summing across all of them is the correct
+  cumulative count — verified against the production-used cost-tracking
+  code, not just this file's own logic). Verified: `node --test
+  kernel/adapters/claude-code.test.mjs` (22/22, RED confirmed first — the
+  EPIPE test's `child.stdin.emit("error", ...)` line threw uncaught,
+  exactly reproducing the crash, before the fix), `node hooks/covgate.mjs`
+  (claude-code.mjs 100%/100%/92.2%).
+  Progress: 11/12 modules done. Remaining: `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from

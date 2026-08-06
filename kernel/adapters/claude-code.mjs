@@ -95,6 +95,19 @@ export async function startTask({
     }
   });
   child.stderr.on("data", (d) => { raw.err += d; });
+  // OI-019 scenario-enumeration pass: a REAL, live crash -- a harness that
+  // exits (crashes, fails to launch fully) before consuming a large prompt
+  // from stdin makes the write below throw EPIPE. Node surfaces that on the
+  // STREAM (child.stdin), never on the child PROCESS object, and nothing
+  // else in this function ever attaches a listener to child.stdin -- an
+  // unhandled 'error' event on a stream is an uncaught exception, crashing
+  // the whole kernel process with no ledger entry, instead of the ordinary
+  // failed-to-start outcome child.on("error")/"close" below already produce
+  // for every other startup failure. Reproduced directly: a child that
+  // exits immediately, given a multi-MB prompt, threw uncaught before this
+  // listener existed. The close/error handlers below still decide the real
+  // outcome; this only stops the write itself from taking the process down.
+  child.stdin.on("error", () => {});
 
   const done = new Promise((resolveDone, rejectDone) => {
     child.on("error", (e) => {

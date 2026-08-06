@@ -62,10 +62,16 @@ process.env.ACC_POLICY = path.join(BASE, "policy.json");
 fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ lane: { slots: 1, minGapMs: 0, pollMs: 10, breakerThreshold: 100000 } }));
 
 // A fake child: stdin sink, stdout/stderr streams, close/error events.
+// stdin is a real EventEmitter (like the actual Writable child_process
+// gives startTask) rather than a plain object, specifically so a test can
+// emit('error', ...) on it the way a genuine EPIPE would arrive.
 function fakeChild() {
   const c = new EventEmitter();
   c.pid = 4242;
-  c.stdin = { written: "", write(s) { this.written += s; }, end() { this.ended = true; } };
+  c.stdin = new EventEmitter();
+  c.stdin.written = "";
+  c.stdin.write = function (s) { this.written += s; };
+  c.stdin.end = function () { this.ended = true; };
   c.stdout = new EventEmitter();
   c.stderr = new EventEmitter();
   c.kill = () => { c.killed = true; };
@@ -86,6 +92,34 @@ test("every launch holds a lane slot for the life of the run and frees it after 
   child.emit("close", 0);
   await handle.done;
   assert.equal(fs.existsSync(path.join(laneDir, "slot-0")), false, "slot must be released after the run");
+});
+
+// OI-019 scenario-enumeration pass: a REAL, live crash. A harness that
+// exits (or crashes) before consuming a large prompt makes the write to
+// its stdin throw EPIPE -- Node surfaces that on child.stdin (a stream),
+// never on the child process object, and nothing else in startTask
+// attached a listener there. An 'error' event on a stream with no
+// listener is an UNCAUGHT EXCEPTION, crashing the whole kernel process
+// with no ledger entry -- not the ordinary failed-to-start outcome
+// child.on("error")/"close" already handle for every other kind of
+// startup failure. Proven here by emitting the same event a real EPIPE
+// would: unhandled, this crashes the test process itself.
+test("a stdin write failure (EPIPE, from a harness that exits before reading it) does not crash the kernel process", async () => {
+  const child = fakeChild();
+  const handle = await A.startTask({
+    runId: "r-epipe", prompt: "a prompt too big to land before the harness exits",
+    settingsPath: "C:/tmp/s.json", sessionId: "11111111-2222-3333-4444-555555555555",
+    tools: ["Read"], cwd: BASE, spawnFn: () => child,
+  });
+  // The real race: the child's stdin errors out (EPIPE) around the same
+  // time it exits. Emitting 'error' on an EventEmitter with no listener
+  // throws synchronously -- if startTask ever again omits the
+  // child.stdin.on("error", ...) guard, THIS LINE throws and fails the
+  // test, exactly reproducing the uncaught crash.
+  child.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+  child.emit("close", 1);
+  const result = await handle.done;
+  assert.equal(result.code, 1, "the run still resolves to its real close code, not a hang or a second crash");
 });
 
 test("startTask spawns exactly what spawnSpec builds for this platform", async () => {
