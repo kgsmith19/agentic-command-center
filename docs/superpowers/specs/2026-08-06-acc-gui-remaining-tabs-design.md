@@ -444,8 +444,29 @@ flagged as "not verified on Windows" too.
 ## 8. Sequencing (what ships tonight vs. what doesn't)
 
 1. **Tonight:** §4 (Protected paths, Vault, Runbox) — `gui/engine.html`,
-   `gui/server.mjs` route additions, `gui/engine.test.mjs`,
-   `gui/e2e/engine.spec.mjs`. Red-first per this repo's standing doctrine.
+   `gui/server.mjs` route additions, `gui/engineClient.mjs`,
+   `gui/engineClient.test.mjs`, `gui/e2e/engine.spec.mjs`. Shipped commit
+   3c482cb, red-first throughout, all Playwright specs verified against a
+   real Chromium (not just fetch()-level fast-tier tests). **What did NOT
+   ship tonight, named rather than silently left**: `guards-gui.ps1` itself
+   still shows the old WinForms bodies for these three tabs — the spec's
+   own §9 acceptance criterion "no parallel WinForms implementation
+   survives a tab's migration" is NOT yet met. Wiring `guards-gui.ps1` to
+   host `gui/engine.html` the same way `Ensure-KernelWeb` already hosts
+   `kernel.html` (§3's reference pattern) is mechanically straightforward —
+   but removing the old WinForms controls safely means also touching every
+   other place in this 1600-line file that references them
+   (`lstSecrets`/`lstProt`/`lstProj`/`lstRunbox`/`cboFolder`/`txtPreview`
+   and friends appear in `Refresh-State`, tab-switch handlers, the
+   `-SmokeTest` diagnostic line, and more not yet fully read). This session
+   has no PowerShell interpreter at all — not even for a syntax check —
+   and a mistake in a file this tightly coupled could break the tool Kyle
+   actually uses daily. Same judgment call already made for Phase 0 and
+   Phase 5 step 2 tonight: authored and tested everything that's
+   verifiable from here (the server, the API, the page, the browser-level
+   e2e proof), left the Windows-only wiring step for a session with a real
+   PowerShell/WinForms environment to do AND verify in one pass, rather
+   than shipping an edit to load-bearing code blind.
 2. **Tonight, if context allows after (1):** §5 (Spending) —
    `hooks/status.mjs`, `gui/spending.html`, route additions, tests, spec.
 3. **Not tonight, spec only:** §7 (Start Work's launch action + Terminal).
