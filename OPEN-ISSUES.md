@@ -234,9 +234,39 @@ line under `## Resolved`.
   pre-existing unrelated root-permissions artifact as above), `node
   hooks/covgate.mjs` scoped to the touched file (`kernel/ledger.mjs`
   100%/100%/98.8%, no override needed, PASS).
-  Progress: 4/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
-  `kernel/run.mjs`, `kernel/ledger.mjs`). Remaining, in rough risk order:
-  `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
+  UPDATE 2026-08-06 (same cycle): fifth module done, `kernel/verifier.mjs`.
+  Found a fourth REAL, live bug: `verifyCriterion` threw synchronously for
+  three distinct, independently reachable malformed-criterion shapes — a
+  `"command"` method with no `command` field, a `"command"` method whose
+  `command` is non-string (e.g. a number), and a `"file_contains"` `pattern`
+  that isn't syntactically valid regex (`new RegExp()` throws a
+  `SyntaxError`). `kernel/contract.mjs`'s `validateContract` only checks that
+  `verify.method` names one of `VERIFY_METHODS` — it never checks that the
+  method-specific fields a criterion needs are present or well-formed, so all
+  three shapes sail through pre-launch validation, the harness runs to
+  completion, and only THEN does verification crash: `verifyCriterion` threw
+  → `verifyAll`'s promise rejected → `runTask`'s own `await verifyAll(...)`
+  rejected → no `finalize()` ever runs, so no `run_finalized` ledger line is
+  ever written despite the harness having genuinely finished — the same
+  "interrupted forever" failure mode this session's other three fixes also
+  targeted, this time triggered by a slightly malformed contract rather than
+  concurrency or a misbehaving adapter. Fixed: the whole method dispatch in
+  `verifyCriterion` is now wrapped in try/catch; any throw becomes
+  `result(criterion, "unknown", "verification threw: " + e.message)` — a
+  criterion the kernel cannot evaluate is exactly what "unknown" already
+  means here (see the file's own existing default case and its stated
+  "any fail or unknown makes the whole run not accepted" philosophy), so this
+  needed no new concept, just closing a gap in an existing one. New test in
+  `kernel/verifier.test.mjs` proves all three shapes now record `"unknown"`
+  instead of throwing (red beforehand — reproduced the exact TypeError/
+  SyntaxError live before writing the fix). Verified: `node --test
+  kernel/verifier.test.mjs` (3 repeated runs, all green, 10/10), full
+  `npm test` (432/433 excluding known skips, same pre-existing unrelated
+  root-permissions artifact as above), `node hooks/covgate.mjs` scoped to
+  the touched file (`kernel/verifier.mjs` 100%/100%/100%, PASS).
+  Progress: 5/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  `kernel/run.mjs`, `kernel/ledger.mjs`, `kernel/verifier.mjs`). Remaining, in
+  rough risk order: `kernel/autonomy.mjs`, `kernel/policy.mjs`,
   `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
