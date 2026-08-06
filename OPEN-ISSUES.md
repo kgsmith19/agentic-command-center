@@ -214,6 +214,53 @@ line under `## Resolved`.
   whose lines get parsed back as records program logic depends on —
   `ledger.mjs` was the only one.
 
+## OI-038 [RESOLVED 2026-08-06] four duplicated cross-process locks only tolerated EEXIST, not a real Windows CI EPERM
+
+- opened and resolved 2026-08-06, found by a real Windows CI failure on PR
+  #9 (commit `d76544a`, the vault-key-bypass fix), in
+  `kernel/autonomy.test.mjs`'s pre-existing 20-way concurrent
+  `updateAfterRun` race test:
+  ```
+  Error: EPERM: operation not permitted, open '...\autonomy.json.lock'
+      at withAutonomyLock (kernel/autonomy.mjs:97:23)
+  ```
+- where: the same cross-process exclusive-file-create lock primitive
+  (`fs.openSync(lockPath, "wx")`, catch, stale-reclaim, timeout,
+  sleep-retry) is independently duplicated across FOUR files —
+  `kernel/autonomy.mjs` (`withAutonomyLock`), `kernel/ledger.mjs`
+  (`withDecisionLock`), `hooks/budget.mjs` (`withStateLock`), and
+  `hooks/mission.mjs` (`withMissionLock`) — each one's own comments
+  already note the duplication and why it wasn't factored out (each file
+  keys the lock differently and none wanted a cross-file import for a
+  handful of lines).
+- what: the retry loop's exception guard was `if (e.code !== "EEXIST")
+  throw e;` in all four — EEXIST (the lock file already exists, held by
+  another process) was retried, but any other error, including EPERM, was
+  surfaced as a hard failure that aborted the whole lock acquisition.
+  EPERM here is a well-documented Windows quirk: antivirus/Defender can
+  transiently lock a just-created file during a scan, which is a
+  transient failure to ACQUIRE the lock — the same class of condition as
+  EEXIST, not a real permission denial — and it resolves itself within
+  milliseconds if retried. Only reproduced for real under Windows CI's
+  20-way concurrent load; not reproducible in the Linux sandbox, so fixed
+  via a targeted `fs.openSync` mock (monkey-patched to throw a simulated
+  EPERM once, matching the real error shape) rather than a real Windows
+  run.
+- fix: all four call sites now retry on `e.code !== "EEXIST" && e.code
+  !== "EPERM"`, with a comment explaining the Windows antivirus/Defender
+  scenario at each site. Verified: `kernel/autonomy.test.mjs` RED
+  (mocked EPERM reproduced the exact real CI failure) then GREEN after
+  the fix (15/15), with a new regression test added
+  ("withAutonomyLock retries past a transient EPERM instead of aborting
+  the whole lock acquisition"). `kernel/ledger.test.mjs`,
+  `hooks/budget.test.mjs`, `hooks/mission.test.mjs` all still green
+  (115 tests total, 1 pre-existing unrelated skip). Full `npm test`:
+  533 pass, 1 pre-existing unrelated failure
+  (`hooks/lane.test.mjs`'s chmod-based read-only test, which fails
+  identically on unmodified `main` — this sandbox runs as root, which
+  bypasses the file permission checks that test relies on; not a
+  regression from this fix).
+
 ## OI-033 usage.mjs/budget.mjs/statusline.mjs/engine.mjs cannot clear covgate's floor today
 - opened: 2026-08-06, found while shipping Phase 1 (docs/2026-08-03-full-
   remediation-prompt.md) — NOT introduced by that work, pre-existing.
