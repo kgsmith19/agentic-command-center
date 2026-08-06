@@ -441,6 +441,29 @@ whole reason this tier stays spec-only tonight rather than shipped
 unverified the way `PtyHost.cs`'s earlier Phase-6 fixes were explicitly
 flagged as "not verified on Windows" too.
 
+### 7d. UPDATE 2026-08-06 (later the same night): the non-launch slice shipped
+
+§7a's own framing already separated this tier into two pieces — "every
+other Start Work control... is already ordinary CLI-backed and would
+migrate exactly like tier 1" vs. the pty transport itself. The first piece
+shipped: `gui/startwork.html` + `hooks/status.mjs`'s `missionSummary`/
+`finishMission`/`stopMission`/`missionLog` + `gui/server.mjs` routes —
+the "What Claude is working on now" panel (view the active mission, mark
+it done, stop restarting it, view its progress log), fully verified
+(fast-tier + a real-Chromium Playwright e2e spec, `gui/e2e/
+startwork.spec.mjs`, 4/4). The panel carries an explicit, visible notice
+that launching new work from the browser isn't available yet, rather than
+a half-built form.
+
+Deliberately NOT shipped, staying exactly within this section's own
+scoping: the task-entry/route-suggestion/profile-picker/Go-button group.
+None of it is useful without a launch action to feed — building it would
+mean either faking a launch or letting the browser create a mission
+record with nothing ever going to bind to it and run it. §7b/§7c's own
+reasoning (Shape A recommended, four specific Windows-verification steps
+named, none of it authorable-and-trustable from this sandbox) is
+unchanged and still the reason the launch/Terminal half stays spec-only.
+
 ## 8. Sequencing (what ships tonight vs. what doesn't)
 
 1. **Tonight:** §4 (Protected paths, Vault, Runbox) — `gui/engine.html`,
