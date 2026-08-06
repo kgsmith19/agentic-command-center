@@ -38,6 +38,11 @@ fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ lane: { slots: 1, minG
 // state must never see test data).
 process.env.ACC_ROOT = process.env.ACC_RUNNER_ROOT;
 process.env.ACC_GOALS_DIR = "";
+// usage.mjs resolves CLAUDE_CONFIG_DIR into a MODULE-LEVEL const at import
+// time, not per-call -- must be set before runner.mjs (which imports
+// usage.mjs) is first imported below, or every weekTier() scan in this file
+// silently falls through to the real host ~/.claude instead of this sandbox.
+process.env.CLAUDE_CONFIG_DIR = path.join(BASE, "claudecfg");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(HERE, "runner.mjs");
@@ -238,9 +243,29 @@ test("goalSignal: null while active, 0/6/7 for done/blocked/paused, null for a n
 
 test("runLoop: a RED week tier holds the loop before ever calling run (exit 5)", async () => {
   const savedPolicy = fs.readFileSync(process.env.ACC_POLICY, "utf8");
+  // Hermetic, not "any real usage at all": usage.mjs's weekTier() scans
+  // CLAUDE_CONFIG_DIR's transcript tree (sandboxed at the top of this file,
+  // before runner.mjs -> usage.mjs was first imported -- that module-level
+  // const is fixed at import time, so setting the env var here mid-test
+  // would silently do nothing). A known fixture transcript makes the
+  // threshold trip for a real, controlled reason, not incidental host state
+  // (an earlier version of this test relied on the host's real ~/.claude
+  // happening to contain enough usage -- true in a dev sandbox, false on a
+  // clean CI runner: caught by a real CI failure, "expected 5, actual 2",
+  // the week never went red because the scan found nothing).
+  const projectDir = path.join(process.env.CLAUDE_CONFIG_DIR, "projects", `proj-${Math.random().toString(36).slice(2)}`);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, "s1.jsonl"),
+    JSON.stringify({
+      type: "assistant",
+      timestamp: new Date().toISOString(),
+      message: { model: "claude-opus-5", usage: { input_tokens: 5000, output_tokens: 0 } },
+    }) + "\n"
+  );
   fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({
     lane: { slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 5, backoffCapMs: 20, pollMs: 20 },
-    week: { amberTokens: 1, redTokens: 1 }, // any real usage at all trips red
+    week: { amberTokens: 1000, redTokens: 1000 }, // the 5000-token fixture above trips this for real
   }));
   try {
     const j = job();
