@@ -504,11 +504,21 @@ channel these items target still exists, untouched, as specified.
    anything else in this phase, and this remote session has no way to test
    Windows logon/reboot behavior — a design pass Kyle should make
    deliberately, not something to implement blind.
-4. **Connected-but-silent pipe wedge** — fixed. `watcher/clearbot.ps1`'s
-   `Send-Pipe` now sets `$c.ReadTimeout = 5000` after connecting — a pipe
-   that accepts and never replies now throws (caught by the existing catch
-   block, same failure path as any other pipe error) instead of blocking
-   the whole watcher forever.
+4. **Connected-but-silent pipe wedge** — fixed, in two passes. The first
+   pass (commit df497c3) set `$c.ReadTimeout = 5000` directly on the
+   `NamedPipeClientStream` — untestable here, and real Windows CI (PR #9,
+   2026-08-06) proved it wrong: a synchronous `NamedPipeClientStream`
+   (opened without `PipeOptions.Asynchronous`) has `CanTimeout = false`, so
+   the `ReadTimeout` setter throws `InvalidOperationException`
+   immediately, caught by the existing catch, so every op silently
+   "failed" before ever reaching the pipe and every clear request fell
+   back to keystroke injection — `hooks/clearbot.test.mjs`'s "pty
+   transport: a clear request goes to the pipe, zero keystrokes" caught it
+   (pipe recorded zero lines). Fixed for real (commit (see next commit in
+   this branch)) by bounding the read with `$r.ReadLineAsync().Wait(5000)`
+   instead — a caller-side `Task` timeout needs no stream-level timeout
+   support at all, so it works on a synchronous pipe the same as an
+   asynchronous one.
 5. **Two-watcher TOCTOU** — fixed. `watcher/start-clearbot.cmd`'s
    probe-then-start sequence was a genuine check-then-act race; now guarded
    by a lock file (`New-Item -ErrorAction Stop`, the same exclusive-create
@@ -516,11 +526,16 @@ channel these items target still exists, untouched, as specified.
    `hooks/goal.mjs`'s `withGoalLock` already use), with stale-lock reclaim
    so a crashed start attempt can't deadlock every future one.
 
-**None of items 1/2/4/5 are verified on Windows** — no Windows machine in
+**None of items 1/2/5 are verified on Windows** — no Windows machine in
 this session. Written carefully, following this repo's own established
 precedent for changes made without local verification (OI-010's note is
 the exact precedent cited in each). Flag for a real smoke test before
-trusting them in practice.
+trusting them in practice. **Item 4 is a live example of exactly that risk
+materializing**: the first pass shipped unverified and real Windows CI
+caught it wrong within a day. Its fix is re-authored the same way (no
+Windows machine here) and needs the same scrutiny — don't treat "the CI
+job that caught the first bug is green" as proof the second attempt is
+right until it has actually run.
 
 Belt-and-suspenders. If Phase 5 doesn't fully land — partial migration,
 paused for a reason, or the GUI survives longer than planned — these are

@@ -176,16 +176,26 @@ function Send-Pipe([string]$PipeName, [string[]]$Ops) {
             # ReadLine() below did not -- a pipe that accepts the connection
             # and never replies (PtyHost.cs wedged, deadlocked) used to block
             # this whole watcher forever, and reviveClearbotIfDead won't
-            # replace a process that's still technically alive. ReadTimeout
-            # makes the read itself throw IOException on timeout, caught by
-            # the existing catch below exactly like any other pipe failure --
-            # no new failure path, just a bound on an unbounded one. Not
-            # verified on Windows -- no Windows machine in this session.
-            $c.ReadTimeout = 5000
+            # replace a process that's still technically alive.
+            #
+            # First attempt set $c.ReadTimeout directly and broke the pty
+            # transport outright on real Windows CI: a NamedPipeClientStream
+            # opened without PipeOptions.Asynchronous has CanTimeout=false,
+            # so the ReadTimeout setter throws InvalidOperationException
+            # immediately -- caught by the catch below, so every op silently
+            # "failed" before ever writing to the pipe, and Send-Keys fell
+            # back to keystroke injection every time (caught by
+            # hooks/clearbot.test.mjs's "pty transport: a clear request goes
+            # to the pipe, zero keystrokes" on the Windows integration job,
+            # PR #9, 2026-08-06 -- pipe recorded zero lines). Task.Wait(ms)
+            # bounds the read from the CALLER's side instead, which needs no
+            # stream-level timeout support at all.
             $w = New-Object System.IO.StreamWriter($c); $w.AutoFlush = $true
             $r = New-Object System.IO.StreamReader($c)
             $w.WriteLine($op)
-            $resp = $r.ReadLine()
+            $readTask = $r.ReadLineAsync()
+            if (-not $readTask.Wait(5000)) { throw "pipe read timed out" }
+            $resp = $readTask.Result
             $c.Dispose()
             if ($resp -ne 'OK') { return @{ ok = $false; out = "$op -> $resp" } }
         } catch { return @{ ok = $false; out = "$op -> $($_.Exception.Message)" } }
