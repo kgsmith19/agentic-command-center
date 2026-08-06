@@ -52,6 +52,35 @@ test("git_clean with a failing git and no stderr still records unknown", async (
   assert.equal(r.status, "unknown");
 });
 
+// OI-019 scenario-enumeration pass, kernel/verifier.mjs: a REAL, live bug --
+// `new RegExp(v.pattern)` is unguarded, so a malformed pattern (an
+// unterminated group, an invalid quantifier, etc) throws SyntaxError
+// straight out of verifyCriterion. kernel/run.mjs's only call site
+// (`await verifyAll(...)`) has no try/catch, and the CLI entry point has
+// none around `runTask()` either -- one malformed criterion in a contract
+// would crash the entire kernel process AFTER the harness already finished
+// its work, discarding the run with no recorded outcome at all, instead of
+// the clean "criterion X: fail" this file exists to produce for every other
+// kind of bad criterion (an unreadable file, a nonexistent path).
+test("file_contains: an invalid regex pattern fails that criterion instead of throwing out of verifyCriterion", async () => {
+  const r = await V.verifyCriterion(
+    crit("bad-pattern", { method: "file_contains", path: path.join(BASE, "present.txt"), pattern: "(unterminated" }),
+    { cwd: BASE }
+  );
+  assert.equal(r.status, "fail");
+  assert.match(r.detail, /invalid pattern/i);
+});
+
+test("verifyAll surfaces an invalid-pattern criterion as a normal rejected result, not an uncaught throw", async () => {
+  const contract = { acceptanceCriteria: [
+    crit("AC1", { method: "file_exists", path: path.join(BASE, "present.txt") }),
+    crit("AC2", { method: "file_contains", path: path.join(BASE, "present.txt"), pattern: "[" }),
+  ] };
+  const r = await V.verifyAll(contract, { cwd: BASE });
+  assert.equal(r.accepted, false);
+  assert.deepEqual(r.criteria.map((c) => c.status), ["pass", "fail"]);
+});
+
 test("verifyAll tolerates a contract with no acceptanceCriteria field at all", async () => {
   const r = await V.verifyAll({});
   assert.deepEqual(r.criteria, []);
