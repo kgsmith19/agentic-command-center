@@ -247,6 +247,42 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-048 [RESOLVED 2026-08-06] hooks/lane.mjs's try-acquire/reown handshake could be stolen mid-flight
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (LOW, but a real race), the last of the
+  Big Lean Review's LOW findings to be reproduced and fixed.
+- where: `hooks/lane.mjs`'s `isStale()`/`tryTake()`/`tryAcquireOnce()`/
+  `reownSlot()`.
+- what: `tryAcquireOnce`'s own doc comment already explained the two-step
+  try-acquire/reown handshake — `guards-gui.ps1` reserves a slot under a
+  SHORT-LIVED CLI invocation's own pid first (it doesn't yet know the
+  real child pid), then re-owns the slot to the actual long-lived process
+  once spawned. That short-lived CLI process exits almost immediately BY
+  DESIGN, well before `reownSlot` ever runs. Without a grace window,
+  `isStale()` saw "the reserving CLI process already exited" (expected,
+  happens on every single handshake) and treated it identically to "the
+  slot was abandoned" (an actual crash), letting a competing acquirer
+  steal a slot that was still legitimately in the middle of being
+  claimed.
+- fix: `tryAcquireOnce` now marks its reservation `provisional: true`.
+  `isStale()` gives a provisional record's dead owner pid the same grace
+  beat (10s) already used for the "owner.json missing/mid-write" case,
+  instead of instant reclaim. `reownSlot()` clears the flag once it
+  successfully lands, after which the slot behaves exactly as before
+  (immediate reclaim on a dead pid). The normal in-process `acquireSlot()`
+  path (a real long-lived process, a real pid from the start, no
+  handshake) is untouched — only `tryAcquireOnce`'s CLI-only two-step
+  path sets the flag.
+- verified: new test in `hooks/lane.test.mjs` RED against the unfixed
+  code (a competing `tryAcquireOnce` immediately stole a
+  freshly-reserved handshake slot), GREEN after the fix (the theft is
+  refused, and reown still lands normally once it runs, clearing the
+  grace window). Full `npm test`: 543 pass, 1 pre-existing unrelated
+  failure (`hooks/lane.test.mjs`'s own chmod-based "owner.json can't be
+  written" test, root-sandbox limitation — confirmed identical on
+  unmodified `main`).
+
 ## OI-047 [RESOLVED 2026-08-06] the shared lock primitive's stale-reclaim path had its own double-acquisition race, distinct from OI-038's EPERM fix
 
 - opened and resolved 2026-08-06, found by one of the three parallel
