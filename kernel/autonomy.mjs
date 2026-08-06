@@ -10,7 +10,7 @@
 // throttle the system for an infrastructure fault.
 import fs from "node:fs";
 import path from "node:path";
-import { readRuns, autonomyFile } from "./ledger.mjs";
+import { readRuns, autonomyFile, withLock, sleepSync } from "./ledger.mjs";
 import { loadKernelPolicy } from "./policy.mjs";
 
 const NOT_DELIVERED = new Set(["rejected", "aborted-by-budget"]);
@@ -61,45 +61,67 @@ function windowOutcomes(size) {
   return finals.slice(-size).map((r) => r.outcome);
 }
 
+// OI-019: readAutonomy() -> mutate -> writeAutonomy() is a read-modify-write
+// with no synchronization, the same shape as the guardhook.mjs/ledger.mjs
+// races found earlier this session. Nothing in this module (or run.mjs)
+// guarantees only one kernel process is ever mid-run at once — that's an
+// ADAPTER-level property of kernel/adapters/claude-code.mjs's lane, not a
+// run.mjs/autonomy.mjs invariant, and this file's own header advertises
+// "swapping harnesses is one value in policy.json plus one new file."
+// Reproduced live: 15 concurrent callers against a state that should
+// transition "tighten" exactly once produced 3-4 duplicate log entries, and
+// in one run 4 processes each believed they logged a decision while only 3
+// landed on disk — a genuine lost write, not just a duplicate decision.
+// withLock("autonomy", ...) makes the whole read-decide-write sequence
+// atomic, same primitive and same fix shape as the other two races.
+//
 // Call once after every finalized run.
 export function updateAfterRun(policy = null) {
-  const cfg = (policy || loadKernelPolicy()).autonomy;
-  const state = readAutonomy();
-  const window = windowOutcomes(cfg.window);
-  const counted = window.filter((o) => o !== "failed-to-start");
-  const bad = counted.filter((o) => NOT_DELIVERED.has(o)).length;
-  const rate = counted.length ? bad / counted.length : 0;
-  const log = (direction, reason) => {
-    const entry = { at: new Date().toISOString(), direction, factor: state.factor, runsLeft: state.runsLeft, reason, window };
-    state.log = [...(state.log || []), entry];
-    writeAutonomy(state);
-    return entry;
-  };
-
-  if (state.runsLeft > 0) {
-    state.runsLeft -= 1;
-    if (state.runsLeft === 0 && rate < cfg.rejectRate) {
-      state.factor = 1;
-      return { state, adjustment: log("restore", `recent record recovered (${bad}/${counted.length} not delivered, under the ${cfg.rejectRate} threshold)`) };
-    }
-    if (state.runsLeft === 0) {
-      // Still bad when the tightened window elapsed: fall through so the
-      // block below re-arms tightening instead of sticking at factor<1
-      // forever with no further log entries.
-    } else {
+  return withLock("autonomy", () => {
+    const cfg = (policy || loadKernelPolicy()).autonomy;
+    const state = readAutonomy();
+    // Test seam ONLY (default 0, a no-op): widens the read-to-write window on
+    // demand so kernel/autonomy.test.mjs can force the interleaving this lock
+    // guards against deterministically, instead of relying on a timing coin
+    // flip — same pattern as ledger.mjs's ACC_LEDGER_APPEND_ONCE_DELAY_MS.
+    const delay = Number(process.env.ACC_AUTONOMY_UPDATE_DELAY_MS) || 0;
+    if (delay) sleepSync(delay);
+    const window = windowOutcomes(cfg.window);
+    const counted = window.filter((o) => o !== "failed-to-start");
+    const bad = counted.filter((o) => NOT_DELIVERED.has(o)).length;
+    const rate = counted.length ? bad / counted.length : 0;
+    const log = (direction, reason) => {
+      const entry = { at: new Date().toISOString(), direction, factor: state.factor, runsLeft: state.runsLeft, reason, window };
+      state.log = [...(state.log || []), entry];
       writeAutonomy(state);
-      return { state, adjustment: null };
+      return entry;
+    };
+
+    if (state.runsLeft > 0) {
+      state.runsLeft -= 1;
+      if (state.runsLeft === 0 && rate < cfg.rejectRate) {
+        state.factor = 1;
+        return { state, adjustment: log("restore", `recent record recovered (${bad}/${counted.length} not delivered, under the ${cfg.rejectRate} threshold)`) };
+      }
+      if (state.runsLeft === 0) {
+        // Still bad when the tightened window elapsed: fall through so the
+        // block below re-arms tightening instead of sticking at factor<1
+        // forever with no further log entries.
+      } else {
+        writeAutonomy(state);
+        return { state, adjustment: null };
+      }
     }
-  }
 
-  if (rate >= cfg.rejectRate && counted.length > 0) {
-    state.factor = cfg.factor;
-    state.runsLeft = cfg.runs;
-    return { state, adjustment: log("tighten", `${bad}/${counted.length} recent runs did not deliver, at or over the ${cfg.rejectRate} threshold — ceilings x${cfg.factor} for the next ${cfg.runs} runs`) };
-  }
+    if (rate >= cfg.rejectRate && counted.length > 0) {
+      state.factor = cfg.factor;
+      state.runsLeft = cfg.runs;
+      return { state, adjustment: log("tighten", `${bad}/${counted.length} recent runs did not deliver, at or over the ${cfg.rejectRate} threshold — ceilings x${cfg.factor} for the next ${cfg.runs} runs`) };
+    }
 
-  writeAutonomy(state);
-  return { state, adjustment: null };
+    writeAutonomy(state);
+    return { state, adjustment: null };
+  });
 }
 
 // The automated milestone check. This is re-evaluation, never a human

@@ -42,10 +42,31 @@ export function readRuns() {
   return readLines(runsFile());
 }
 
+// OI-019: the same TOCTOU shape as withDecisionLock below (found right after
+// it, same session) — two processes racing appendStarted/appendFinalized for
+// the SAME runId (a real scenario: this file's own header notes the launch
+// lane retries transport failures) can both read "not present yet" before
+// either has appended, breaking the AC-G4 promise that a run's first record
+// wins and duplicates are dropped. Reproduced live: 20 concurrent callers for
+// one runId produced 2 duplicate run_started lines, not 1. withLock("runs",
+// ...) below closes it the same way withDecisionLock closes the decisions
+// race — one exclusive-create lock file guarding the whole runs.jsonl, since
+// appendOnce's idempotency check scans the entire file, not a per-run slice.
 function appendOnce(event, entry) {
-  if (readRuns().some((r) => r.event === event && r.runId === entry.runId)) return false;
-  appendLine(runsFile(), { event, ...entry });
-  return true;
+  return withLock("runs", () => {
+    const exists = readRuns().some((r) => r.event === event && r.runId === entry.runId);
+    // Test seam ONLY (default 0, a no-op): the natural read-to-append window
+    // here is a handful of microseconds, so forcing two real processes to
+    // land inside it reproduces only rarely by chance. Widening the window
+    // on demand makes the race deterministic for kernel/ledger.test.mjs
+    // instead of relying on a timing coin flip — same pattern as
+    // guardhook.mjs's ACC_GUARDHOOK_STDIN_TIMEOUT_MS test seam.
+    const delay = Number(process.env.ACC_LEDGER_APPEND_ONCE_DELAY_MS) || 0;
+    if (delay) sleepSync(delay);
+    if (exists) return false;
+    appendLine(runsFile(), { event, ...entry });
+    return true;
+  });
 }
 
 export function appendStarted(entry) {
@@ -68,6 +89,78 @@ export function decisionCounts(runId) {
   const rows = readDecisions(runId);
   const allow = rows.filter((r) => r.allow === true).length;
   return { allow, deny: rows.length - allow, total: rows.length };
+}
+
+// OI-019: a real Claude Code turn fires several tool calls at once, each as
+// its own guardhook.mjs process. Reading decisionCounts() then later calling
+// appendDecision() — two separate syscalls, in two separate processes — is a
+// classic TOCTOU race: N concurrent fires can all read the same "attempts"
+// value before any of them has appended, so all N pass a ceiling check meant
+// to allow only one more. Found live: 60 concurrent fires against a ceiling
+// of 3 let 6-14 through. withLock() closes windows like this one by making a
+// read-decide-append sequence a single atomic unit, serialized by an
+// exclusive-create lock file — no runtime dependency, just fs primitives.
+// The exact same shape recurred in appendOnce() above (found moments later,
+// same session), hence a shared, name-parameterized primitive rather than
+// two copies. Timeouts read per-call, not frozen at module load: a fresh
+// process per fire (guardhook.mjs) wouldn't care either way, but withLock is
+// also called repeatedly within one long-lived process (this suite, run.mjs's
+// supervisor) where a test must be able to shrink the timeout at runtime.
+const lockStaleMs = () => Number(process.env.ACC_LEDGER_LOCK_STALE_MS) || 5000;
+const lockWaitTimeoutMs = () => Number(process.env.ACC_LEDGER_LOCK_TIMEOUT_MS) || 4000;
+const lockFile = (name) => path.join(ledgerDir(), `${name}.lock`);
+
+// Atomics.wait blocks the calling thread synchronously (Node's main thread
+// supports this, unlike a browser main thread) — a real sleep, not a busy
+// spin that pins a CPU core while a sibling process holds the lock.
+export function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireLock(name) {
+  const file = lockFile(name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const deadline = Date.now() + lockWaitTimeoutMs();
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(file, "wx"));
+      return () => { try { fs.unlinkSync(file); } catch { /* already released */ } };
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      // A lock left behind by a process that died mid-hold must not wedge
+      // every future caller shut forever — reap it once it is clearly stale
+      // rather than merely old (a legitimate holder's own hold is short).
+      try {
+        if (Date.now() - fs.statSync(file).mtimeMs > lockStaleMs()) {
+          fs.rmSync(file, { force: true });
+          continue;
+        }
+      } catch { /* lock vanished between the check and here — retry immediately */ }
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for the "${name}" lock`);
+      }
+      sleepSync(5);
+    }
+  }
+}
+
+// A named, cross-process mutex: fn runs with exclusive access to whatever
+// resource `name` identifies (by convention, a lock file per shared
+// resource — one per runId's decisions, one for the whole runs.jsonl).
+export function withLock(name, fn) {
+  const release = acquireLock(name);
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+
+// fn receives the attempt count read UNDER the lock and must itself perform
+// any appendDecision() for this fire before returning, so the count the next
+// waiter reads already reflects this one. Whatever fn returns is returned.
+export function withDecisionLock(runId, fn) {
+  return withLock(`${runId}.decisions`, () => fn(decisionCounts(runId).total));
 }
 
 // Queryable by status, harness identity, and date range (AC-L3). No dashboard:

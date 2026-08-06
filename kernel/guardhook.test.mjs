@@ -240,6 +240,27 @@ test("the autonomy-state and non-finite-ceiling denials still record with tool:n
   assert.match(noToolCeiling.err, /finite/i);
 });
 
+test("OI-019: the tool-call ceiling holds across CONCURRENT overlapping fires, not just sequential ones (AC-B1)", async () => {
+  // Real Claude Code sessions fire multiple tool calls in parallel within one
+  // turn, so ceiling enforcement must be safe against overlapping hook
+  // processes racing each other, not just calls made one at a time like every
+  // other test in this file. Fire well more than the ceiling (3) all at once.
+  const fireAsync = () => new Promise((resolve) => {
+    const child = spawn(process.execPath, [HOOK], {
+      stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, ACC_ROOT: ROOT, ACC_POLICY: POLICY, ACC_KERNEL_DIR: S.runDir(RUN) },
+    });
+    child.stdin.end(JSON.stringify({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } }));
+    child.on("close", (code) => resolve(code));
+  });
+  const results = await Promise.all(Array.from({ length: 60 }, fireAsync));
+  const allowed = results.filter((c) => c === 0).length;
+  assert.equal(allowed, 3, `exactly the contract's toolCalls ceiling (3) may be allowed, got ${allowed} of 60 concurrent fires`);
+  process.env.ACC_ROOT = ROOT;
+  assert.deepEqual(L.decisionCounts(RUN), { allow: 3, deny: 57, total: 60 },
+    "every fire must still be recorded exactly once — the lock must not drop or duplicate a decision");
+});
+
 test("a stored autonomy factor of null falls back to 1 in the decision record, not NaN or null", () => {
   stage();
   fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });

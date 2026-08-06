@@ -35,12 +35,29 @@ export function validateContract(contract) {
         errors.push(`allowedActions.${key} must be an array`);
       }
     }
-    const denied = alwaysDenyWriteRoots();
-    for (const root of actions.writeRoots || []) {
-      const target = norm(root);
-      if (denied.some((d) => target === d || target.startsWith(d + "/") || d.startsWith(target + "/"))) {
-        errors.push(`allowedActions.writeRoots entry "${root}" overlaps a protected path — refused before launch`);
+    // OI-019: norm() (kernel/policy.mjs) is path.resolve() underneath, which
+    // throws a TypeError on anything that isn't a string. Two independent,
+    // reachable sources of that: a writeRoots entry that isn't a string (the
+    // Array.isArray check above never checks element types) and, inside
+    // alwaysDenyWriteRoots() itself, a hand-edited/corrupted policy.json
+    // extraDenyWriteRoots entry (saveKernelPolicy validates this as a
+    // strList before ever writing it, but a direct file edit bypasses that).
+    // Left uncaught, either one propagated straight out of validateContract
+    // — called from runTask (kernel/run.mjs) with no try/catch around it,
+    // crashing the WHOLE kernel process before a single ledger entry
+    // existed, worse than any other input this function already refuses
+    // cleanly. A contract this function cannot even evaluate is refused,
+    // exactly like every other malformed shape here — not a crash.
+    try {
+      const denied = alwaysDenyWriteRoots();
+      for (const root of actions.writeRoots || []) {
+        const target = norm(root);
+        if (denied.some((d) => target === d || target.startsWith(d + "/") || d.startsWith(target + "/"))) {
+          errors.push(`allowedActions.writeRoots entry "${root}" overlaps a protected path — refused before launch`);
+        }
       }
+    } catch (e) {
+      errors.push(`allowedActions.writeRoots or policy extraDenyWriteRoots could not be checked (${e.message})`);
     }
   }
 

@@ -108,6 +108,42 @@ test("writeRoots overlapping a protected path are rejected before launch (AC-C4)
   }
 });
 
+test("OI-019: a malformed policy.extraDenyWriteRoots entry refuses the contract instead of crashing (AC-C4 fault tolerance)", () => {
+  // saveKernelPolicy (kernel/policy.mjs) validates extraDenyWriteRoots as a
+  // strList before ever writing it, but nothing stops a hand-edited or
+  // corrupted policy.json from carrying a non-string entry — and
+  // validateContract calls alwaysDenyWriteRoots() with no try/catch.
+  // Reproduced live: a non-string entry (e.g. a stray number) makes
+  // path.resolve() throw a TypeError, which propagated straight out of
+  // validateContract uncaught. Called from runTask (kernel/run.mjs) with no
+  // try/catch around it either, this crashed the WHOLE kernel process before
+  // a single ledger entry existed — worse than any other failure this
+  // module already handles gracefully, since even a refused contract here
+  // gets a clean errors array, not a process exit.
+  const before = fs.readFileSync(process.env.ACC_POLICY, "utf8");
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ kernel: { extraDenyWriteRoots: [123] } }));
+  try {
+    const r = C.validateContract(good());
+    assert.equal(r.ok, false);
+    assert.match(r.errors.join(" "), /extraDenyWriteRoots/i);
+  } finally {
+    fs.writeFileSync(process.env.ACC_POLICY, before);
+  }
+});
+
+test("OI-019: a non-string writeRoots entry refuses the contract instead of crashing (AC-C4 fault tolerance)", () => {
+  // The Array.isArray(actions[key]) check just above only checks that
+  // writeRoots IS an array, never that its elements are strings — a
+  // contract (possibly LLM-generated, an even less trusted source than a
+  // hand-edited policy.json) naming e.g. a stray number hits the exact same
+  // norm()-throws-a-TypeError path as the policy-side test above.
+  const c = good();
+  c.allowedActions.writeRoots = [123];
+  const r = C.validateContract(c);
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join(" "), /writeRoots/i);
+});
+
 test("a budget above a policy hard cap is rejected (AC-C5)", () => {
   const c = good();
   c.budget.wallClockMin = 241;

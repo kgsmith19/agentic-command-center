@@ -235,6 +235,22 @@ test("readState tolerates an empty or malformed stream", () => {
   assert.deepEqual(A.readState(undefined), { toolCalls: 0, tokens: 0, texts: [], sessionId: null });
 });
 
+test("OI-019: readState tolerates a malformed (null or non-object) content block instead of crashing (AC-A6 fault tolerance)", () => {
+  // A single stray null in a content array — a stream hiccup or CLI version
+  // quirk, not necessarily anything wrong with the run itself — used to
+  // throw a TypeError straight out of readState. run.mjs's own supervisor
+  // tick (fixed earlier this session, OI-019) now catches that and aborts
+  // the WHOLE run as a "supervisor-fault", which is a needlessly heavy
+  // response to one malformed block readState could simply skip and keep
+  // counting the rest — the same tolerance the top-level event loop already
+  // gives a malformed event two lines above.
+  const s = A.readState([{ type: "assistant", message: { content: [
+    null, "not an object", 42, { type: "text", text: "hi" }, { type: "tool_use", name: "Read", input: {} },
+  ] } }]);
+  assert.equal(s.toolCalls, 1);
+  assert.deepEqual(s.texts, ["hi"]);
+});
+
 test("readState tolerates an assistant message with no content array and full usage fields", () => {
   const s = A.readState([
     { type: "assistant", message: {} },

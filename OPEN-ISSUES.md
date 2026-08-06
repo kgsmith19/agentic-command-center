@@ -23,7 +23,7 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-032 autoApprove:true means an agent writing a file IS an agent running code
+## OI-032 [RESOLVED 2026-08-06] autoApprove:true means an agent writing a file IS an agent running code
 - opened: 2026-08-04
 - where: policy.json `autoApprove.enabled`, watcher/clearbot.ps1 Invoke-AutoApprove
 - what: already named in docs/2026-08-03-acc-adversarial-review.md §2.1 and
@@ -42,6 +42,16 @@ line under `## Resolved`.
   claiming an agent "may not edit the rules that constrain it", since with
   autoApprove on that sentence is false, or (b) gates auto-approve (allowlist,
   or refuse scripts touching `config.protected` paths).
+- resolution 2026-08-06: Kyle's call — "Accept 100%". Option (a): `AGENTS.md`
+  no longer claims the guard is an absolute boundary — it now documents the
+  autoApprove tradeoff explicitly (new "autoApprove and self-protection —
+  accepted risk" section, right after the guard's own doc). `hooks/guard.mjs`'s
+  header comment and its own denial message (the exact string quoted above)
+  are both corrected in the same spirit: the denial still stands (a direct
+  edit is still refused), but neither the code comment nor the message told
+  to the agent claims that refusal is absolute anymore — the message now
+  names autoApprove's unattended-execution behavior directly, pointing at
+  this OI rather than implying a human reviews every runbox script.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
@@ -72,7 +82,7 @@ line under `## Resolved`.
   closing the session either way (Stop button and natural exit both).
   Screenshot or narrate what actually happened, don't just eyeball the diff.
 
-## OI-019 Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
+## OI-019 [RESOLVED 2026-08-06] Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
 - opened: 2026-08-03
 - where: kernel/*.test.mjs (all suites through Task 16; applies to every
   remaining kernel task, T17-T22)
@@ -113,13 +123,337 @@ line under `## Resolved`.
   explicit, ledgered reason none is needed. No test may be added or loosened
   just to turn red green — every test must be able to fail against a genuine
   regression, never tuned to the current implementation's behavior.
-  Progress: 1/12 modules done (`kernel/guard.mjs`). Remaining, in rough
-  risk order: `kernel/guardhook.mjs`, `kernel/run.mjs`, `kernel/ledger.mjs`,
-  `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
+  UPDATE 2026-08-06: second module done, `kernel/guardhook.mjs` (and, as a
+  direct consequence, `kernel/ledger.mjs` pulled forward from the remaining
+  list since the fix lives there). Pass covered the "overlapping/concurrent
+  runs" scenario class Kyle's original intent named as largely untested. Found
+  a REAL, live bypass, not a hypothetical: the tool-call ceiling check was a
+  classic TOCTOU race — `guardhook.mjs` read `decisionCounts(runId).total`
+  (one process, one syscall), decided allow/deny, then separately called
+  `appendDecision()`. A real Claude Code turn fires several tool calls at
+  once, each its own guardhook.mjs process, so N concurrent fires can all
+  read the same "attempts so far" before any of them has appended and all N
+  pass a ceiling meant to allow only one more. Reproduced live: 60 concurrent
+  fires against a contract ceiling of 3 let 6-14 through, repeatably (not a
+  one-off timing fluke). Fixed: `kernel/ledger.mjs` gained
+  `withDecisionLock(runId, fn)`, a synchronous cross-process mutex built from
+  `fs` primitives only (no new runtime dependency) — an exclusive-create
+  (`wx`) lock file, `Atomics.wait`-based synchronous backoff (a real sleep,
+  not a CPU-spinning busy loop) while contended, and a stale-lock reap
+  (mtime-based) so a process that dies mid-hold cannot wedge the run shut
+  forever; the wait itself times out and throws rather than hanging a tool
+  call indefinitely, consistent with AC-G11 (every unreadable/unwritable
+  state fails closed). `guardhook.mjs` now performs the attempts-read,
+  `decide()`, and `appendDecision()` as one unit inside that lock, so the
+  next waiter always sees a count that reflects every prior fire. New tests:
+  `kernel/guardhook.test.mjs` fires 60 concurrent real subprocess hook
+  invocations against a ceiling of 3 and asserts exactly 3 are allowed and
+  all 60 are recorded exactly once (flaky-red without the fix — 2 of 3 local
+  runs failed pre-fix, reliably green across 5+ runs post-fix);
+  `kernel/ledger.test.mjs` unit-tests `withDecisionLock` directly: serialized
+  ordering, lock release on both normal return and a thrown error, stale-lock
+  reap vs. a fresh lock blocking until timeout, and an end-to-end real-process
+  variant (15 concurrent OS processes each getting a distinct, gap-free
+  attempts count). Also hit OI-017's known tooling artifact on the new code:
+  the OI-028 stdin re-entrancy guard (`if (stdinOversized) return;`, a branch
+  only reachable on a second 'data' event after the byte cap already tripped)
+  measured 100% branches in isolation but 87.5% once merged with sibling
+  suites in one covgate invocation — added `kernel/guardhook.mjs` to
+  `policy.json`'s `branchFloorOverrides` at 85%, same pattern and same
+  documented reason as `hooks/lane.mjs` and `kernel/run.mjs`, not a real gap.
+  Verified: `node --test kernel/guardhook.test.mjs kernel/ledger.test.mjs`
+  (5 repeated runs, all green), full `npm test` (429/430 excluding known
+  skips, the 1 failure is the pre-existing root-permissions artifact in
+  `hooks/lane.test.mjs` unrelated to this change — see that test's own
+  "can't be written" premise, which a root user's write permissions
+  invalidate), `node hooks/covgate.mjs` scoped to the touched files
+  (`kernel/guardhook.mjs` 100%/100%/87.5% at its override, `kernel/ledger.mjs`
+  100%/100%/98.8%, both PASS).
+  UPDATE 2026-08-06 (same cycle): third module done, `kernel/run.mjs`. Found
+  a second REAL, live crash bug, same session: the supervisor's `setInterval`
+  tick called `harnessAdapter.readState()` with no try/catch. A timer
+  callback is not inside `runTask`'s own async try/catch — an exception
+  thrown there is a genuine `uncaughtException` that kills the WHOLE kernel
+  process immediately, not just the one run: the harness child is left
+  orphaned (nothing ever calls `stopTask`), and no `run_finalized` ledger
+  line is ever written (a permanently "interrupted" record). Reproduced
+  live via a subprocess (had to run out-of-process — an uncaught exception
+  in-process would have taken the whole test file down with it): a fake
+  adapter whose `readState()` always throws crashes `node` with exit code 1
+  on the very first tick. `kernel/adapter.mjs`'s `ADAPTER_INTERFACE` only
+  checks a harness module's SHAPE (function presence), never its behavior,
+  and this file's own stated philosophy is to never trust the harness to
+  police itself — a tick that cannot even be evaluated deserves the same
+  fail-closed treatment as a genuine budget breach, not a process kill.
+  Fixed: the tick body is now wrapped in try/catch; a caught fault produces
+  a synthetic `{ stop: true, dimension: "supervisor-fault", reason:
+  e.message }` verdict, which flows through the EXISTING breach-handling
+  path unchanged (clears the interval, best-effort `stopTask()`, finalizes
+  the run as `aborted-by-budget`). The two post-loop `readState()` calls
+  (breach-finalize and normal-completion paths) got the same fault-tolerance
+  treatment via a small `safeTokens()` helper, on a deliberately different
+  design because the risk they defend against is categorically smaller: by
+  the time either runs the harness has already exited, so a throw there
+  cannot hide an ONGOING budget breach the way it could mid-loop (hence the
+  tick still fails the whole run closed) — falling back to 0 tokens loses at
+  most a stale count on a run finishing regardless, so those two sites
+  degrade gracefully instead of stopping anything further. New test in
+  `kernel/run.test.mjs` (also out-of-process, same reason as the repro):
+  proves the process exits 0, the outcome is `aborted-by-budget` with
+  dimension `supervisor-fault` and the adapter's own error message, and a
+  `run_finalized` ledger line exists despite the broken adapter (red without
+  the fix — reproduced the crash directly; green and stable across 3
+  repeated runs after). Verified: `node --test kernel/run.test.mjs` (3
+  repeated runs, all green, 22/22), full `npm test` (430/431 excluding known
+  skips, same pre-existing unrelated root-permissions artifact as above),
+  `node hooks/covgate.mjs` scoped to the touched file (`kernel/run.mjs`
+  100%/100%/92.9%, both isolated and merged with `ledger`/`guardhook`'s
+  suites — above its existing OI-017 85% override, PASS).
+  UPDATE 2026-08-06 (same cycle): fourth module done, `kernel/ledger.mjs`
+  (closing out its run-record/query surface — the last piece left open after
+  the lock primitive landed for the decisions surface). Found a THIRD REAL,
+  live bug in the same session, same shape as the guardhook.mjs finding: this
+  file's own header promises appends are "idempotent by (runId, event) ...
+  the FIRST record for a run wins and later duplicates are dropped (AC-G4)",
+  and names exactly the scenario that breaks it — "the launch lane retries
+  transport failures[,] a resumed kernel must not double-write." `appendOnce`
+  read the whole runs file, decided "not present yet," and appended, as two
+  separate steps with no synchronization — a TOCTOU race identical in shape
+  to the decisions-file one, just on a different file. Reproduced live: 20
+  concurrent `appendStarted` calls for the same runId produced 2 duplicate
+  `run_started` lines (two processes both read "not present" and both wrote).
+  The natural read-to-append window is only a few microseconds, so forcing
+  the interleaving by chance is unreliable for a regression test (confirmed:
+  reruns at N up to 80 mostly did NOT reproduce it) — added
+  `ACC_LEDGER_APPEND_ONCE_DELAY_MS`, a test-only seam widening that window on
+  demand, the same pattern `guardhook.mjs`'s `ACC_GUARDHOOK_STDIN_TIMEOUT_MS`
+  already uses, so the regression test is deterministic rather than a timing
+  coin flip. Fixed by generalizing the guardhook fix's lock primitive:
+  `acquireDecisionLock`/`lockFile(runId)` became `acquireLock`/`lockFile(name)`
+  plus an exported `withLock(name, fn)`, with `withDecisionLock` now a thin
+  wrapper (`withLock(\`${runId}.decisions\`, ...)`, byte-identical lock file
+  path to before — one existing test's exact error-message regex needed
+  updating for the now-generic wording, everything else needed no changes)
+  and `appendOnce` wrapped in `withLock("runs", ...)` — one lock file for the
+  whole `runs.jsonl` since the idempotency check scans the entire file, not a
+  per-run slice. New test in `kernel/ledger.test.mjs`: proven red
+  deterministically against the unfixed logic (5 of 5 concurrent callers
+  believed they went first) and green and stable across 5 repeated runs
+  after. Verified: `node --test kernel/ledger.test.mjs` (5 repeated runs, all
+  green, 21/21), full `npm test` (431/432 excluding known skips, same
+  pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched file (`kernel/ledger.mjs`
+  100%/100%/98.8%, no override needed, PASS).
+  UPDATE 2026-08-06 (same cycle): fifth module done, `kernel/verifier.mjs`.
+  Found a fourth REAL, live bug: `verifyCriterion` threw synchronously for
+  three distinct, independently reachable malformed-criterion shapes — a
+  `"command"` method with no `command` field, a `"command"` method whose
+  `command` is non-string (e.g. a number), and a `"file_contains"` `pattern`
+  that isn't syntactically valid regex (`new RegExp()` throws a
+  `SyntaxError`). `kernel/contract.mjs`'s `validateContract` only checks that
+  `verify.method` names one of `VERIFY_METHODS` — it never checks that the
+  method-specific fields a criterion needs are present or well-formed, so all
+  three shapes sail through pre-launch validation, the harness runs to
+  completion, and only THEN does verification crash: `verifyCriterion` threw
+  → `verifyAll`'s promise rejected → `runTask`'s own `await verifyAll(...)`
+  rejected → no `finalize()` ever runs, so no `run_finalized` ledger line is
+  ever written despite the harness having genuinely finished — the same
+  "interrupted forever" failure mode this session's other three fixes also
+  targeted, this time triggered by a slightly malformed contract rather than
+  concurrency or a misbehaving adapter. Fixed: the whole method dispatch in
+  `verifyCriterion` is now wrapped in try/catch; any throw becomes
+  `result(criterion, "unknown", "verification threw: " + e.message)` — a
+  criterion the kernel cannot evaluate is exactly what "unknown" already
+  means here (see the file's own existing default case and its stated
+  "any fail or unknown makes the whole run not accepted" philosophy), so this
+  needed no new concept, just closing a gap in an existing one. New test in
+  `kernel/verifier.test.mjs` proves all three shapes now record `"unknown"`
+  instead of throwing (red beforehand — reproduced the exact TypeError/
+  SyntaxError live before writing the fix). Verified: `node --test
+  kernel/verifier.test.mjs` (3 repeated runs, all green, 10/10), full
+  `npm test` (432/433 excluding known skips, same pre-existing unrelated
+  root-permissions artifact as above), `node hooks/covgate.mjs` scoped to
+  the touched file (`kernel/verifier.mjs` 100%/100%/100%, PASS).
+  UPDATE 2026-08-06 (same cycle): sixth module done, `kernel/autonomy.mjs`.
+  Found a fifth REAL, live bug — a third instance of this session's recurring
+  TOCTOU shape: `updateAfterRun`'s `readAutonomy()` -> mutate ->
+  `writeAutonomy()` is a read-modify-write with no synchronization. Nothing
+  in this module or `run.mjs` guarantees only one kernel process is ever
+  mid-run at once — that is an ADAPTER-level property of
+  `kernel/adapters/claude-code.mjs`'s launch lane, not a `run.mjs`/
+  `autonomy.mjs` invariant, and this file's own header advertises "swapping
+  harnesses is one value in policy.json plus one new file," so a future or
+  third-party adapter need not serialize at all. Reproduced live: 15
+  concurrent callers against a state that should transition "tighten" exactly
+  once produced 3-4 duplicate log entries; one run showed literal data loss —
+  4 processes each believed they logged a decision while only 3 actually
+  landed on `autonomy.json`. Fixed by reusing the same `withLock` primitive a
+  third time: the whole `updateAfterRun` body now runs under
+  `withLock("autonomy", ...)`. `ledger.mjs`'s `sleepSync` helper (already
+  private to its own lock implementation) is now exported so this module (and
+  its test) can reuse it rather than duplicating the `Atomics.wait` pattern.
+  New test in `kernel/autonomy.test.mjs`, same test-seam approach as the
+  `ledger.mjs` fix (`ACC_AUTONOMY_UPDATE_DELAY_MS`, widening the natural
+  microseconds-wide race window on demand for a deterministic regression test
+  rather than a timing coin flip): 5 concurrent real processes against a
+  state that should tighten exactly once. First attempt at the assertion was
+  itself wrong, worth recording — it expected `runsLeft` to stay at 5 after
+  the fix, but that misunderstood the module's own correct semantics: with
+  proper serialization only the FIRST of the 5 calls trips "tighten"
+  (`runsLeft: 0 -> 5`), and each of the other 4, correctly serialized in turn,
+  decrements it by one — deterministically `5 - 4 = 1`, the exact behavior
+  the existing sequential "mid-tightening runs are decremented" test already
+  documents. Corrected before verifying green, so the checked-in test asserts
+  the right invariant (exactly one log entry, no lost writes) rather than a
+  bent one. Verified: `node --test kernel/autonomy.test.mjs` (5 repeated
+  runs, all green, 13/13), full `npm test` (433/434 excluding known skips,
+  same pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched files (`kernel/autonomy.mjs`
+  100%/100%/97.6%, `kernel/ledger.mjs` 100%/100%/98.8% for the `sleepSync`
+  export, neither needs an override, both PASS).
+  UPDATE 2026-08-06 (same cycle): seventh module done, `kernel/contract.mjs`
+  (found while starting the scenario pass on `kernel/policy.mjs`, next in the
+  risk order — the bug turned out to live in `contract.mjs`'s call site, so
+  crediting it there instead). Found a sixth REAL, live bug, a different
+  shape from this session's three TOCTOU races: `validateContract`'s
+  writeRoots-vs-protected-paths overlap check calls `alwaysDenyWriteRoots()`
+  and `norm()` (both `kernel/policy.mjs`, `norm` = `path.resolve()`
+  underneath) with no try/catch, and `path.resolve()` throws a TypeError on
+  anything that isn't a string. Two INDEPENDENT, reachable sources of a
+  non-string value here: (1) a hand-edited or corrupted `policy.json` whose
+  `extraDenyWriteRoots` carries a non-string entry — `saveKernelPolicy`
+  validates this as a `strList` before ever writing it, but a direct file
+  edit bypasses that entirely; (2) a contract whose `allowedActions.writeRoots`
+  carries a non-string entry — the existing `Array.isArray(actions[key])`
+  check only confirms the field IS an array, never that its elements are
+  strings, and a contract is a plausibly LESS trusted source than policy.json
+  (could be LLM-generated). Reproduced live, both independently: either one
+  throws uncaught straight out of `validateContract` — called from `runTask`
+  (`kernel/run.mjs`) with NO try/catch around it either, crashing the WHOLE
+  kernel process before a single ledger entry exists, worse than every other
+  malformed-input shape this function already refuses cleanly with a normal
+  `{ok:false, errors:[...]}`. Fixed: the whole overlap-check block is now
+  wrapped in try/catch; a throw becomes a normal validation error naming what
+  couldn't be checked, so a contract this function cannot evaluate is
+  refused exactly like every other malformed shape here, never a crash. New
+  tests in `kernel/contract.test.mjs` cover both independent trigger paths
+  (malformed policy, malformed contract) — proven red against the unfixed
+  code (both reproduced the exact uncaught TypeError live before the fix)
+  and green and stable across 3 repeated runs after. Verified: `node --test
+  kernel/contract.test.mjs` (3 repeated runs, all green, 17/17), full
+  `npm test` (435/436 excluding known skips, same pre-existing unrelated
+  root-permissions artifact as above), `node hooks/covgate.mjs` scoped to
+  the touched file (`kernel/contract.mjs` 100%/100%/100%, PASS).
+  `kernel/policy.mjs` itself was also scanned this pass: `saveKernelPolicy`'s
+  own read-modify-write-via-rename has the same general TOCTOU shape as this
+  session's three lock fixes, but is human-GUI-triggered (a person clicking
+  Save) rather than machine-triggered at any real frequency (parallel tool
+  calls, launch-lane retries, concurrent kernel runs) — recorded here as an
+  accepted, much-lower-probability risk rather than force-fitting a fourth
+  lock onto a path that doesn't need one yet, not silently skipped.
+  UPDATE 2026-08-06 (same cycle): `kernel/credentials.mjs` reviewed — no
+  gap found. Already fail-closed by design (any vault-read error, including
+  a directory in place of the file, degrades to "no keys," which DENIES
+  rather than grants); checked vaultKeys type-safety (a non-string entry
+  degrades to a clean "not available" error via `in`/property-access
+  coercion, never a throw — unlike the `path.resolve()` case fixed in
+  `contract.mjs` above, since this file never calls `path.resolve` on
+  caller-controlled input) and a `"__proto__"`-named key (`Object.fromEntries`
+  uses `CreateDataPropertyOrThrow`, which sets a real own property literally
+  named `__proto__`, not the special prototype-assignment behavior — no
+  pollution risk). Recorded per this OI's own done-when clause ("or recorded
+  an explicit, ledgered reason none is needed") rather than force-fitting a
+  change onto a module that doesn't need one.
+  Eighth module done, `kernel/adapter.mjs` (bug found while reviewing it;
+  fix landed in `run.mjs`, its only caller, crediting both together since
+  `adapter.mjs` itself was clean — `adapterSpecifier`'s traversal guard,
+  `assertAdapterShape`'s member checks, and `resolveAdapter`'s own try/catch
+  around the dynamic `import()` are all already solid). Found a seventh REAL,
+  live bug, a variant of this session's "uncaught throw before a ledger
+  entry exists" pattern (verifier.mjs, contract.mjs above): `run.mjs` called
+  `adapter || (await resolveAdapter())` BEFORE `runId`/staged settings/
+  `appendStarted()` even existed, with no try/catch. A `policy.json`
+  `kernel.harness` naming an adapter module that doesn't exist — a plausible
+  operator typo, not a hypothetical — crashed `runTask`'s own promise with NO
+  ledger entry at all, not even the "failed-to-start... IS a run and it gets
+  the full started/finalized pair" this file's own header promises for every
+  OTHER post-contract failure (this exact case, `identity()` throwing, is
+  already handled gracefully via `failClosed` a few lines below — resolution
+  itself was the one gap). Fixed: moved adapter resolution below the run
+  scaffolding (staging dir + `appendStarted` now exist first) and wrapped it
+  in the same `failClosed()` pattern `identity()` already uses — resolving
+  the adapter and asking its identity are both "can this harness even
+  start," now both fail closed identically. New test in `kernel/run.test.mjs`
+  deliberately does NOT inject an adapter (every existing "failed-to-start"
+  test does, which skips `resolveAdapter()` entirely) so it exercises the
+  real resolution path — proven red beforehand (reproduced the exact
+  uncaught rejection live) and green and stable across 3 repeated runs
+  after. Verified: `node --test kernel/run.test.mjs` (3 repeated runs, all
+  green, 23/23), full `npm test` (436/437 excluding known skips, same
+  pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched file (`kernel/run.mjs`
+  100%/100%/93.3%, above its existing OI-017 override, PASS).
+  UPDATE 2026-08-06 (same cycle, closing this entry): tenth module done,
+  `kernel/adapters/claude-code.mjs`. Found an eighth REAL, live bug:
+  `readState`'s inner loop over `e.message.content` threw on a single
+  malformed (null or non-object) block — a stream hiccup or CLI version
+  quirk, not necessarily anything wrong with the run — while the OUTER event
+  loop two lines above already tolerates exactly that shape for a malformed
+  top-level event (`if (!e || typeof e !== "object") continue;`). This
+  specific crash was already CONTAINED by this cycle's earlier `run.mjs` fix
+  (the supervisor tick catches any `readState()` throw and aborts the run as
+  `"supervisor-fault"`), but containment isn't the same as correct behavior:
+  aborting an entire run over one skippable malformed block is needlessly
+  heavy when the fix is to just skip it and keep counting the rest, the same
+  tolerance the file already gives at the outer level. Fixed with a single
+  guard clause; new test in `kernel/adapters/claude-code.test.mjs` proves a
+  null, a string, and a number mixed into a content array alongside real
+  blocks are skipped while the real `tool_use`/`text` blocks are still
+  counted correctly (red beforehand — reproduced the exact uncaught
+  TypeError live; green and stable across 3 repeated runs after). Verified:
+  `node --test kernel/adapters/claude-code.test.mjs` (3 repeated runs, all
+  green, 22/22), full `npm test` (437/438 excluding known skips, same
+  pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched file
+  (`kernel/adapters/claude-code.mjs` 100%/100%/92.5%, no override needed,
+  PASS).
+  Eleventh and twelfth modules reviewed with no exploitable gap found:
+  `kernel/credentials.mjs` (see the UPDATE above — fail-closed by design,
+  vault values never touch disk/argv/the ledger, no type-confusion crash
+  path) and `kernel/settings.mjs` (fails closed via try/catch on pin
+  verification exactly like `kernel/guardhook.mjs` already proves at the
+  integration level; `cleanupRun`'s `force: true` makes it safely
+  idempotent; its one caller, `run.mjs`, only ever passes a contract that
+  has already cleared `validateContract`, so the theoretical
+  `toolsFor(null)` crash this file's `generateSettings` could otherwise hit
+  is not reachable through the real call path).
+  All 12/12 kernel modules now have a documented scenario-enumeration pass:
+  `kernel/guard.mjs`, `kernel/guardhook.mjs`, `kernel/run.mjs`,
+  `kernel/ledger.mjs`, `kernel/verifier.mjs`, `kernel/autonomy.mjs`,
   `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
-  `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
+  `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`, and
+  `kernel/policy.mjs` — the last carrying one explicitly accepted residual
+  risk (`saveKernelPolicy`'s read-modify-write-via-rename has this session's
+  general TOCTOU shape but is human-GUI-triggered at a frequency far below
+  the three machine-triggered races that WERE fixed; recorded, not silently
+  skipped, and not force-fitted a lock it doesn't yet need). Eight real,
+  live, independently reproduced bugs found and fixed across this pass —
+  three TOCTOU races (guardhook.mjs+ledger.mjs decisions, ledger.mjs run
+  records, autonomy.mjs state) and five uncaught-throw-crashes-the-whole-
+  process gaps (run.mjs's supervisor tick, verifier.mjs's three malformed-
+  criterion shapes as one fix, contract.mjs's two malformed-writeRoots
+  shapes as one fix, run.mjs's unresolvable-adapter path, and
+  claude-code.mjs's malformed content block) — every one of them reachable
+  through normal or only-mildly-abnormal operation, not adversarial input:
+  parallel tool calls, launch-lane retries, concurrent kernel processes, a
+  contract missing one optional field, an operator typo in policy.json, or a
+  single stray null in a CLI's own stream output. Done when this OI's own
+  clause asked for is met: every module has either a real test proving a
+  genuine regression can fail it, or an explicit, ledgered reason none was
+  needed — never a test tuned to the current implementation's behavior. All
+  work landed on branch `claude/work-queue-continuation-uzptsf`, PR #10.
 
-## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
+## OI-025 [RESOLVED 2026-08-06] e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
   `2026-08-03-acc-kernel-plan.md` T22, executed as Task 11 of
   `2026-08-03-acc-oi-closure-plan.md`)
@@ -232,6 +566,10 @@ line under `## Resolved`.
   call per the original plan: either `node e2e/loop.e2e.mjs` is re-run and
   scenarios 1-5 pass, or he's satisfied the launch cap being live end-to-end
   is sufficient credit.
+- resolution 2026-08-06: Kyle's call — hold off on the real-token re-run,
+  the launch cap being live end-to-end (confirmed above) is sufficient
+  credit. He's moving real-token e2e verification to a separate, dedicated
+  session focused on testing infrastructure rather than re-running it here.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
@@ -255,6 +593,35 @@ line under `## Resolved`.
   goal.mjs`, the `/goal` skill, the SessionStart injection format, and
   AGENTS.md are updated consistently with no stale references to the old
   name left in code or docs.
+- UPDATE 2026-08-06: Kyle recalled a replacement naming convention already
+  having been decided elsewhere ("I promise with 100% certainty we covered
+  this"). Searched exhaustively before asking him to point at it directly:
+  this repo's full git history (`git log --all`, pickaxe searches for
+  "goal"/"ACC GOAL"/"clearbot"/rename-related terms, not just `--grep` on
+  messages), `OPEN-ISSUES.md`, `AGENTS.md`, `notes/`, `docs/superpowers/`
+  specs and plans, and the working tree — nothing. Widened the search per
+  his direction to the sibling `lifeos` and `lifeos-ui` repos (the
+  "lifeos-ecosystem," cloned fresh for this — both were only shallow-cloned
+  at first, giving a false "1 commit" reading; unshallowed to their real
+  histories, 69 and 19 commits respectively, and re-searched properly:
+  full commit-by-commit read, `git log --all -S"goal"` /
+  `-S"ACC GOAL"` / `-S"clearbot"` / `-S"agentic command center"` pickaxe
+  searches, deleted-file scan, README/AGENTS.md/CLAUDE.md cross-references).
+  Also checked every other repo under his GitHub account for an "acc-"
+  prefixed name — none exists (`network-checker`, `helm`, `marketmind`,
+  `marketmind-dashboard`, and a handful of older personal projects; no
+  `acc-*` repo). Every "goal" hit in `lifeos`/`lifeos-ui` is that repo's own
+  unrelated "focus goals" habit-tracking feature; every "guards" hit there
+  references this repo only as the sibling ops/vault/cell-map enforcer, never
+  its `goal.mjs` concept or any plugin-naming collision. No commit, in any
+  repo searched, discusses or performs this rename. Reported the negative
+  result back to Kyle and asked directly whether to pick a name now or hold;
+  he held firm that it was covered somewhere and asked for the search above,
+  which still came up empty — most likely the decision happened in a
+  conversation that was never committed to any repo (chat history outside
+  this ledger, a document outside git, or a session that didn't land its
+  work). Left open, unrenamed, pending Kyle locating the actual source —
+  do not guess at a name and do not rename speculatively.
 
 ## Resolved
 

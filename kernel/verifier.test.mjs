@@ -35,6 +35,29 @@ test("an unrecognized method records unknown, never a pass (AC-V4)", async () =>
   assert.equal(r.status, "unknown");
 });
 
+test("OI-019: a malformed verify block records unknown instead of crashing the whole verify/ledger chain (AC-V4 fault tolerance)", async () => {
+  // contract.mjs's validateContract only checks that verify.method names a
+  // KNOWN method (kernel/contract.mjs REQUIRED_FIELDS/VERIFY_METHODS) — it
+  // never checks that the method-specific fields a criterion needs are
+  // present or well-formed. Each of these contracts passes validation and
+  // reaches the verifier, which used to throw synchronously and crash
+  // verifyAll -> runTask's own promise (in the CLI, an uncaught process
+  // exit with NO ledger entry ever finalized — the exact "interrupted
+  // forever" failure mode this session's other OI-019 fixes also target).
+  const noCommand = await V.verifyCriterion(crit("nc", { method: "command" }), { cwd: BASE });
+  assert.equal(noCommand.status, "unknown");
+
+  const numericCommand = await V.verifyCriterion(crit("num", { method: "command", command: 42 }), { cwd: BASE });
+  assert.equal(numericCommand.status, "unknown");
+
+  const badRegex = await V.verifyCriterion(
+    crit("re", { method: "file_contains", path: path.join(BASE, "present.txt"), pattern: "(unbalanced" }),
+    { cwd: BASE }
+  );
+  assert.equal(badRegex.status, "unknown");
+  assert.match(badRegex.detail, /verification threw/);
+});
+
 test("a criterion with no verify block at all records unknown with a null method", async () => {
   const r = await V.verifyCriterion({ id: "y", ears: "x" }, { cwd: BASE });
   assert.equal(r.status, "unknown");

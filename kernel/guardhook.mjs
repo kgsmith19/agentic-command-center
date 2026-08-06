@@ -15,7 +15,7 @@ import path from "node:path";
 import { decide } from "./guard.mjs";
 import { verifySettingsPin } from "./settings.mjs";
 import { loadKernelPolicy, alwaysDenyWriteRoots } from "./policy.mjs";
-import { appendDecision, decisionCounts } from "./ledger.mjs";
+import { appendDecision, withDecisionLock } from "./ledger.mjs";
 import { effectiveCeilings, readAutonomyStrict } from "./autonomy.mjs";
 
 function deny(reason, runId, record) {
@@ -115,23 +115,29 @@ if (!Number.isFinite(ceiling)) {
   });
 }
 
-// Attempts, not just successes: a harness looping on denied calls is burning a
-// real budget and must hit the same ceiling.
-const attempts = decisionCounts(pin.runId).total;
-
-const d = decide(payload, {
-  contract, policy, attempts, ceiling,
-  denyRoots: alwaysDenyWriteRoots(),
-  stagingDir: dir,
-});
-
+// The read of prior attempts, the ceiling decision, and the append of THIS
+// decision must happen as one atomic unit (OI-019) — otherwise concurrent
+// fires from a single parallel-tool-call turn can all read the same
+// "attempts so far" and all pass a ceiling meant to allow only one more.
+let d;
 try {
-  appendDecision(pin.runId, {
-    tool: d.tool, allow: d.allow, rule: d.rule, reason: d.reason, target: d.target,
-    ceiling, autonomyFactor: autonomy.factor ?? 1,
+  d = withDecisionLock(pin.runId, (attempts) => {
+    // Attempts, not just successes: a harness looping on denied calls is
+    // burning a real budget and must hit the same ceiling.
+    const verdict = decide(payload, {
+      contract, policy, attempts, ceiling,
+      denyRoots: alwaysDenyWriteRoots(),
+      stagingDir: dir,
+    });
+    appendDecision(pin.runId, {
+      tool: verdict.tool, allow: verdict.allow, rule: verdict.rule, reason: verdict.reason, target: verdict.target,
+      ceiling, autonomyFactor: autonomy.factor ?? 1,
+    });
+    return verdict;
   });
 } catch (e) {
-  // A decision that cannot be recorded is a decision that cannot be audited.
+  // A decision that cannot be recorded (or a lock that can never be
+  // acquired) is a decision that cannot be audited.
   deny(`cannot write the decision log (${e.message}) — failing closed`);
 }
 

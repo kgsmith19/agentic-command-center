@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LEDGER = path.join(HERE, "ledger.mjs");
@@ -49,6 +49,46 @@ test("a repeated append with the same runId applies exactly once (AC-G4)", () =>
     "the first finalize wins; a duplicate must not rewrite the outcome");
 });
 
+test("OI-019: a repeated append RACING from CONCURRENT real processes still applies exactly once (AC-G4)", async () => {
+  // The launch lane retries transport failures (this file's own header
+  // comment: "a resumed kernel must not double-write"), so two processes
+  // genuinely can call appendStarted for the SAME runId at nearly the same
+  // instant. appendOnce's read-then-append was not atomic across processes —
+  // reproduced live: 20 concurrent callers produced 2 duplicate run_started
+  // lines for one runId, not the single line AC-G4 promises. The natural
+  // read-to-append window is a handful of microseconds, so forcing that
+  // interleaving by chance is unreliable (observed both outcomes across
+  // repeated runs) — ACC_LEDGER_APPEND_ONCE_DELAY_MS widens the window on
+  // purpose so this proves the fix deterministically, not by luck.
+  const script = path.join(BASE, "append-once-caller.mjs");
+  fs.writeFileSync(script, `
+    import { appendStarted } from ${JSON.stringify(pathToFileURL(LEDGER).href)};
+    const ok = appendStarted({
+      runId: "r-race", startedAt: "2026-08-06T00:00:00.000Z",
+      contract: {}, settingsSha256: "a",
+    });
+    process.stdout.write(String(ok));
+  `);
+  const { spawn } = await import("node:child_process");
+  const run = () => new Promise((resolve, reject) => {
+    const child = spawn("node", [script], {
+      env: { ...process.env, ACC_LEDGER_APPEND_ONCE_DELAY_MS: "50" },
+    });
+    let out = "", err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("close", (code) => {
+      if (code !== 0) reject(new Error(`append-once-caller exited ${code}: ${err}`));
+      else resolve(out === "true");
+    });
+  });
+  const N = 5;
+  const oks = await Promise.all(Array.from({ length: N }, run));
+  assert.equal(oks.filter(Boolean).length, 1, "exactly one of N concurrent callers may believe it went first");
+  assert.equal(L.readRuns().filter((r) => r.runId === "r-race" && r.event === "run_started").length, 1,
+    "exactly one run_started line must land on disk, whatever N concurrent processes raced to write it");
+});
+
 test("an abort still writes a finalized line (AC-L1 covers failure and abort)", () => {
   L.appendStarted(started("r3"));
   L.appendFinalized(finalized("r3", "aborted-by-budget"));
@@ -83,6 +123,85 @@ test("readDecisions returns the full parsed rows, not just counts", () => {
   assert.deepEqual(L.readDecisions("r7").map((d) => [d.tool, d.allow, d.rule, d.target]),
     [["Edit", false, "writeRoots", "C:/x/b.txt"]]);
   assert.equal(L.readDecisions("nope-no-such-run").length, 0, "a run with no decisions reads as empty, not an error");
+});
+
+test("OI-019: withDecisionLock serializes callers — each sees the attempts count left by every prior call, in order", () => {
+  const seen = [];
+  for (let i = 0; i < 5; i++) {
+    L.withDecisionLock("r8", (attempts) => {
+      seen.push(attempts);
+      L.appendDecision("r8", { tool: "Read", allow: true, rule: "readRoots", target: `x${i}` });
+    });
+  }
+  assert.deepEqual(seen, [0, 1, 2, 3, 4]);
+});
+
+test("withDecisionLock releases its lock file after a normal return", () => {
+  L.withDecisionLock("r9", () => {});
+  assert.equal(fs.existsSync(path.join(L.ledgerDir(), "r9.decisions.lock")), false);
+});
+
+test("withDecisionLock releases its lock file even when fn throws — a held lock must not survive the caller's own error", () => {
+  assert.throws(() => L.withDecisionLock("r10", () => { throw new Error("boom"); }), /boom/);
+  assert.equal(fs.existsSync(path.join(L.ledgerDir(), "r10.decisions.lock")), false);
+});
+
+test("a lock file abandoned by a dead process (stale) is reaped, not waited out forever", () => {
+  const file = path.join(L.ledgerDir(), "r11.decisions.lock");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "orphaned");
+  const past = new Date(Date.now() - 60000);
+  fs.utimesSync(file, past, past); // older than the stale threshold
+  let ran = false;
+  L.withDecisionLock("r11", () => { ran = true; });
+  assert.equal(ran, true, "a stale lock must be reaped rather than block the caller forever");
+});
+
+test("a lock held by a live, recent holder is NOT reaped as stale — acquisition blocks until it times out and throws", () => {
+  const file = path.join(L.ledgerDir(), "r12.decisions.lock");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "held"); // fresh mtime — a genuine in-progress holder
+  process.env.ACC_LEDGER_LOCK_TIMEOUT_MS = "50";
+  try {
+    assert.throws(() => L.withDecisionLock("r12", () => {}), /timed out waiting for the "r12\.decisions" lock/);
+  } finally {
+    delete process.env.ACC_LEDGER_LOCK_TIMEOUT_MS;
+    fs.rmSync(file, { force: true });
+  }
+});
+
+test("OI-019 end-to-end: real concurrent OS processes calling withDecisionLock each get a distinct, gap-free attempts count", async () => {
+  // Windows drive-letter paths ("D:\\a\\...") are not valid bare ESM import
+  // specifiers — Node's resolver only special-cases absolute POSIX-style
+  // paths. Using pathToFileURL().href is the cross-platform-safe way to
+  // reference LEDGER from generated script text (found via a real Windows CI
+  // failure: every one of the 15 children below silently crashed on import
+  // before writing anything, and coercing the empty stdout with Number("")
+  // masked it as a plausible-looking "attempts: 0" instead of a real error).
+  const script = path.join(BASE, "lock-caller.mjs");
+  fs.writeFileSync(script, `
+    import { withDecisionLock, appendDecision } from ${JSON.stringify(pathToFileURL(LEDGER).href)};
+    withDecisionLock(process.argv[2], (attempts) => {
+      appendDecision(process.argv[2], { tool: "Read", allow: true, rule: "readRoots", target: String(attempts) });
+      process.stdout.write(String(attempts));
+    });
+  `);
+  const { spawn } = await import("node:child_process");
+  const run = () => new Promise((resolve, reject) => {
+    const child = spawn("node", [script, "r13"], { env: process.env });
+    let out = "", err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("close", (code) => {
+      if (code !== 0) reject(new Error(`lock-caller exited ${code}: ${err}`));
+      else resolve(Number(out));
+    });
+  });
+  const N = 15;
+  const attemptsSeen = await Promise.all(Array.from({ length: N }, run));
+  assert.deepEqual([...attemptsSeen].sort((a, b) => a - b), Array.from({ length: N }, (_, i) => i),
+    "N concurrent real processes must see exactly 0..N-1 with no duplicate and no gap");
+  assert.deepEqual(L.decisionCounts("r13"), { allow: N, deny: 0, total: N });
 });
 
 test("autonomyFile lives beside the runs file, under the ledger dir", () => {
