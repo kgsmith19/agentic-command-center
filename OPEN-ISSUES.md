@@ -808,7 +808,7 @@ line under `## Resolved`.
   scenarios 1-5 pass, or he's satisfied the launch cap being live end-to-end
   is sufficient credit.
 
-## OI-026 [DECIDED 2026-08-06, execution deferred] "goal" terminology collides with the popular Claude Code Goal plugin
+## OI-026 [RESOLVED 2026-08-06] "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
 - where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart
   injection, AGENTS.md "Goals" section, this repo's docs/specs generally
@@ -952,6 +952,128 @@ line under `## Resolved`.
   this entry has said not to do since 2026-08-03. The checklist exists so
   the NEXT session doesn't have to re-derive it, not as a reason to treat
   tonight's context budget as enough to safely execute it.
+- EXECUTED 2026-08-06, later the same night, worktree
+  `feat/goal-to-mission-rename`, following the checklist above step by
+  step, red-green verified at each stop rather than in one pass:
+  1. `git mv hooks/goal.mjs hooks/mission.mjs` (+ `goal.test.mjs` ->
+     `mission.test.mjs`), every exported/internal symbol renamed
+     (`createGoal` -> `createMission`, `readGoal`/`readGoalAnywhere` ->
+     `readMission`/`readMissionAnywhere`, `listGoals` -> `listMissions`,
+     `activeGoals` -> `activeMissions`, `goalForSession` ->
+     `missionForSession`, `resumeGoal` -> `resumeMission`,
+     `withGoalLock` -> `withMissionLock`, `consumeDeadGoalAlerts` ->
+     `consumeDeadMissionAlerts`, `reapDeadGoals` -> `reapDeadMissions`,
+     `goalsDir`/`goalPath` -> `missionsDir`/`missionPath`), `ACC_GOAL`
+     -> `ACC_MISSION`, `ACC_GOALS_DIR` -> `ACC_MISSIONS_DIR`, id prefix
+     `g-...` -> `m-...`. 66/66 tests green in isolation before anything
+     imported it.
+  2. Every real importer updated one at a time: `hooks/budget.mjs`
+     (+ `budget.test.mjs`/`budget.unit.test.mjs`), `runner/runner.mjs`
+     (+ `runner.test.mjs`, `ensureJobGoal` -> `ensureJobMission`,
+     `goalSignal` -> `missionSignal`, the job's `.goalid` marker file
+     -> `.missionid`), `hooks/statusline.mjs` (+ `statusline.test.mjs`,
+     `goalPaused`/`goalDied` -> `missionPaused`/`missionDied`, the
+     "goal PAUSED"/"goal DIED" status-line segments -> "mission
+     PAUSED"/"mission DIED"), plus comment-only touches in
+     `hooks/lane.mjs`, `lane.test.mjs`, `prompts.mjs`, `testplan.mjs`,
+     `testplan.test.mjs`, `engine.mjs`, `clearbot.test.mjs`,
+     `kernel/autonomy.mjs`, `autonomy.test.mjs`,
+     `watcher/start-clearbot.cmd`.
+  3. The one step flagged as must-not-land-alone: `budget.mjs`'s
+     `KICK_CONSTANTS` ("Continue the active ACC goal." ->
+     "...ACC mission.") and `watcher/clearbot.ps1`'s `$KICK` constant
+     changed in the SAME commit, verified by grep for the old string
+     (0 hits in both) and the new string (exactly 1 hit in both) before
+     committing — exactly the check this entry called for. clearbot.ps1's
+     `hooks\goal.mjs` CLI invocations (`pending`/`kicked`) moved to
+     `hooks\mission.mjs` in the same pass.
+  4. `kernel/contract.mjs`'s `goal` field (a task contract's one-line
+     description) and every test fixture setting it (`contract.test.mjs`,
+     `guardhook.test.mjs`, `run.test.mjs`, `ledger.test.mjs`,
+     `settings.test.mjs`) confirmed untouched — same word, unrelated
+     concept, exactly the exception this entry named in advance.
+     `kernel/kernel.e2e.mjs` needed hand-editing rather than a blanket
+     script, since it mixes BOTH senses in one file: its own
+     `contractFor()` uses `goal` as the contract-field sense (left
+     alone) while its separate pollution check against the live
+     `runner/goals` directory is genuinely the ACC concept (renamed to
+     `runner/missions`).
+  5. `guards-gui.ps1`, `gui/ptyhost.e2e.ps1`, `e2e/loop.e2e.mjs`:
+     authored, not verified — no PowerShell in this sandbox, same
+     "Windows CI or Kyle confirms" posture as every other `.ps1` change
+     tonight. `guards-gui.ps1` turned out to be a REAL functional
+     dependency, not just docs: it sets `ACC_GOAL` when launching a
+     session and calls `hooks\goal.mjs` directly
+     (`New-GoalFromBox`/`Refresh-Goals`/`$script:GoalId`) — missed on
+     the first sweep (see the "two things caught late" note below),
+     would have silently stopped binding launched sessions to their
+     mission the moment `usage.mjs`'s `accActive()` started checking
+     `ACC_MISSION` instead.
+  6. `AGENTS.md` (the "Goals" section retitled "Missions", every
+     reference updated) and `notes/ACC-HANDOFF.md` updated — but
+     DELIBERATELY NOT every dated `docs/superpowers/plans/*.md` and
+     `specs/*.md` file that also mentions "goal": those are point-in-
+     time historical records of what was proposed or decided on a
+     given day, and rewriting their text after the fact would
+     misrepresent history rather than describe it — the same reasoning
+     this very file's own header already applies to itself ("allowed
+     to keep historical references"). AGENTS.md and ACC-HANDOFF.md are
+     different in kind: both explicitly describe CURRENT system
+     behavior, not a plan for a specific day. One thing this pass
+     cannot reach at all: AGENTS.md references a user skill at
+     `~/.claude/skills/goal/` that lives on Kyle's own machine, not in
+     this repo — renaming it (and its `/goal` trigger to `/mission`) is
+     a manual step for him, named here rather than silently assumed
+     done.
+  7. On-disk store: decided NOT to write a migration script. `runner/
+     goals/` is gitignored (no committed data to migrate in this repo),
+     and the new default directory is `runner/missions/` — a clean
+     cutover, not a live migration. Practical consequence for Kyle: if
+     he has any genuinely in-flight `runner\goals\*.json` on his real
+     machine when he pulls this, it will not be found once
+     `missionsDir()`'s new default takes effect (`ACC_MISSIONS_DIR`
+     unset falls back to `runner/missions`, not the old path) — he
+     should check for an active goal before pulling and, if one
+     matters, either finish it first or manually move the file(s) to
+     `runner\missions\`. Not automated, because a migration script for
+     data that doesn't exist in this repo would be untestable here and
+     is exactly the kind of "coverage-shaped" work OI-033's own
+     reasoning already warns against.
+  8. Definition of done, re-run after every step above:
+     `grep -rn '\bgoal\b' hooks/ kernel/ runner/ watcher/ e2e/ gui/
+     --include='*.mjs' --include='*.ps1' --include='*.cmd'` — clean
+     except the exceptions named in advance (`kernel/contract.mjs`'s
+     field and its five test fixtures, `kernel/kernel.e2e.mjs`'s own
+     contract-field usage) plus two found DURING execution, not
+     anticipated by the original checklist, both genuinely unrelated to
+     the renamed feature and left alone rather than force-renamed for
+     the grep's sake: `hooks/testplan.mjs` and `hooks/covgate.mjs`'s
+     identical "Coverage is a floor, not the goal" (ordinary English),
+     and `kernel/adapters/claude-code.test.mjs`'s generic
+     `/prompt|goal/i` argv-leak probe (checks neither word leaks into
+     argv; not specific to the ACC concept).
+  Two things caught late, worth naming so the pattern is recognized
+  faster next time: (a) `\bgoal\b`-style word-boundary regex does NOT
+  break on an underscore — `\bACC_GOAL\b` never matches inside
+  `ACC_GOALS_DIR`, which is correct, but it also means a plain
+  `\bgoal\b` scan silently MISSES `ACC_GOAL` itself (no boundary
+  between `_` and `G`), so an env-var-specific grep pass is required in
+  addition to the word-boundary one — this is exactly how
+  `hooks/usage.mjs`'s `accActive()` (checks `ACC_GOAL`/now `ACC_MISSION`
+  directly) and `guards-gui.ps1` both got missed on the first sweep and
+  had to be fixed in a follow-up commit once `usage.test.mjs`'s own red
+  test caught the mismatch; (b) a file can contain BOTH a real
+  ACC-concept reference and an unrelated same-word usage at once
+  (`hooks/testplan.mjs` had one of each) — a per-file "N hits, looks
+  benign" scan is not the same as checking every individual hit.
+  Verified end to end: full `npm test` list, 513/514 non-skipped tests
+  green (the one failure, `lane.test.mjs`'s `reownSlot` permission
+  test, is a pre-existing root-sandbox flake, confirmed identical on
+  the pristine pre-rename tree); `hooks/mission.test.mjs` 66/66 in
+  isolation; `runner/runner.test.mjs` 50/50; every touched file's own
+  suite green. `package.json`'s `test`/`test:windows` scripts and
+  `.github/workflows/ci.yml`'s `ACC_COVGATE_TESTS` list updated to
+  reference `hooks/mission.test.mjs`.
 
 ## Resolved
 
