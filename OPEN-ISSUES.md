@@ -62,6 +62,45 @@ line under `## Resolved`.
   alert attached to it at any point, and still does not.
 - done when: a watcher that wedges repeatedly surfaces somewhere a human or the
   loop actually reads, rather than only being silently replaced.
+- SECOND HALF DONE 2026-08-05: a kill that actually removed a process is now
+  recorded to `watcher/autopilot-wedges.jsonl` (bounded to 20 entries — a
+  breadcrumb trail appended from a turn boundary, not an audit log), and
+  SessionStart escalates when two or more land inside two hours: "has wedged N
+  times in the last 2h and been restarted each time — restarting it is NOT
+  fixing it." A stale heartbeat with NO process behind it still gets the
+  ordinary dead-watcher warning, because that one restarting genuinely does fix.
+  Four tests, RED-first: one wedge is not an escalation, three are, wedges aged
+  out of the window stop escalating, and the kill really does write the file the
+  escalation reads (without that last one the two halves would only have been
+  tested against each other's assumptions).
+- STILL OPEN: why a watcher wedges is still undiagnosed. The escalation makes a
+  repeat visible instead of silent, which is what this entry asked for, but it
+  is a smoke alarm, not a fix. Also unaddressed: it only surfaces at
+  SessionStart, so it reaches Kyle when he next starts a session rather than
+  when the wedge happens — the live incident ran eleven hours precisely because
+  every ACC alert requires him to already be looking.
+
+## OI-047 One unattributed test failure in four consecutive full-suite runs
+- opened: 2026-08-05
+- rank: reliability
+- where: `npm run test:windows` (which file is unknown — that is the entry)
+- what: during Task 6's verification the full tier reported 641 tests / 639
+  pass / 1 fail, and the failure detail was not captured before the next run
+  overwrote it. Three immediately-subsequent full runs were clean (640 pass, 0
+  fail, 1 pre-existing skip each), so it is intermittent at roughly 1-in-4 and
+  not reproducible on demand. Recorded rather than dismissed because the same
+  session ADDED timing-sensitive tests that spawn real PowerShell processes and
+  poll for them (`hooks/budget.test.mjs`'s wedged-watcher cases: an 8s
+  `gone(pid)` poll and a 2.5s negative `appears(marker)` window), and those are
+  the most likely candidates under full-suite load even though they pass
+  in isolation and in three of four full runs.
+- why open: chasing an unreproduced, unidentified failure by guessing is how
+  the OI-018 jitter test got "fixed" wrongly the first time. The next full-tier
+  failure needs its output CAPTURED, not re-run.
+- done when: a failing run is captured with the test name and assertion, and the
+  cause is either fixed or shown to be one of the already-known flakes. If it is
+  one of this session's new tests, the fix is to make the poll windows generous
+  enough for a loaded machine rather than to loosen the assertion.
 - where: `hooks/budget.mjs` `reviveAutopilotIfDead`/`ensureAutopilot`,
   `watcher/start-autopilot.cmd`'s "already running" probe (same shape in
   `start-clearbot.cmd` on `main`)
@@ -396,8 +435,32 @@ line under `## Resolved`.
   autoApprove on that sentence is false, or (b) gates auto-approve (allowlist,
   or refuse scripts touching `config.protected` paths).
 
-## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
+## OI-015 [RETIRED 2026-08-05 — the screen it was waiting on no longer exists] guards-gui.ps1 interactive-lane wiring
 - rank: control
+- retired: 2026-08-05, on Kyle's direct observation at the machine, which is the
+  evidence this entry had been open for. He ran the smoke: pressing Go once
+  launched normally. Pressing Go a SECOND time is not possible — once a session
+  starts, the GUI replaces the Go button and its surrounding controls with
+  "AUTO-ACC is driving. Click to take over" plus Stop. So the double-launch this
+  entry existed to guard against is now prevented BY CONSTRUCTION rather than by
+  a busy MessageBox, and the "press Go twice, watch for the MessageBox" done-when
+  describes a screen that has since been redesigned away. A test cannot be
+  written for a control that is not reachable, and waiting for a human to
+  observe it would wait forever.
+- what remains covered, and by what: the reserve -> reown -> release handshake is
+  proven headlessly by `gui/guards-gui.test.mjs` against the real `hooks/lane.mjs`
+  (which is itself 44/44), so the LOGIC this entry cared about is tested. What is
+  genuinely no longer tested is the MessageBox rendering — because it is no
+  longer reachable from this path. If a future GUI change reintroduces a
+  simultaneous-launch route, that route needs its own entry; this one should not
+  be reopened, since it is written against the old screen.
+- NOT verified, and deliberately not claimed: the third clause (the interactive
+  slot directory disappearing within a few seconds of a session closing, via
+  both the Stop button and natural exit) was not exercised — the redesign made
+  the first two clauses unperformable and the session was not driven to a close
+  during the check. That is slot-lifetime behaviour, not double-launch
+  behaviour; if it is worth pinning it belongs in a fresh, accurately-scoped
+  entry rather than inside this one.
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
   `powershell.exe` (unlike when this entry was opened). Added
   `-TestInteractiveLane` to guards-gui.ps1 — headlessly drives the exact

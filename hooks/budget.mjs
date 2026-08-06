@@ -139,23 +139,64 @@ function reviveAutopilotIfDead(policy) {
 // this very command string, so the probe matches itself without it, which is
 // precisely the bug guards OI-001 was. Contains() rather than -like keeps a
 // bracket in a real path from being read as a wildcard.
+// Replacing a wedged watcher is silent by construction, so one that hangs every
+// few minutes is replaced every few minutes and nothing ever says so. Recorded
+// here and escalated at SessionStart (OI-046): restarting it is not the same as
+// fixing it, and only a COUNT distinguishes the two.
+const WEDGE_LOG = () => path.join(ROOT, "watcher", "autopilot-wedges.jsonl");
+const WEDGE_WINDOW_MS = 2 * 3600_000;
+
+function recordWedge(pids) {
+  try {
+    fs.mkdirSync(path.dirname(WEDGE_LOG()), { recursive: true });
+    // Bounded: this is a breadcrumb trail, not an audit log, and it is appended
+    // to from a turn boundary that must never get slower over time.
+    const kept = readWedges().slice(-19);
+    kept.push({ ts: Date.now(), pids });
+    fs.writeFileSync(WEDGE_LOG(), kept.map((w) => JSON.stringify(w)).join("\n") + "\n");
+  } catch {}
+}
+
+function readWedges() {
+  try {
+    return fs
+      .readFileSync(WEDGE_LOG(), "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function recentWedges(withinMs = WEDGE_WINDOW_MS) {
+  const cutoff = Date.now() - withinMs;
+  return readWedges().filter((w) => Number(w.ts) >= cutoff).length;
+}
+
 function killWedgedAutopilot() {
   try {
     const script = path.join(ROOT, "watcher", "autopilot.ps1");
     const lit = `'${script.replace(/'/g, "''")}'`;
-    execFileSync(
+    const out = execFileSync(
       "powershell",
       ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
         `$me=$PID; $t=${lit}; ` +
         `Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | ` +
         `Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -and ` +
         `$_.CommandLine.Contains('-File') -and $_.CommandLine.Contains($t) } | ` +
-        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`],
+        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }`],
       // 5s, not 15: this blocks a turn boundary, and a WMI query that has not
       // answered in five seconds is not going to answer usefully. Giving up
       // costs one more stale cycle; hanging costs the user fifteen seconds.
-      { stdio: "ignore", windowsHide: true, timeout: 5000 },
+      { encoding: "utf8", windowsHide: true, timeout: 5000 },
     );
+    // Only a kill that actually happened is a wedge. A stale heartbeat with no
+    // process behind it is an ordinary dead watcher, which the existing warning
+    // already covers and which restarting genuinely does fix.
+    const pids = String(out || "").split(/\r?\n/).map((l) => l.trim()).filter((l) => /^\d+$/.test(l));
+    if (pids.length) recordWedge(pids.map(Number));
   } catch {}
 }
 
@@ -512,7 +553,14 @@ function onSessionStart(p, policy) {
   try {
     const hb = path.join(ROOT, "watcher", "autopilot.heartbeat");
     if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
-      lines.push(
+      // A watcher being restarted over and over is a DIFFERENT problem from one
+      // that is simply down, and the restart hides it (OI-046). Say which.
+      const wedges = recentWedges();
+      if (wedges >= 2) {
+        lines.push(
+          `[ACC] WARNING: the autopilot watcher has wedged ${wedges} times in the last 2h and been restarted each time — restarting it is NOT fixing it. It is running but not beating, so auto-clear and auto-resume keep dying. Look at guards\\watcher\\autopilot.log and guards\\watcher\\autopilot-wedges.jsonl.`
+        );
+      } else lines.push(
         `[ACC] WARNING: the autopilot watcher looks DEAD (stale heartbeat). Auto-clear and auto-resume will NOT fire, so this session will not be continued for you. Start it: guards\\watcher\\start-autopilot.cmd`
       );
     }

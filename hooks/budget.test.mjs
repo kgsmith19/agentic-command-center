@@ -363,6 +363,13 @@ test("a WEDGED watcher is cleared out, not mistaken for a live one", { skip: pro
     runStop(sb, { sid: "s-wedged", transcript: writeTranscript(sb, "s-wedged", 10000), active: false });
     assert.ok(gone(pid), "the hung watcher must be killed, or the restart below can never take");
     assert.ok(appears(marker), "and a fresh watcher started in its place");
+    // The kill is what feeds the escalation; without this the two halves of
+    // OI-046 are only tested against each other's assumptions.
+    const log = path.join(sb.root, "watcher", "autopilot-wedges.jsonl");
+    assert.ok(fs.existsSync(log), "a real wedge is recorded, not just silently repaired");
+    const entries = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0].pids, [pid], "and records which process was replaced");
   } finally {
     try { process.kill(pid); } catch {}
   }
@@ -511,4 +518,60 @@ test("ptyAnchorPid anchors at the immediate parent when it is not a shell", () =
 
 test("ptyAnchorPid falls back to the first ancestor when all are shells", () => {
   assert.equal(ptyAnchorPid([{ pid: 888, name: "cmd.exe" }]), 888);
+});
+
+// guards OI-046, second half. Killing a wedged watcher and restarting it is
+// silent by construction: a watcher that hangs every few minutes gets replaced
+// every few minutes and nothing ever says so. The eleven-hour outage that
+// surfaced OI-046 had no alert attached to it at any point, and "the statusline
+// shows it" only helps someone sitting there watching the statusline.
+function runSessionStart(sb, sid) {
+  return execFileSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
+    env: {
+      ...process.env,
+      ACC_ROOT: sb.root,
+      ACC_POLICY: sb.policyPath,
+      ACC_STANDING_DIR: "",
+      ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+      CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
+      CLAUDE_CODE_RUNNER: "",
+    },
+    encoding: "utf8",
+  });
+}
+
+function seedWedges(sb, ageMsList) {
+  const dir = path.join(sb.root, "watcher");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "autopilot-wedges.jsonl"),
+    ageMsList.map((age) => JSON.stringify({ ts: Date.now() - age, pids: [1234] })).join("\n") + "\n",
+  );
+}
+
+test("one wedge is just a restart: the ordinary dead-watcher warning", () => {
+  const sb = sandbox();
+  heartbeat(sb, 120000);
+  seedWedges(sb, [60_000]);
+  const out = runSessionStart(sb, "s-wedge-once");
+  assert.match(out, /looks DEAD/, "still warns that it is down");
+  assert.doesNotMatch(out, /wedged/i, "but a single restart is not an escalation");
+});
+
+test("a REPEATEDLY wedging watcher escalates, instead of being restarted in silence", () => {
+  const sb = sandbox();
+  heartbeat(sb, 120000);
+  seedWedges(sb, [60_000, 120_000, 200_000]);
+  const out = runSessionStart(sb, "s-wedge-many");
+  assert.match(out, /wedged 3 times/i, "the count Kyle needs in order to act reaches him");
+  assert.match(out, /restart/i, "and says restarting it is not fixing it");
+});
+
+test("wedges that have aged out of the window do not escalate forever", () => {
+  const sb = sandbox();
+  heartbeat(sb, 120000);
+  seedWedges(sb, [3 * 3600_000, 4 * 3600_000, 5 * 3600_000]);
+  const out = runSessionStart(sb, "s-wedge-old");
+  assert.doesNotMatch(out, /wedged/i, "an escalation that never clears is one nobody reads");
 });
