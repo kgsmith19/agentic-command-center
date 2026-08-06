@@ -799,6 +799,78 @@ line under `## Resolved`.
   on-disk goal store itself (`runner/goals/*.json` → a live migration or
   documented one-time break for any goal active at cutover). A future
   session should treat this as its own dedicated pass, not a drive-by.
+- EXECUTION CHECKLIST (added 2026-08-06, still not run tonight — see the
+  "why still deferred tonight" note below the list): written so the
+  dedicated future pass has an ordered plan instead of a file list to
+  re-derive from scratch.
+  1. `hooks/goal.mjs` → `hooks/mission.mjs` (git mv, preserve history).
+     Rename every exported symbol whose name IS "goal" (`createGoal` →
+     `createMission`, etc. — grep `function.*[Gg]oal|export.*[Gg]oal`
+     inside the file to enumerate, don't guess the list). Rename
+     `hooks/goal.test.mjs` → `hooks/mission.test.mjs` alongside it, same
+     import path. Run `node --test hooks/mission.test.mjs` green before
+     touching anything that imports it — this file has zero external
+     dependents yet at this step (nothing imports it under the new path
+     until step 2), so it's the one safely-isolated place to start.
+  2. Update every IMPORTER's import path and call sites, one file at a
+     time, running that file's own test suite green before moving to the
+     next: `hooks/budget.mjs`, `hooks/lane.mjs`, `hooks/statusline.mjs`,
+     `hooks/testplan.mjs`, `hooks/usage.mjs`, `hooks/covgate.mjs`,
+     `hooks/engine.mjs`, `kernel/autonomy.mjs`, `kernel/run.mjs`,
+     `runner/runner.mjs`. Also rename env vars as you touch each file's
+     own definition site: `ACC_GOAL` → `ACC_MISSION`, `ACC_GOALS_DIR` →
+     `ACC_MISSIONS_DIR` (grep both across the whole repo including test
+     files' `process.env.ACC_GOAL...` lines — tests set these directly,
+     not just production code).
+  3. THE ONE STEP THAT MUST NOT LAND ALONE: `budget.mjs`'s
+     `KICK_CONSTANTS` text ("Continue the active ACC goal." or whatever
+     the exact literal is by the time this runs — re-read it fresh, don't
+     trust this summary) and `watcher/clearbot.ps1`'s `$KICK` constant
+     change IN THE SAME COMMIT. Verify by grepping BOTH files for the old
+     string post-edit (expect zero hits in both) and the new string
+     (expect exactly one hit in each) before committing. This sandbox has
+     no PowerShell to execute clearbot.ps1 and confirm the typed string
+     still matches what budget.mjs's Stop-hook liveness check expects —
+     that confirmation can only happen on Kyle's machine or via Windows
+     CI (`hooks/clearbot.test.mjs`, already in `npm run test:windows`,
+     already asserts the pipe-transport path types the exact kick text —
+     let THAT test be the real proof, don't hand-wave it).
+  4. `kernel/contract.mjs`, `kernel/kernel.e2e.mjs`: do NOT touch the
+     `goal` field on a task contract (`REQUIRED_FIELDS`'s one-line task
+     description) — confirmed unrelated concept, same word, per the
+     disambiguation note above. Grep for `\.goal\b` and `goal:` in these
+     two files specifically before editing to make sure a rename script
+     didn't catch it by accident.
+  5. `guards-gui.ps1`, `start-clearbot.cmd`, `e2e/loop.e2e.mjs`: author
+     the edits, but do not claim them verified — same "authored blind,
+     Windows CI or Kyle confirms" posture as every other PowerShell
+     change tonight.
+  6. `AGENTS.md`, `notes/ACC-HANDOFF.md`, every `docs/superpowers/plans/
+     *.md` and `docs/superpowers/specs/*.md` file describing the
+     mechanism: last, once the code is done and tested, so the docs
+     describe what actually shipped rather than what was planned.
+  7. On-disk `runner/goals/*.json`: no schema field literally says
+     "goal" internally (the files are keyed by filename, `g-...`), so
+     the data itself doesn't need a migration script — only the new
+     `m-...` id PREFIX for goals/missions created going forward. Decide
+     explicitly (don't let it default silently) whether existing
+     `g-...` ids get read as legacy missions forever or get one-time
+     renamed at cutover; document whichever is chosen in this entry
+     when the pass runs.
+  8. Definition of done: `grep -rn '\bgoal\b' hooks/ kernel/ runner/
+     watcher/ e2e/ gui/ --include='*.mjs' --include='*.ps1'
+     --include='*.cmd'` (excluding `kernel/contract.mjs`'s own `goal`
+     field and this file, `OPEN-ISSUES.md`, which is allowed to keep
+     historical references) returns nothing live — every hit is either
+     gone or is the contract-field exception, explicitly checked.
+- why still deferred tonight, even with this checklist written: the
+  checklist itself doesn't reduce the risk of step 3 (the KICK_CONSTANTS
+  sync), and rushing that specific step to close this item out tonight —
+  rather than as its own careful pass with room to actually wait for
+  Windows CI's confirmation before moving on — is exactly the "drive-by"
+  this entry has said not to do since 2026-08-03. The checklist exists so
+  the NEXT session doesn't have to re-derive it, not as a reason to treat
+  tonight's context budget as enough to safely execute it.
 
 ## Resolved
 
