@@ -249,3 +249,48 @@ test("a stored autonomy factor of null falls back to 1 in the decision record, n
   const rows = fs.readFileSync(L.decisionsFile(RUN), "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(rows.at(-1).autonomyFactor, 1);
 });
+
+test("OI-019: a decision lock that cannot be acquired fails closed with its own distinct reason", () => {
+  const lockPath = L.decisionsFile(RUN) + ".lock";
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, ""); // fresh mtime — held, not stale, within the low timeout below
+  const r = fire(
+    { tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } },
+    { ACC_LEDGER_LOCK_TIMEOUT_MS: "50" }
+  );
+  assert.equal(r.code, 2);
+  assert.match(r.err, /cannot acquire the decision lock/);
+  // A payload that parses to `null` (valid JSON, not an object) reaching this
+  // SAME denial exercises payload?.tool_name's other branch — the lock-denial
+  // record must still carry tool:null rather than throwing on a null payload.
+  const r2 = fire(null, { ACC_LEDGER_LOCK_TIMEOUT_MS: "50" });
+  assert.equal(r2.code, 2);
+  assert.match(r2.err, /cannot acquire the decision lock/);
+  fs.rmSync(lockPath, { force: true });
+});
+
+test("OI-019: concurrent hook fires against the SAME run never allow more than the ceiling, total (read-decide-append race)", async () => {
+  // contract.budget.toolCalls = 3 (see top of file). Claude Code can and does
+  // dispatch several tool calls from one turn concurrently, all hitting this
+  // same run's guardhook — read-attempts / decide / append-decision is three
+  // separate steps with nothing serializing them across processes. Fire well
+  // more than the ceiling, truly concurrently (spawn, not spawnSync), and the
+  // allowed count must never exceed the ceiling no matter how the races land.
+  const N = 40;
+  const fireAsync = () => new Promise((resolve) => {
+    const child = spawn(process.execPath, [HOOK], {
+      env: { ...process.env, ACC_ROOT: ROOT, ACC_POLICY: POLICY, ACC_KERNEL_DIR: S.runDir(RUN) },
+    });
+    child.on("close", (code) => resolve(code));
+    child.stdin.end(JSON.stringify({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } }));
+  });
+  const codes = await Promise.all(Array.from({ length: N }, fireAsync));
+  const allowed = codes.filter((c) => c === 0).length;
+  assert.ok(
+    allowed <= 3,
+    `ceiling is 3 but ${allowed} of ${N} truly-concurrent fires were allowed — the read-decide-append sequence is not atomic across processes`
+  );
+  process.env.ACC_ROOT = ROOT;
+  const counts = L.decisionCounts(RUN);
+  assert.equal(counts.total, N, "every fire must still be recorded exactly once, race or not");
+});

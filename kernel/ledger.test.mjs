@@ -147,3 +147,39 @@ test("end-to-end: an unknown CLI command prints usage to stderr and exits 1", ()
     /usage: ledger\.mjs query/
   );
 });
+
+test("OI-019: withDecisionLock excludes a second acquirer until the first releases", () => {
+  const seen = [];
+  const result = L.withDecisionLock("r-lock", () => {
+    seen.push("outer-start");
+    // A second acquire attempt from INSIDE the held lock must not succeed
+    // instantly — proves the lock file created by the outer call is real,
+    // not a no-op. A short timeout keeps the test itself fast.
+    assert.throws(
+      () => L.withDecisionLock("r-lock", () => {}, { timeoutMs: 80 }),
+      /still held/,
+      "a nested acquire on the SAME lock must not succeed while it's held"
+    );
+    seen.push("outer-end");
+    return "outer-result";
+  });
+  assert.equal(result, "outer-result");
+  assert.deepEqual(seen, ["outer-start", "outer-end"]);
+});
+
+test("OI-019: withDecisionLock reclaims a stale lock instead of deadlocking forever", () => {
+  const lockPath = L.decisionsFile("r-stale") + ".lock";
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, "");
+  const oldTime = new Date(Date.now() - 10_000);
+  fs.utimesSync(lockPath, oldTime, oldTime); // simulate a crashed holder's lock, 10s old
+  const result = L.withDecisionLock("r-stale", () => "reclaimed", { staleMs: 100 });
+  assert.equal(result, "reclaimed");
+  assert.equal(fs.existsSync(lockPath), false, "the lock is released after the callback runs");
+});
+
+test("OI-019: withDecisionLock releases the lock even when the callback throws", () => {
+  const lockPath = L.decisionsFile("r-throw") + ".lock";
+  assert.throws(() => L.withDecisionLock("r-throw", () => { throw new Error("boom"); }), /boom/);
+  assert.equal(fs.existsSync(lockPath), false, "a throwing callback must not leak the lock file");
+});

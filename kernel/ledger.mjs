@@ -60,6 +60,64 @@ export function appendDecision(runId, decision) {
   appendLine(decisionsFile(runId), { ts: new Date().toISOString(), ...decision });
 }
 
+// OI-019: guardhook.mjs's read-attempts / decide / append-decision was three
+// unsynchronized steps across processes — concurrent tool calls against the
+// SAME run (Claude Code dispatches several from one turn routinely) could all
+// read the same stale attempts count and all be allowed, blowing past the
+// contract's tool-call ceiling. Reproduced directly: 40 truly-concurrent
+// fires against a ceiling of 3 let 4-8 through before this lock existed.
+//
+// A synchronous, cross-process, cross-platform mutex via exclusive file
+// creation (fs.openSync(..., "wx") fails EEXIST if the lock already exists —
+// the create itself is the atomic op, same primitive flock()/CreateFile
+// exclusive-create ultimately reduce to). Busy-waits with jitter rather than
+// blocking on an OS primitive because guardhook.mjs's flow past the initial
+// stdin await is synchronous by design (AC-G9: re-read everything fresh on
+// every fire, no persistent state to hold a real lock handle across awaits).
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+const LOCK_TIMEOUT_MS = Number(process.env.ACC_LEDGER_LOCK_TIMEOUT_MS) || 3000;
+// A process that dies mid-critical-section (killed, crashed) leaves its lock
+// file behind forever with nothing to release it — a stale lock older than
+// this is reclaimed rather than deadlocking every future fire on this run.
+const LOCK_STALE_MS = Number(process.env.ACC_LEDGER_LOCK_STALE_MS) || 5000;
+
+// timeoutMs/staleMs are parameters (defaulting to the env-derived constants
+// above), not read from the environment directly inside the function, so a
+// test can exercise the timeout/reclaim paths in-process, fast, without
+// mutating process.env after this module has already been imported (the
+// module-level consts above are evaluated once, at import time).
+export function withDecisionLock(runId, fn, { timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_STALE_MS } = {}) {
+  const lockPath = decisionsFile(runId) + ".lock";
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const start = Date.now();
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lockPath, "wx"));
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try {
+        if (Date.now() - fs.statSync(lockPath).mtimeMs > staleMs) {
+          fs.rmSync(lockPath, { force: true });
+          continue; // retry the create immediately, no need to sleep first
+        }
+      } catch { /* lock vanished between the stat and here — fine, loop retries */ }
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(`decision lock for ${runId} still held after ${timeoutMs}ms`);
+      }
+      sleepSync(5 + Math.floor(Math.random() * 10));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lockPath, { force: true });
+  }
+}
+
 export function readDecisions(runId) {
   return readLines(decisionsFile(runId));
 }

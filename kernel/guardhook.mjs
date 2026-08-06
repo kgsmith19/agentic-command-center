@@ -15,7 +15,7 @@ import path from "node:path";
 import { decide } from "./guard.mjs";
 import { verifySettingsPin } from "./settings.mjs";
 import { loadKernelPolicy, alwaysDenyWriteRoots } from "./policy.mjs";
-import { appendDecision, decisionCounts } from "./ledger.mjs";
+import { appendDecision, decisionCounts, withDecisionLock } from "./ledger.mjs";
 import { effectiveCeilings, readAutonomyStrict } from "./autonomy.mjs";
 
 function deny(reason, runId, record) {
@@ -48,8 +48,14 @@ const raw = await new Promise((resolve) => {
   // otherwise crash the process instead of failing closed via deny() below.
   const finish = () => { clearTimeout(timer); resolve(buf); };
   process.stdin.setEncoding("utf8");
+  // OI-019: no "already oversized, ignore further data" guard here — once
+  // stdinOversized flips true, finish() resolves this promise and the very
+  // next synchronous statement below (deny() -> process.exit(2)) terminates
+  // the process before Node's event loop can ever deliver another "data"
+  // event. A guard against that case is dead code (same class as the two
+  // branches OI-013 removed rather than tested around: "a passing test for
+  // unreachable code proves nothing").
   process.stdin.on("data", (c) => {
-    if (stdinOversized) return; // already deciding to deny; stop accumulating
     buf += c;
     if (buf.length > STDIN_MAX_BYTES) { stdinOversized = true; finish(); }
   });
@@ -115,24 +121,43 @@ if (!Number.isFinite(ceiling)) {
   });
 }
 
-// Attempts, not just successes: a harness looping on denied calls is burning a
-// real budget and must hit the same ceiling.
-const attempts = decisionCounts(pin.runId).total;
+// OI-019: attempts (not just successes — a harness looping on denied calls is
+// burning a real budget and must hit the same ceiling), decide, and append
+// must be one atomic unit across PROCESSES, not just within this one — two
+// concurrent tool calls against the same run must never both read the count
+// below the ceiling and both be let through. withDecisionLock is the mutex;
+// DecisionLogWriteError is a tag so the outer catch can tell "the lock itself
+// was unavailable" from "the lock was held but the write inside it failed"
+// without changing the decision-log-write denial's existing message.
+class DecisionLogWriteError extends Error {}
 
-const d = decide(payload, {
-  contract, policy, attempts, ceiling,
-  denyRoots: alwaysDenyWriteRoots(),
-  stagingDir: dir,
-});
-
+let d;
 try {
-  appendDecision(pin.runId, {
-    tool: d.tool, allow: d.allow, rule: d.rule, reason: d.reason, target: d.target,
-    ceiling, autonomyFactor: autonomy.factor ?? 1,
+  d = withDecisionLock(pin.runId, () => {
+    const attempts = decisionCounts(pin.runId).total;
+    const verdict = decide(payload, {
+      contract, policy, attempts, ceiling,
+      denyRoots: alwaysDenyWriteRoots(),
+      stagingDir: dir,
+    });
+    try {
+      appendDecision(pin.runId, {
+        tool: verdict.tool, allow: verdict.allow, rule: verdict.rule, reason: verdict.reason, target: verdict.target,
+        ceiling, autonomyFactor: autonomy.factor ?? 1,
+      });
+    } catch (e) {
+      // A decision that cannot be recorded is a decision that cannot be audited.
+      throw new DecisionLogWriteError(e.message);
+    }
+    return verdict;
   });
 } catch (e) {
-  // A decision that cannot be recorded is a decision that cannot be audited.
-  deny(`cannot write the decision log (${e.message}) — failing closed`);
+  if (e instanceof DecisionLogWriteError) {
+    deny(`cannot write the decision log (${e.message}) — failing closed`);
+  }
+  deny(`cannot acquire the decision lock (${e.message}) — failing closed`, pin.runId, {
+    tool: payload?.tool_name ?? null, allow: false, rule: "lock", reason: "decision lock unavailable", target: null,
+  });
 }
 
 if (!d.allow) {

@@ -93,10 +93,35 @@ line under `## Resolved`.
   explicit, ledgered reason none is needed. No test may be added or loosened
   just to turn red green — every test must be able to fail against a genuine
   regression, never tuned to the current implementation's behavior.
-  Progress: 1/12 modules done (`kernel/guard.mjs`). Remaining, in rough
-  risk order: `kernel/guardhook.mjs`, `kernel/run.mjs`, `kernel/ledger.mjs`,
-  `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
-  `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
+  Progress: 2/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`).
+  `kernel/guardhook.mjs` pass (2026-08-06) found a REAL, reproduced race, not
+  a hypothetical: attempts-read / decide / append-decision was three
+  unsynchronized steps across PROCESSES, so concurrent tool calls against the
+  same run (Claude Code dispatches several from one turn routinely) could all
+  read the same stale attempts count and all be let through — reproduced
+  directly, 40 truly-concurrent fires against a ceiling of 3 let 4-8 through.
+  Fixed with a synchronous, cross-process exclusive-file-create mutex
+  (`kernel/ledger.mjs`'s new `withDecisionLock`, stale-lock reclaim so a
+  crashed holder can't deadlock every future fire on that run, fails closed
+  on a genuine timeout) wrapping all three steps as one atomic unit; the two
+  existing "decision log can't be written" vs the new "lock can't be
+  acquired" failure modes stay distinctly worded via a tagged
+  `DecisionLogWriteError`, no existing test's expected message changed. A
+  second, smaller finding along the way: guardhook.mjs's stdin reader had a
+  dead `if (stdinOversized) return` guard — once the cap trips, the process
+  exits synchronously before Node's event loop could ever deliver a second
+  "data" event to need it — removed rather than tested around, same
+  precedent OI-013 already set for this exact class of finding. Verified:
+  `node --test kernel/guardhook.test.mjs kernel/ledger.test.mjs` (39/39, RED
+  first — the race test reliably failed pre-fix, 4-8 allowed vs ceiling 3,
+  across 3 runs before the lock existed), full `npm test` (427/428, the 1
+  fail is the pre-existing unrelated `lane.test.mjs` root-sandbox chmod
+  flake already noted throughout this ledger), `node hooks/covgate.mjs`
+  scoped to both changed files: guardhook.mjs and ledger.mjs both
+  100%/100%/100%.
+  Remaining, in rough risk order: `kernel/run.mjs`, `kernel/verifier.mjs`,
+  `kernel/autonomy.mjs`, `kernel/policy.mjs`, `kernel/contract.mjs`,
+  `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
