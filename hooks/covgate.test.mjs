@@ -145,6 +145,76 @@ test("parseLcov computes line, function and branch coverage per file", () => {
   assert.deepEqual(cov.get(normPath("/repo/hooks/b.mjs")).pct, { lines: 100, funcs: 100, branches: 100 });
 });
 
+// Phase 7 (full-remediation-prompt.md), OI-017: node's own coverage reporter
+// emits ONE SF: block per SUBPROCESS, so a file imported by N different test
+// files gets N separate SF: blocks in a combined lcov report, each declaring
+// the SAME static lines/functions/branches with DIFFERENT hit counts (which
+// test happened to exercise which path). Confirmed for real: hooks/usage.mjs
+// alone produced 19 SF: blocks in one fast-tier run, each with the identical
+// 637 DA: records. Two wrong ways to merge that: (a) the pre-fix parser did
+// `cur = blank(); files.set(path, cur)` on every SF: line unconditionally, so
+// only the LAST block survived — arbitrary and undercounting (whichever test
+// happened to be parsed last decided the file's entire reported coverage);
+// (b) naive concatenation (sum every block's DA:/FNDA:/BRDA: counts) is
+// WORSE — for usage.mjs it would inflate the true 637-line file to a reported
+// 637*19 "total lines", diluting the percentage into meaninglessness no
+// matter how well-tested the file actually is. The correct merge is identity
+// keyed: a line/branch/function is COVERED if hit in ANY block, counted
+// exactly ONCE either way.
+//
+// This fixture models that: two blocks for the same file, each covering only
+// HALF of it (as two different importing test files plausibly would), with
+// no overlap in what each one hits. Overwrite-last would report whichever
+// block parsed last as if it were the file's ENTIRE coverage (50%, and
+// wrongly named which half). Sum-blindly would report the right numerators
+// over a doubled denominator (also 50%, but for the wrong reason — real
+// review would show the sum-based bug on a file with OVERLAPPING blocks,
+// which the next assertion below covers). The correct merge reports 100%:
+// every line/branch/function this file has was hit by SOMETHING.
+test("parseLcov merges per-file blocks by code-point identity: covered-in-any-block, counted-once", () => {
+  const cov = parseLcov(
+    [
+      "SF:/repo/hooks/a.mjs",
+      "FN:1,add", "FN:2,sub",
+      "FNDA:1,add", "FNDA:0,sub",
+      "DA:1,1", "DA:2,0",
+      "BRDA:1,0,0,1", "BRDA:2,0,0,-",
+      "end_of_record",
+      // a second importing test file's own process report for the SAME file —
+      // covers exactly the other half.
+      "SF:/repo/hooks/a.mjs",
+      "FN:1,add", "FN:2,sub",
+      "FNDA:0,add", "FNDA:1,sub",
+      "DA:1,0", "DA:2,1",
+      "BRDA:1,0,0,-", "BRDA:2,0,0,1",
+      "end_of_record",
+    ].join("\n")
+  );
+  const a = cov.get(normPath("/repo/hooks/a.mjs"));
+  assert.equal(a.lines.t, 2, "one file's 2 lines stay 2 lines, not 4, across 2 blocks");
+  assert.equal(a.lines.c, 2, "line 1 (block 1) + line 2 (block 2) union to fully covered");
+  assert.equal(a.funcs.t, 2);
+  assert.equal(a.funcs.c, 2, "add (block 1) + sub (block 2) union to fully covered");
+  assert.equal(a.branches.t, 2);
+  assert.equal(a.branches.c, 2, "branch 1 (block 1) + branch 2 (block 2) union to fully covered");
+  assert.deepEqual(a.pct, { lines: 100, funcs: 100, branches: 100 });
+});
+
+// The failure mode overwrite-last actually has in practice: whichever block
+// is parsed LAST silently becomes the file's entire reported coverage, even
+// though the FIRST block proved line 1 was hit by something.
+test("parseLcov: a later block must not erase an earlier block's coverage of the same line", () => {
+  const cov = parseLcov(
+    [
+      "SF:/repo/hooks/b.mjs", "DA:1,5", "DA:2,0", "end_of_record",
+      "SF:/repo/hooks/b.mjs", "DA:1,0", "DA:2,0", "end_of_record",
+    ].join("\n")
+  );
+  const b = cov.get(normPath("/repo/hooks/b.mjs"));
+  assert.equal(b.lines.t, 2);
+  assert.equal(b.lines.c, 1, "line 1's hit in block 1 must survive block 2 reporting it unhit");
+});
+
 // A fixture repo the gate can judge: one lib file, one test, git history so
 // "changed since HEAD" means the uncommitted lib + test.
 function fixture(name, { covered }) {

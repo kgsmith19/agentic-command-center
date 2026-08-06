@@ -792,6 +792,35 @@ line under `## Resolved`.
   now carries a documented `"hooks/lane.mjs": 85` override (covgate.mjs's
   `floors(file)` reads it), citing this entry. `node hooks/covgate.mjs`
   passes clean.
+- UPDATE 2026-08-06 (Phase 7, full-remediation-prompt.md): re-verified
+  per the phase's own instruction to remove the override if the real bug
+  turns out to be `parseLcov`'s handling of repeated `SF:` blocks. Found
+  and fixed a REAL bug there — node emits one `SF:` block per SUBPROCESS,
+  so a file imported by N different test files gets N blocks in one
+  combined lcov report (confirmed for real: `hooks/usage.mjs` alone
+  produced 19 blocks in one fast-tier run, each declaring the identical
+  637 `DA:` records); the old parser kept only the LAST block
+  (`cur = blank()` on every `SF:` line), silently discarding the rest —
+  `usage.mjs` read `funcs 2.78%` before the fix purely because whichever
+  test happened to be parsed last barely touched it, `funcs 67.3%` after
+  (measuring the honest union of every block instead). Fixed by merging
+  per-code-point identity (line for `DA:`, line+block+branch for `BRDA:`,
+  line+name for `FN:`/`FNDA:` pairs) instead of either overwriting or
+  blindly summing — summing was tried and rejected too, since it would
+  inflate a file like `usage.mjs` to 19x its real branch count instead of
+  fixing anything. `hooks/covgate.test.mjs` gained 2 tests proving the
+  merge (RED against the pre-fix overwrite-last parser, GREEN after).
+  BUT: this was never lane.mjs's or run.mjs's actual problem — neither
+  file ever produces more than one `SF:` block in a combined run, so the
+  parser fix changes neither one's reported number (confirmed directly
+  against the real lcov output). Their instability is exactly what the
+  original 2026-08-02 bisection already found: a genuine node
+  `--experimental-test-coverage` limitation tied to total file/process
+  count per invocation, unrelated to this parser. Both overrides stay —
+  `"hooks/lane.mjs": 85` (measured 86.4% in this pass) and
+  `"kernel/run.mjs": 85` (measured 90.9% in this pass, ABOVE the 90% real
+  floor here but 88.6% in the CI run that same day — the instability
+  itself, not a fixed number, is the reason the override exists).
 
 ## OI-013 [RESOLVED 2026-08-01] runner.mjs had no fast-tier suite; covgate held it at 0%
 - opened: 2026-08-01, resolved: 2026-08-01

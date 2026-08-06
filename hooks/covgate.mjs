@@ -44,10 +44,16 @@ const POLICY = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.jso
 // `file` (gate-relative, forward slashes) is optional: when given, and
 // `tests.branchFloorOverrides[file]` is a finite number, it replaces the
 // branch floor for THAT file only. Escape hatch for a proven tooling
-// limitation, not a way to duck real gaps — see OPEN-ISSUES.md OI-017
-// (node's own --experimental-test-coverage merge under-reports a file's
-// branches once the full fast tier runs together; hooks/lane.mjs's true,
-// isolated coverage comfortably clears the default 90% floor).
+// limitation, not a way to duck real gaps — see OPEN-ISSUES.md OI-017.
+// Phase 7 (full-remediation-prompt.md) re-verified this after fixing a real
+// parseLcov merge bug (below): that bug was real, but is a DIFFERENT
+// phenomenon from what these two overrides paper over — hooks/lane.mjs and
+// kernel/run.mjs never produce more than one SF: block each, so the parser
+// fix changes neither file's reported number. Their branch % is genuinely
+// unstable run to run (node's own --experimental-test-coverage instrumenting
+// differently depending on total file/process count in one invocation,
+// bisected in OI-017), sometimes landing above 90%, sometimes below — a real
+// tooling limitation, still not fixable by a parser change.
 export function floors(file) {
   let t = {};
   try { t = JSON.parse(fs.readFileSync(POLICY(), "utf8").replace(/^﻿/, "")).tests || {}; } catch {}
@@ -76,34 +82,72 @@ export function changedLibFiles(names) {
     .filter((n) => /^(hooks|runner|kernel|gui)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e|spec)\.mjs$/.test(n));
 }
 
-// lcov per file: DA:<line>,<hits> (lines), FNDA:<hits>,<name> (functions),
+// lcov per file: FN:<line>,<name> + FNDA:<hits>,<name> (functions, paired in
+// matching order within a block), DA:<line>,<hits> (lines),
 // BRDA:<line>,<block>,<branch>,<hits|-> (branches; "-" = block never entered,
 // which is an UNCOVERED branch, not a missing one).
+//
+// A file imported by N different test files gets N separate SF: blocks in one
+// combined lcov report — one per subprocess node spawns per test file, each
+// reporting hits for the WHOLE file (found while fixing OI-017: hooks/usage.mjs
+// alone produced 19 SF: blocks, each declaring the identical 637 DA: lines).
+// Merging those by blind concatenation double(-N)-counts every line/branch/
+// function that appears in more than one block — a file imported everywhere
+// would read as having 19x its real branch count, each copy 1/19th "covered".
+// The correct merge is per-code-point identity: a line/branch/function is
+// COVERED if hit in ANY block, and counted exactly ONCE in the total either
+// way. DA: and BRDA: carry that identity directly (line number; line+block+
+// branch). FNDA: does not carry a line number itself, but the FN: declaration
+// immediately preceding each block's FNDA: run does, in the same order —
+// paired by position within the block to build a line-qualified key, since a
+// bare function NAME alone can repeat across a file (two same-named methods
+// on different objects).
 export function parseLcov(text) {
   const files = new Map();
-  const blank = () => ({ lines: { t: 0, c: 0 }, funcs: { t: 0, c: 0 }, branches: { t: 0, c: 0 } });
+  const blank = () => ({ lines: new Map(), funcs: new Map(), branches: new Map() });
   let cur = null;
+  let fnDecls = [];
+  let fnIdx = 0;
+  const bump = (map, key, hits) => { if (hits > (map.get(key) ?? -1)) map.set(key, hits); };
   for (const line of String(text || "").split(/\r?\n/)) {
     if (line.startsWith("SF:")) {
-      cur = blank();
-      files.set(normPath(line.slice(3).trim()), cur);
-    } else if (cur && line.startsWith("DA:")) {
-      cur.lines.t++;
-      if (Number(line.slice(3).split(",")[1]) > 0) cur.lines.c++;
+      const key = normPath(line.slice(3).trim());
+      cur = files.get(key) || blank();
+      files.set(key, cur);
+      fnDecls = [];
+      fnIdx = 0;
+    } else if (cur && line.startsWith("FN:")) {
+      fnDecls.push(line.slice(3)); // "<line>,<name>" — the identity key itself
     } else if (cur && line.startsWith("FNDA:")) {
-      cur.funcs.t++;
-      if (Number(line.slice(5).split(",")[0]) > 0) cur.funcs.c++;
+      const rest = line.slice(5);
+      const comma = rest.indexOf(",");
+      const hits = Number(rest.slice(0, comma));
+      const name = rest.slice(comma + 1);
+      // No FN: pairing (e.g. a hand-built fixture) — fall back to position +
+      // name, which still dedupes correctly as long as the same function
+      // occupies the same position in every block for this file (true for
+      // any two blocks node itself emits for one static file).
+      const key = fnDecls[fnIdx] ?? `?:${fnIdx}:${name}`;
+      fnIdx++;
+      bump(cur.funcs, key, hits);
+    } else if (cur && line.startsWith("DA:")) {
+      const [ln, hits] = line.slice(3).split(",");
+      bump(cur.lines, ln, Number(hits));
     } else if (cur && line.startsWith("BRDA:")) {
-      cur.branches.t++;
-      const hits = line.slice(5).split(",")[3];
-      if (hits !== "-" && Number(hits) > 0) cur.branches.c++;
-    } else if (line === "end_of_record") cur = null;
+      const parts = line.slice(5).split(",");
+      const key = parts.slice(0, 3).join(",");
+      const hits = parts[3] === "-" ? 0 : Number(parts[3]);
+      bump(cur.branches, key, hits);
+    } else if (line === "end_of_record") { cur = null; fnDecls = []; fnIdx = 0; }
   }
+  const tc = (m) => ({ t: m.size, c: [...m.values()].filter((h) => h > 0).length });
   const pct = (m) => (m.t ? Math.round((m.c / m.t) * 1000) / 10 : 100);
-  for (const f of files.values()) {
-    f.pct = { lines: pct(f.lines), funcs: pct(f.funcs), branches: pct(f.branches) };
+  const result = new Map();
+  for (const [path, f] of files) {
+    const lines = tc(f.lines), funcs = tc(f.funcs), branches = tc(f.branches);
+    result.set(path, { lines, funcs, branches, pct: { lines: pct(lines), funcs: pct(funcs), branches: pct(branches) } });
   }
-  return files;
+  return result;
 }
 
 function git(args, cwd) {
