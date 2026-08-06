@@ -278,6 +278,20 @@ line under `## Resolved`.
   (`hooks/lane.test.mjs`'s chmod-based test, root-sandbox limitation, not
   a regression). `runner/runner.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.1% branches — clears the 100/100/90 floor.
+- UPDATE 2026-08-06: real Windows CI on this very commit caught a follow-up
+  bug in the test itself, not the fix. On Windows, `runner.mjs`'s spawn
+  goes through `sp.shell`'s `cmd.exe` wrapper (`hooks/cmdline.mjs`'s
+  `spawnSpec`), so a missing `"claude"` binary does NOT trigger Node's own
+  `ENOENT` `"error"` event (the path this fix's new handler catches) —
+  `cmd.exe` itself launches fine, fails to find `"claude"`, and reports it
+  via its own stderr/exit code, which goes through the PRE-EXISTING
+  `"close"` handler instead, with `cmd.exe`'s own wording (`"'claude' is
+  not recognized as an internal or external command"`). Both paths are
+  legitimate and both were already correctly handled by this fix itself —
+  Windows CI confirmed the subprocess did not crash, exited 0, and showed
+  no `"Unhandled 'error' event"` — only the test's final assertion regex
+  was POSIX-only. Widened to accept either platform's real wording,
+  authored against the exact text Windows CI's own job log showed.
 
 ## OI-038 [RESOLVED 2026-08-06] four duplicated cross-process locks only tolerated EEXIST, not a real Windows CI EPERM
 
