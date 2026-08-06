@@ -114,23 +114,23 @@ fire, so edits apply with no restart. It also writes/removes
 
 ## Kernel (headless task runner)
 
-`kernel/run.mjs <contract.json>` runs one AI coding harness at a time under a
+`core/run.mjs <contract.json>` runs one AI coding harness at a time under a
 deny-by-default boundary the harness cannot widen, verifies the real
 end-state independently of what the harness claims, records every run in one
-structured ledger (`node kernel/ledger.mjs query ...`), and tightens its own
+structured ledger (`node core/ledger.mjs query ...`), and tightens its own
 ceilings after a run of failures — all separate from, and untouched by, the
-interactive ConPTY/standing-order-loop path above. See `kernel/README.md` for the
+interactive ConPTY/standing-order-loop path above. See `core/README.md` for the
 contract shape, the harness-swap procedure (one config value plus one new
-file under `kernel/adapters/`), and the honest guard ceilings.
+file under `core/adapters/`), and the honest guard ceilings.
 
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs core/standing.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/pre-push.test.mjs hooks/dialcheck.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs tools/inventory.test.mjs tools/workflows.test.mjs
+node --test hooks/budget.test.mjs core/standing.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/autopilot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/pre-push.test.mjs hooks/dialcheck.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs core/adapter.test.mjs core/adapters/claude-code.test.mjs core/autonomy.test.mjs core/contract.test.mjs core/credentials.test.mjs core/guard.test.mjs core/guardhook.test.mjs core/ledger.test.mjs core/policy.test.mjs core/run.test.mjs core/settings.test.mjs core/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs tools/inventory.test.mjs tools/workflows.test.mjs
     -> FAST TIER, hermetic (`npm run test:windows`). Run from the repo root;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
-       list (everything except hooks/clearbot.test.mjs and
+       list (everything except hooks/autopilot.test.mjs and
        gui/guards-gui.test.mjs, both of which spawn real cmd.exe/powershell
        processes and only run on Windows) — that's what CI runs on Linux;
        `package.json` is the single source of truth for both lists so this
@@ -146,8 +146,8 @@ node e2e/loop.e2e.mjs [--only N]
        pipe, zero injection). Each scenario holds a launch-lane slot for
        its whole life (below), so a proof run queues behind — and is queued
        behind by — every other automated launch on the machine.
-node kernel/kernel.e2e.mjs
-    -> PROOF TIER. Spawns a REAL claude twice via kernel/run.mjs and spends
+node core/kernel.e2e.mjs
+    -> PROOF TIER. Spawns a REAL claude twice via core/run.mjs and spends
        tokens, so run it deliberately. 1 an in-scope edit is allowed, made,
        and independently verified; 2 the same contract with writeRoots
        elsewhere is denied, the file stays untouched, and the run is
@@ -262,8 +262,8 @@ button creates one (`core/standing.mjs new --text-file`) and launches Claude wit
 `ACC_STANDING=<id>`; from then on the loop runs with no human in it:
 
 `budget.mjs` Stop (over budget) → captures the closing checkpoint as the next
-cycle's handoff → clearbot types `/clear` → the new session's SessionStart adopts
-the standing order and injects it → clearbot types `Continue the active ACC standing order.`
+cycle's handoff → autopilot types `/clear` → the new session's SessionStart adopts
+the standing order and injects it → autopilot types `Continue the active ACC standing order.`
 
 Two decisions carry the whole design:
 
@@ -278,7 +278,7 @@ Two decisions carry the whole design:
 `docs/superpowers/specs/2026-07-31-acc-embedded-terminal-design.md`): the Go
 button spawns claude via `Acc.PtyHost` (gui/PtyHost.cs), renders it in an
 xterm.js/WebView2 Terminal tab, and records a `transport:"pty"` window with a
-pipe name (`hooks/budget.mjs`, env `ACC_PTY`). clearbot then drives the session
+pipe name (`hooks/budget.mjs`, env `ACC_PTY`). autopilot then drives the session
 with pipe writes (`TEXT`/`SUBMIT`/`ESC` — guaranteed Enter) instead of
 keystroke injection; `sendconsole.ps1` remains the transport for external
 sessions and the fallback when the pipe is dead. Without the WebView2 runtime
@@ -290,7 +290,7 @@ it** — `standing.mjs done <id>` or `standing.mjs blocked <id> --why "..."`, bo
 in full in the injected block. The week kill switch is the cost brake; a red week
 holds all kicks. `standing.mjs pending` decides every condition that makes a kick
 unsafe (active? console alive? binding settled? cooldown?) so there is one place
-to audit, and `clearbot.ps1` stays a dumb executor.
+to audit, and `autopilot.ps1` stays a dumb executor.
 
 A standing order whose console is gone is **reaped**, not left active (guards OI-031).
 `standing.mjs reapDeadStanding()` archives it to `runner\standing\done\` as `abandoned` —
@@ -312,9 +312,9 @@ ceiling gets no clear, so the Stop hook re-arms the kick instead
 after `standing.kickSettleSeconds` (90), and not within `standing.humanHoldMinutes`
 (10) of a prompt Kyle typed, so it stays quiet during a conversation and
 self-heals when he walks away. A turn is "his" unless the last user message is
-exactly one of clearbot's constants. Before this, a turn simply finishing ended
+exactly one of autopilot's constants. Before this, a turn simply finishing ended
 the loop — observed dead for 18 minutes.
-**Supervision:** clearbot writes `watcher/clearbot.heartbeat` every cycle;
+**Supervision:** autopilot writes `watcher/autopilot.heartbeat` every cycle;
 the statusline shows `bot DEAD` and SessionStart warns when it goes stale;
 `budget.mjs reviveClearbotIfDead` restarts a stale watcher at every turn
 boundary (honouring the kill switch), and a Startup-folder launcher covers
@@ -352,7 +352,7 @@ rung mid-task is cheap and starting too wide is invisible. Every verdict carries
 `parent`, the next rung up. A prompt with no signals changes nothing.
 
 When the verdict differs from the session cwd it **blocks** the prompt and
-writes a `kind:"cd"` request into `runner\clear-requests`. The clearbot picks it
+writes a `kind:"cd"` request into `runner\clear-requests`. The autopilot picks it
 up and types `/cd <path>` into that session's console (preceded by `/clear` on a
 mid-session re-scope, since cwd alone cannot unload what was already read), then
 replays the blocked prompt so it re-runs already scoped. `policy.json.autoCd`
@@ -366,12 +366,12 @@ once this session (so a cd that fails to take cannot cause a deny loop), no
 A prompt the injector cannot type (multi-line, or over 2000 chars) is **not**
 typed more carefully — it is not typed at all. `route.mjs` writes it to
 `runner\queued\<consolePid>.md`, the post-clear session injects it at
-SessionStart and deletes it, and clearbot types the constant `Run the queued
+SessionStart and deletes it, and autopilot types the constant `Run the queued
 prompt.` That channel needs a clear to ride on, so on the *first* scope of a
 session — where there is no clear and therefore no SessionStart — an untypable
 prompt still falls through to advice.
 
-`clearbot.ps1` re-derives every check itself rather than trusting the request
+`autopilot.ps1` re-derives every check itself rather than trusting the request
 file: the destination must be byte-identical to a route in `ROUTING.md` *and*
 exist, and the replay must re-pass the printable-single-line test. Invariant 1
 in that file is the authority on what may ever be typed — read it before

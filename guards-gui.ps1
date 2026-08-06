@@ -443,10 +443,10 @@ $btnCBTest.Text = 'Clean up my newest session now'
 $chkAutoApprove = Add-Ctl $grpCB (New-Object System.Windows.Forms.CheckBox) 15 86 620 22
 $chkAutoApprove.Text = 'Also run Claude''s requested scripts automatically (no /approve needed)'
 # ---------- tab 5: Kernel (ACC-KERNEL-TAB) ----------
-# Edits the policy.json "kernel" block ONLY — kernel/policy.mjs re-reads that
+# Edits the policy.json "kernel" block ONLY — core/policy.mjs re-reads that
 # file on every guardhook fire, so a save here applies to the very next tool
 # call of a running kernel task, no restart (AC-U2). This is NOT a ledger
-# viewer; run history stays a `node kernel/ledger.mjs query` job (spec §15).
+# viewer; run history stays a `node core/ledger.mjs query` job (spec §15).
 $tabK = New-Tab 'Kernel'
 # The kernel settings UI is a WEB page now (gui/kernel.html served by
 # gui/server.mjs on 127.0.0.1) — the first tab migrated per spec

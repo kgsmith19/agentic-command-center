@@ -45,7 +45,7 @@ function ensureDirs() {
   for (const d of [STATE, LOGS, CLEARREQ]) fs.mkdirSync(d, { recursive: true });
 }
 
-// Record which terminal window this session lives in, so clearbot.ps1 can type
+// Record which terminal window this session lives in, so autopilot.ps1 can type
 // /clear into THAT window and nothing else. Runs once, at SessionStart. Failing
 // here only costs auto-clear; the session is unaffected (hooks fail open).
 function captureWindow(sid) {
@@ -71,13 +71,13 @@ function captureWindow(sid) {
 // fails SILENTLY (the request file just sits there). So every interactive session
 // start makes sure it is running. Fire-and-forget: detached, never waited on, so
 // it cannot slow the session down or wedge it if PowerShell is unhappy.
-function ensureClearbot() {
+function ensureAutopilot() {
   try {
-    // A deliberate stop must STICK. start-clearbot.cmd removes the stop file, so
+    // A deliberate stop must STICK. start-autopilot.cmd removes the stop file, so
     // without this check every new session would silently re-arm a watcher Kyle
     // had turned off on purpose.
-    if (fs.existsSync(path.join(ROOT, "watcher", "clearbot.stop"))) return;
-    const cmd = path.join(ROOT, "watcher", "start-clearbot.cmd");
+    if (fs.existsSync(path.join(ROOT, "watcher", "autopilot.stop"))) return;
+    const cmd = path.join(ROOT, "watcher", "start-autopilot.cmd");
     if (!fs.existsSync(cmd)) return;
     const child = spawn("cmd.exe", ["/c", cmd], {
       detached: true,
@@ -91,21 +91,21 @@ function ensureClearbot() {
 // SELF-HEALING (guards OI-007): the watcher is the only thing that can clear or
 // resume a session, and when it dies the standing order loop dies silently with it. A
 // turn boundary is exactly where that matters, so check there: one stat, and
-// ensureClearbot() is idempotent (start-clearbot.cmd no-ops when a watcher is
+// ensureAutopilot() is idempotent (start-autopilot.cmd no-ops when a watcher is
 // already up) and still honours the deliberate kill switch. A MISSING heartbeat
 // counts as dead here - unlike the status line, which stays quiet rather than
 // crying wolf, this path only costs a no-op start.
 const HEARTBEAT_STALE_MS = 30_000;
-function reviveClearbotIfDead(policy) {
+function reviveAutopilotIfDead(policy) {
   try {
     if (policy.autoClear?.enabled === false) return;
     let stale = true;
     try {
-      stale = Date.now() - fs.statSync(path.join(ROOT, "watcher", "clearbot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
+      stale = Date.now() - fs.statSync(path.join(ROOT, "watcher", "autopilot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
     } catch {
       stale = true;
     }
-    if (stale) ensureClearbot();
+    if (stale) ensureAutopilot();
   } catch {}
 }
 
@@ -308,7 +308,7 @@ function lastUserText(transcript) {
   return String(last || "").trim();
 }
 
-// Exactly the constants clearbot types (watcher/clearbot.ps1 $KICK and
+// Exactly the constants autopilot types (watcher/autopilot.ps1 $KICK and
 // $QUEUEKICK). Anything else came from a human, so the kick backs off.
 const KICK_CONSTANTS = ["Continue the active ACC standing order.", "Run the queued prompt."];
 
@@ -413,7 +413,7 @@ function onSessionStart(p, policy) {
     // The persistent process across /clear (what consolePid means to standing order
     // binding) is the claude process - NOT this hook's raw parent, which is a
     // transient bash/cmd wrapper that dies with the turn (recording it gave
-    // clearbot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
+    // autopilot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
     if (process.env.ACC_PTY) {
       const chain = ancestorChain();
       win = { ok: true, hwnd: 0,
@@ -424,7 +424,7 @@ function onSessionStart(p, policy) {
     } else {
       win = captureWindow(p.session_id) || readJson(statePath(p.session_id, "window"), null);
     }
-    if (policy.autoClear?.enabled !== false) ensureClearbot();
+    if (policy.autoClear?.enabled !== false) ensureAutopilot();
   }
   // Record the status file's mtime so the Stop waiting-guard can tell whether
   // this run actually checkpointed.
@@ -460,10 +460,10 @@ function onSessionStart(p, policy) {
   // If the watcher is down, this session has no auto-clear and no auto-resume.
   // Say it once, at the top, instead of letting the standing order loop fail silently.
   try {
-    const hb = path.join(ROOT, "watcher", "clearbot.heartbeat");
+    const hb = path.join(ROOT, "watcher", "autopilot.heartbeat");
     if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
       lines.push(
-        `[ACC] WARNING: the clearbot watcher looks DEAD (stale heartbeat). Auto-clear and auto-resume will NOT fire, so this session will not be continued for you. Start it: guards\\watcher\\start-clearbot.cmd`
+        `[ACC] WARNING: the autopilot watcher looks DEAD (stale heartbeat). Auto-clear and auto-resume will NOT fire, so this session will not be continued for you. Start it: guards\\watcher\\start-autopilot.cmd`
       );
     }
   } catch {}
@@ -545,7 +545,7 @@ const WAITING_RE =
 
 function onStop(p, policy) {
   ensureDirs();
-  reviveClearbotIfDead(policy);
+  reviveAutopilotIfDead(policy);
 
   // --- waiting guard (headless only: nothing re-invokes a -p session) ---
   // stop_hook_active means a Stop hook (this one or another) already blocked
@@ -582,7 +582,7 @@ function onStop(p, policy) {
   if (ctx < hardK * 1000) {
     // LIVENESS (guards OI-002): a standing order session that ends its turn UNDER the
     // ceiling gets no clear, and therefore no resume - the loop used to die
-    // right here, silently. Re-arm the kick and let standing order.mjs decide when
+    // right here, silently. Re-arm the kick and let standing.mjs decide when
     // firing it is safe. Fails open: liveness must never cost a turn its
     // clean exit.
     try {
@@ -626,16 +626,16 @@ function onStop(p, policy) {
   } catch {}
 
   // Interactive: hand off to the outside watcher, which types /clear as real
-  // keystrokes (hooks cannot clear context - see watcher/clearbot.ps1).
+  // keystrokes (hooks cannot clear context - see watcher/autopilot.ps1).
   const queued = policy.autoClear?.enabled !== false && requestClear(p, policy, ctx);
   process.stdout.write(
     JSON.stringify({
       systemMessage:
         `\n[ACC ctx ${K(ctx)}/${hardK}k] BUDGET REACHED - checkpoint written.\n` +
         (queued
-          ? `\n    >>> auto-clear requested - clearbot will type /clear <<<\n\n` +
+          ? `\n    >>> auto-clear requested - autopilot will type /clear <<<\n\n` +
             `  If nothing happens within ~5s the watcher is not running:\n` +
-            `    node ${resolve("hooks/budget.mjs")} clearbot-status\n`
+            `    node ${resolve("hooks/budget.mjs")} autopilot-status\n`
           : `\n    >>> TYPE /clear NOW <<<\n\n` +
             `  (auto-clear unavailable - no window captured for this session)\n`) +
         (standing
@@ -744,28 +744,28 @@ function main() {
         transcript: "", ctx: 0, hardK: 0, ts: new Date().toISOString(),
       })
     );
-    console.log(`clear requested for ${sid} (consolePid ${w.consolePid}) - clearbot fires within ~2s`);
+    console.log(`clear requested for ${sid} (consolePid ${w.consolePid}) - autopilot fires within ~2s`);
     return;
   }
 
-  if (argv[0] === "clearbot-status") {
+  if (argv[0] === "autopilot-status") {
     ensureDirs();
-    const stop = path.join(ROOT, "watcher", "clearbot.stop");
+    const stop = path.join(ROOT, "watcher", "autopilot.stop");
     const running = execFileSync(
       "powershell",
       ["-NoProfile", "-Command",
        // must exclude the probe's own command line, which also contains the
        // pattern - otherwise this always reports "running".
        "$me=$PID; @(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | " +
-       "Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*clearbot.ps1*' }).Count"],
+       "Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*autopilot.ps1*' }).Count"],
       { encoding: "utf8", timeout: 15000, windowsHide: true }
     ).trim();
     const pending = fs.readdirSync(CLEARREQ).filter((f) => f.endsWith(".json"));
-    console.log(`clearbot processes : ${running}`);
-    console.log(`kill switch        : ${fs.existsSync(stop) ? "ENGAGED (clearbot.stop present)" : "off"}`);
+    console.log(`autopilot processes : ${running}`);
+    console.log(`kill switch        : ${fs.existsSync(stop) ? "ENGAGED (autopilot.stop present)" : "off"}`);
     console.log(`pending requests   : ${pending.length}${pending.length ? " -> " + pending.join(", ") : ""}`);
-    console.log(`log                : ${path.join(ROOT, "watcher", "clearbot.log")}`);
-    if (running === "0") console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-clearbot.cmd`);
+    console.log(`log                : ${path.join(ROOT, "watcher", "autopilot.log")}`);
+    if (running === "0") console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-autopilot.cmd`);
     return;
   }
 

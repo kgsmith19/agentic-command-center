@@ -24,8 +24,8 @@ import { ptyAnchorPid } from "./usage.mjs";
 // at import time (see hooks/standing.mjs), specifically so a single shared import
 // works across many tests each pointed at their own sandbox -- important here
 // beyond just tidiness: when covgate.mjs runs this file in the same node
-// process as standing order.test.mjs, a second, differently-parameterized import of
-// standing.mjs would collide with standing order.test.mjs's own coverage instance (node's
+// process as standing.test.mjs, a second, differently-parameterized import of
+// standing.mjs would collide with standing.test.mjs's own coverage instance (node's
 // lcov merge is last-write-wins per file path, not a union -- see OI-006).
 import * as gm from "../core/standing.mjs";
 
@@ -97,7 +97,7 @@ function writeTranscript(sb, sid, ctxTokens) {
   return f;
 }
 
-// The window record clearbot would type into; without it requestClear refuses.
+// The window record autopilot would type into; without it requestClear refuses.
 function seedWindow(sb, sid) {
   fs.writeFileSync(
     path.join(sb.root, "runner", "state", `${sid}.window`),
@@ -261,23 +261,23 @@ test("a human-prompted turn end is classified as human", async () => {
 });
 
 // --- self-healing watcher --------------------------------------------------
-// A dead clearbot means no clear and no resume, and a standing order session cannot
+// A dead autopilot means no clear and no resume, and a standing order session cannot
 // notice on its own. The Stop hook is the right place to check: it IS the turn
 // boundary where a clear or a kick is about to be needed. The sandbox gets a
-// FAKE start-clearbot.cmd, so these prove the decision without starting a real
+// FAKE start-autopilot.cmd, so these prove the decision without starting a real
 // watcher.
 function fakeStarter(sb) {
   const dir = path.join(sb.root, "watcher");
   fs.mkdirSync(dir, { recursive: true });
   const marker = path.join(dir, "STARTED");
-  fs.writeFileSync(path.join(dir, "start-clearbot.cmd"), `@echo off\r\necho started > "${marker}"\r\n`);
+  fs.writeFileSync(path.join(dir, "start-autopilot.cmd"), `@echo off\r\necho started > "${marker}"\r\n`);
   return marker;
 }
 
 function heartbeat(sb, ageMs) {
   const dir = path.join(sb.root, "watcher");
   fs.mkdirSync(dir, { recursive: true });
-  const f = path.join(dir, "clearbot.heartbeat");
+  const f = path.join(dir, "autopilot.heartbeat");
   fs.writeFileSync(f, "alive");
   const when = new Date(Date.now() - ageMs);
   fs.utimesSync(f, when, when);
@@ -288,7 +288,7 @@ function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// ensureClearbot spawns detached, so the marker lands a moment later.
+// ensureAutopilot spawns detached, so the marker lands a moment later.
 function appears(file, ms = 6000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -298,7 +298,7 @@ function appears(file, ms = 6000) {
   return false;
 }
 
-// ensureClearbot() spawns cmd.exe directly (hooks/budget.mjs:80) — genuinely
+// ensureAutopilot() spawns cmd.exe directly (hooks/budget.mjs:80) — genuinely
 // Windows-only functionality, not a portability gap. Same pattern already used
 // by hooks/testplan.test.mjs for its POSIX-only chmod fault-injection case.
 test("a stale heartbeat at a turn boundary revives the watcher", { skip: process.platform !== "win32" }, () => {
@@ -307,7 +307,7 @@ test("a stale heartbeat at a turn boundary revives the watcher", { skip: process
   const marker = fakeStarter(sb);
   heartbeat(sb, 120000);
   runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
-  assert.ok(appears(marker), "start-clearbot was invoked");
+  assert.ok(appears(marker), "start-autopilot was invoked");
 });
 
 test("a fresh heartbeat leaves the watcher alone", () => {
@@ -323,7 +323,7 @@ test("a deliberate stop is never overridden by the revive", () => {
   const sb = sandbox();
   const sid = "s-killswitch";
   const marker = fakeStarter(sb);
-  fs.writeFileSync(path.join(sb.root, "watcher", "clearbot.stop"), "stopped on purpose");
+  fs.writeFileSync(path.join(sb.root, "watcher", "autopilot.stop"), "stopped on purpose");
   // no heartbeat at all = looks dead, but Kyle turned it off deliberately
   runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
   assert.equal(appears(marker, 2500), false, "the kill switch wins");
@@ -407,7 +407,7 @@ test("SessionStart reaps a stale standing order instead of adopting it (OI-031)"
 
 // The anchor rule behind that record: the hook's immediate parent on a live
 // launch is a transient shell (node -> bash -> bash -> claude.exe) that dies
-// with the turn - recording it handed clearbot a dead pid (observed live:
+// with the turn - recording it handed autopilot a dead pid (observed live:
 // consolePid 80480 GONE while claude.exe 70152 hosted the session). The
 // persistent process is the first NON-SHELL ancestor. Lives in usage.mjs
 // because budget.mjs runs main() on import and cannot be imported by tests.

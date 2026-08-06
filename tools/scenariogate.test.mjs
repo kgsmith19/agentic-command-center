@@ -2,7 +2,7 @@
 //
 // OI-019: covgate's floors prove every line EXECUTES once. They do not prove
 // the suite covers the scenario space. The first module audited under this
-// program (kernel/guard.mjs) turned up a real, live path-traversal bypass -
+// program (core/guard.mjs) turned up a real, live path-traversal bypass -
 // one module of twelve. A gate that enumerates modules cannot be forgotten;
 // diligence can.
 import { test } from "node:test";

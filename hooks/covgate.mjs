@@ -81,10 +81,10 @@ export function floors(file) {
 // meet in the middle regardless of who emitted which slash.
 export const normPath = (p) => path.resolve(String(p)).replaceAll("\\", "/").toLowerCase();
 
-// Lib files only: .mjs directly under hooks/, runner/, kernel/, gui/, or
-// tools/ (kernel/ allows one level of nesting for kernel/adapters/<harness>.mjs,
+// Lib files only: .mjs directly under hooks/, runner/, core/, gui/, or
+// tools/ (core/ allows one level of nesting for core/adapters/<harness>.mjs,
 // gui/ for gui/e2e/<spec>.mjs), minus tests and harnesses — .test.mjs
-// (node:test), .e2e.mjs (kernel/loop proof runs), and .spec.mjs (Playwright,
+// (node:test), .e2e.mjs (core/loop proof runs), and .spec.mjs (Playwright,
 // gui/e2e/) are all the instrument, never the gated subject. The GATE'S OWN
 // SUBJECT, exported for its suite.
 export function changedLibFiles(names) {
@@ -182,7 +182,7 @@ function main() {
   // the REAL guards/hooks tests while gating a throwaway fixture.
   const tests = process.env.ACC_COVGATE_TESTS
     ? process.env.ACC_COVGATE_TESTS.split(/[ ,]+/).filter(Boolean)
-    : ["hooks", "runner", "kernel", "kernel/adapters", "gui", "tools", "core"].flatMap((d) => {
+    : ["hooks", "runner", "kernel", "core/adapters", "gui", "tools", "core"].flatMap((d) => {
         let files = [];
         try { files = fs.readdirSync(path.join(cwd, d)).filter((f) => f.endsWith(".test.mjs")); } catch {}
         return files.map((f) => path.join(d, f));

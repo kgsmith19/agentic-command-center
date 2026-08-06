@@ -2,7 +2,7 @@
 //
 // OI-019: covgate's floors prove every line EXECUTES once. They do not prove
 // the suite covers the scenario space. The first module audited under this
-// program (kernel/guard.mjs) turned up a real, live path-traversal bypass -
+// program (core/guard.mjs) turned up a real, live path-traversal bypass -
 // one module of twelve. A gate that enumerates modules cannot be forgotten;
 // diligence can.
 //
@@ -233,8 +233,8 @@ function checkOne(modulePath) {
 // `node tools/scenariogate.mjs --check-all`.
 function realKernelModules() {
   const isModule = (f) => f.endsWith(".mjs") && !f.includes(".test.") && !f.endsWith(".e2e.mjs");
-  const top = readdirSync(path.join(ROOT, "kernel")).filter(isModule).map((f) => `kernel/${f}`);
-  const adapters = readdirSync(path.join(ROOT, "kernel", "adapters")).filter(isModule).map((f) => `kernel/adapters/${f}`);
+  const top = readdirSync(path.join(ROOT, "kernel")).filter(isModule).map((f) => `core/${f}`);
+  const adapters = readdirSync(path.join(ROOT, "kernel", "adapters")).filter(isModule).map((f) => `core/adapters/${f}`);
   return [...top, ...adapters];
 }
 
