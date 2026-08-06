@@ -25,11 +25,15 @@ const resetEngine = () => {
   fs.rmSync(path.join(process.env.ACC_ROOT, "vault.json"), { force: true });
   fs.rmSync(path.join(process.env.ACC_ROOT, "runbox"), { recursive: true, force: true });
 };
+// mission.mjs resolves its store from ACC_ROOT on every call (no import-time
+// caching to fight, unlike usage.mjs's CLAUDE_DIR elsewhere in this repo's
+// test suite) -- a mission created by one test must not leak into the next.
+const resetMissions = () => fs.rmSync(path.join(process.env.ACC_ROOT, "runner", "missions"), { recursive: true, force: true });
 
 const { startServer, handler, cli } = await import("./server.mjs");
 let srv, base;
 before(async () => { const s = await startServer({ port: 0 }); srv = s.server; base = `http://127.0.0.1:${s.port}`; });
-beforeEach(() => { resetPolicy(); resetEngine(); });
+beforeEach(() => { resetPolicy(); resetEngine(); resetMissions(); });
 after(() => { srv.close(); fs.rmSync(BASE, { recursive: true, force: true }); });
 
 const good = () => ({ ...KERNEL, budget: { ...KERNEL.budget, toolCalls: 150 } });
@@ -411,4 +415,69 @@ test("POST /api/status/clearbot rejects an unknown op with status.mjs's own mess
   const r = await postStatus("/api/status/clearbot", { op: "explode" });
   assert.equal(r.status, 400);
   assert.match((await r.json()).error, /unknown clearbot op/);
+});
+
+// ================================================================
+// gui/startwork.html routes (design spec §7's non-launch slice) — the
+// "What Claude is working on now" panel. Business logic lives in
+// hooks/status.mjs's missionSummary/finishMission/stopMission/missionLog
+// (already unit-tested on their own); these focus on the HTTP contract,
+// same discipline as the spending routes above. mission.mjs resolves its
+// store from ACC_ROOT on every call (no import-time caching), so it reads/
+// writes straight into this file's own shared ACC_ROOT sandbox.
+// ================================================================
+const { createMission } = await import("../hooks/mission.mjs");
+
+test("GET /startwork.html serves the page", async () => {
+  const r = await fetch(`${base}/startwork.html`);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /id="missionText"/);
+});
+
+test("GET /api/status/mission reports active:false with nothing running", async () => {
+  const r = await fetch(`${base}/api/status/mission`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { active: false });
+});
+
+test("GET /api/status/mission reports a live mission's text and cycles", async () => {
+  const g = createMission({ text: "ship the thing", cwd: process.env.ACC_ROOT, profile: "" });
+  const r = await fetch(`${base}/api/status/mission`);
+  const j = await r.json();
+  assert.equal(j.active, true);
+  assert.equal(j.id, g.id);
+  assert.equal(j.text, "ship the thing");
+});
+
+test("GET /api/status/mission/log returns the progress log tail for a real mission, '' for an unknown id", async () => {
+  const g = createMission({ text: "t", cwd: process.env.ACC_ROOT, profile: "" });
+  const r = await fetch(`${base}/api/status/mission/log?id=${g.id}`);
+  assert.equal(r.status, 200);
+  assert.match((await r.json()).text, /## Progress/);
+
+  const missing = await fetch(`${base}/api/status/mission/log?id=m-does-not-exist`);
+  assert.equal(missing.status, 200);
+  assert.deepEqual(await missing.json(), { text: "" });
+});
+
+test("POST /api/status/mission/done marks it finished, CSRF applies the same as every other mutation", async () => {
+  const g = createMission({ text: "t", cwd: process.env.ACC_ROOT, profile: "" });
+  const noHeader = await postStatus("/api/status/mission/done", { id: g.id }, { "X-ACC": "" });
+  assert.equal(noHeader.status, 403);
+  assert.equal((await (await fetch(`${base}/api/status/mission`)).json()).active, true);
+
+  const good = await postStatus("/api/status/mission/done", { id: g.id });
+  assert.equal(good.status, 200);
+  assert.deepEqual((await (await fetch(`${base}/api/status/mission`)).json()), { active: false });
+});
+
+test("POST /api/status/mission/stop pauses it, an unknown id is a 400 with status.mjs's own message", async () => {
+  const g = createMission({ text: "t", cwd: process.env.ACC_ROOT, profile: "" });
+  const good = await postStatus("/api/status/mission/stop", { id: g.id });
+  assert.equal(good.status, 200);
+  assert.deepEqual((await (await fetch(`${base}/api/status/mission`)).json()), { active: false });
+
+  const bad = await postStatus("/api/status/mission/stop", { id: "m-does-not-exist" });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /mission not found/);
 });

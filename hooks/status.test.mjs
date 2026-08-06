@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import * as missionStore from "./mission.mjs";
 
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-status-test-"));
 
@@ -308,4 +309,92 @@ test("saveOpsPolicy rejects a non-object block, and a block missing every field 
   assert.throws(() => S.saveOpsPolicy(null), /block must be an object/);
   assert.throws(() => S.saveOpsPolicy("nope"), /block must be an object/);
   assert.throws(() => S.saveOpsPolicy({}), /context\.softK/, "a block missing every field fails on the first field checked");
+});
+
+// -------------------------------------------------------- mission status panel
+//
+// Start Work tab (design spec 2026-08-06-acc-gui-remaining-tabs-design.md
+// §7, "every other Start Work control... is already ordinary CLI-backed"):
+// the "What Claude is working on now" panel is the one self-contained slice
+// of that tab that doesn't depend on the (not-yet-built) Terminal/ConPTY
+// transport -- it only reads/mutates hooks/mission.mjs's store, exactly like
+// guards-gui.ps1's Refresh-Missions/btnMissionDone/btnMissionStop/
+// btnMissionLog handlers already do. mission.mjs's exported functions never
+// call process.exit (only its CLI main() does, guarded behind the
+// direct-execution check at the bottom of the file), so status.mjs imports
+// them directly rather than shelling out -- same "import when safe, shell
+// out only when the target calls process.exit" distinction this file's own
+// header already documents for budget.mjs vs usage.mjs.
+function missionSandbox(name) {
+  const sb = sandbox(name);
+  fs.mkdirSync(sb.root, { recursive: true });
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_MISSIONS_DIR = "";
+  return sb;
+}
+
+test("missionSummary reports active:false with nothing running", async () => {
+  const sb = missionSandbox("mission-none");
+  const S = await loadStatus(sb.root, sb.policy);
+  assert.deepEqual(S.missionSummary(), { active: false });
+});
+
+test("missionSummary reports the most recent active mission's text/cwd/cycles", async () => {
+  const sb = missionSandbox("mission-active");
+  const g = missionStore.createMission({ text: "ship the thing", cwd: sb.root, profile: "" });
+  missionStore.appendCycle(g.id, { text: "did some work" });
+  const S = await loadStatus(sb.root, sb.policy);
+  const s = S.missionSummary();
+  assert.equal(s.active, true);
+  assert.equal(s.id, g.id);
+  assert.equal(s.text, "ship the thing");
+  assert.equal(s.cwd, sb.root);
+  assert.equal(s.cycles, 1);
+});
+
+test("finishMission marks the mission done and it drops out of the summary", async () => {
+  const sb = missionSandbox("mission-finish");
+  const g = missionStore.createMission({ text: "t", cwd: sb.root, profile: "" });
+  const S = await loadStatus(sb.root, sb.policy);
+  assert.deepEqual(S.finishMission(g.id, "shipped"), { ok: true });
+  assert.deepEqual(S.missionSummary(), { active: false });
+  const archived = missionStore.readMissionAnywhere(g.id);
+  assert.equal(archived.status, "done");
+  assert.equal(archived.why, "shipped");
+});
+
+test("finishMission throws for an unknown id, without a generic TypeError", async () => {
+  const sb = missionSandbox("mission-finish-missing");
+  const S = await loadStatus(sb.root, sb.policy);
+  assert.throws(() => S.finishMission("m-does-not-exist"), /mission not found/);
+});
+
+test("stopMission pauses the mission and it drops out of the summary", async () => {
+  const sb = missionSandbox("mission-stop");
+  const g = missionStore.createMission({ text: "t", cwd: sb.root, profile: "" });
+  const S = await loadStatus(sb.root, sb.policy);
+  assert.deepEqual(S.stopMission(g.id), { ok: true });
+  assert.deepEqual(S.missionSummary(), { active: false });
+  assert.equal(missionStore.readMission(g.id).status, "paused");
+});
+
+test("stopMission throws for an unknown id", async () => {
+  const sb = missionSandbox("mission-stop-missing");
+  const S = await loadStatus(sb.root, sb.policy);
+  assert.throws(() => S.stopMission("m-does-not-exist"), /mission not found/);
+});
+
+test("missionLog returns the mission's progress log tail", async () => {
+  const sb = missionSandbox("mission-log");
+  const g = missionStore.createMission({ text: "t", cwd: sb.root, profile: "" });
+  missionStore.appendCycle(g.id, { text: "cycle one notes" });
+  const S = await loadStatus(sb.root, sb.policy);
+  const { text } = S.missionLog(g.id);
+  assert.match(text, /cycle one notes/);
+});
+
+test("missionLog returns '' for an unknown id rather than throwing", async () => {
+  const sb = missionSandbox("mission-log-missing");
+  const S = await loadStatus(sb.root, sb.policy);
+  assert.deepEqual(S.missionLog("m-does-not-exist"), { text: "" });
 });

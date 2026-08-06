@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Start work</title>
+<style>
+  body { font: 14px 'Segoe UI', sans-serif; margin: 16px; max-width: 820px; }
+  fieldset { margin: 0 0 14px; border: 1px solid #ccc; }
+  legend { font-weight: bold; }
+  .row { margin: 6px 0; }
+  .ok { color: #1a7a1a; }
+  .err { color: #b22222; }
+  .muted { color: #5a5f64; }
+  .notice { background: #fff2cc; color: #8a6d00; padding: 8px 10px; border-radius: 3px; margin-bottom: 14px; }
+  pre#missionLog { white-space: pre-wrap; background: #f6f6f6; border: 1px solid #ddd; padding: 8px; max-height: 300px; overflow-y: auto; }
+  #global-status { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 3px; float: right; }
+  .gs-green { background: #d6f5d6; color: #1a7a1a; }
+  .gs-amber { background: #fff2cc; color: #8a6d00; }
+  .gs-red { background: #f8d7da; color: #a71d2a; }
+</style>
+</head>
+<body>
+<div id="global-status"></div>
+<h3>Start work</h3>
+
+<div class="notice">
+  Starting new work from a browser tab isn't available yet — that needs a
+  live terminal (ConPTY over WebSocket), which is designed but not built
+  (design spec 2026-08-06-acc-gui-remaining-tabs-design.md §7). Use the
+  Command Center app to start something new; this page tracks and manages
+  whatever mission is already running, from anywhere.
+</div>
+
+<fieldset><legend>What Claude is working on now</legend>
+  <div class="row" id="missionText">-</div>
+  <div class="row muted" id="missionMeta"></div>
+  <div class="row">
+    <button id="missionRefresh">Refresh</button>
+    <button id="missionDone">Mark it finished</button>
+    <button id="missionStop">Stop restarting it</button>
+    <button id="missionViewLog">View progress log</button>
+  </div>
+  <span id="missionStatus"></span>
+  <pre id="missionLog" hidden></pre>
+</fieldset>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const post = (url, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json", "X-ACC": "1" }, body: JSON.stringify(body ?? {}) });
+
+let currentMissionId = null;
+
+async function loadMission() {
+  const m = await (await fetch("/api/status/mission")).json();
+  $("missionLog").hidden = true;
+  if (!m.active) {
+    currentMissionId = null;
+    $("missionText").textContent = "Nothing running.";
+    $("missionMeta").textContent = "";
+    $("missionDone").disabled = true;
+    $("missionStop").disabled = true;
+    $("missionViewLog").disabled = true;
+    return;
+  }
+  currentMissionId = m.id;
+  const first = String(m.text).split("\n")[0].trim();
+  $("missionText").textContent = first.length > 80 ? first.slice(0, 77) + "..." : first;
+  const restarts = m.cycles === 0 ? "no restarts yet" : m.cycles === 1 ? "1 restart so far" : `${m.cycles} restarts so far`;
+  $("missionMeta").textContent = `${m.cwd || "(no folder set)"} — ${restarts}`;
+  $("missionDone").disabled = false;
+  $("missionStop").disabled = false;
+  $("missionViewLog").disabled = false;
+}
+
+$("missionRefresh").onclick = loadMission;
+
+$("missionDone").onclick = async () => {
+  if (!currentMissionId) return;
+  const r = await post("/api/status/mission/done", { id: currentMissionId, why: "marked finished from the Command Center" });
+  const j = await r.json();
+  $("missionStatus").textContent = r.ok ? "Marked finished" : "Not marked: " + j.error;
+  $("missionStatus").className = r.ok ? "ok" : "err";
+  await loadMission();
+};
+
+$("missionStop").onclick = async () => {
+  if (!currentMissionId) return;
+  const r = await post("/api/status/mission/stop", { id: currentMissionId });
+  const j = await r.json();
+  $("missionStatus").textContent = r.ok ? "Stopped restarting it" : "Not stopped: " + j.error;
+  $("missionStatus").className = r.ok ? "ok" : "err";
+  await loadMission();
+};
+
+$("missionViewLog").onclick = async () => {
+  if (!currentMissionId) return;
+  const j = await (await fetch("/api/status/mission/log?id=" + encodeURIComponent(currentMissionId))).json();
+  const pre = $("missionLog");
+  pre.textContent = j.text || "(no progress log yet)";
+  pre.hidden = false;
+};
+
+loadMission();
+setInterval(loadMission, 10000);
+
+async function pollGlobalStatus() {
+  try {
+    const s = await (await fetch("/api/status/summary")).json();
+    const el = $("global-status");
+    el.textContent = s.text;
+    el.className = "gs-" + s.tier;
+  } catch {}
+}
+pollGlobalStatus();
+setInterval(pollGlobalStatus, 30000);
+</script>
+</body>
+</html>

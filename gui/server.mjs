@@ -21,7 +21,7 @@ import * as status from "../hooks/status.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Exact-match route map — request input never touches a filesystem path, so
 // there is no traversal surface to defend.
-const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/engine.html": "engine.html", "/spending.html": "spending.html" };
+const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/engine.html": "engine.html", "/spending.html": "spending.html", "/startwork.html": "startwork.html" };
 const BODY_CAP = 64 * 1024;
 
 const localHost = (h) => /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(String(h || ""));
@@ -100,6 +100,8 @@ const STATUS_MUTATIONS = {
   "/api/status/unstop": () => status.unstopRunner(),
   "/api/status/fanout": (b) => status.fanout(b.mins),
   "/api/status/clearbot": (b) => status.clearbotOp(b.op),
+  "/api/status/mission/done": (b) => status.finishMission(b.id, b.why),
+  "/api/status/mission/stop": (b) => status.stopMission(b.id),
 };
 
 export function handler(req, res) {
@@ -156,6 +158,15 @@ export function handler(req, res) {
   }
   if (route === "/api/status/clearbot" && req.method === "GET") {
     try { return send(res, 200, status.clearbotStatus()); }
+    catch (e) { return send(res, 500, { error: e.message }); }
+  }
+  if (route === "/api/status/mission" && req.method === "GET") {
+    try { return send(res, 200, status.missionSummary()); }
+    catch (e) { return send(res, 500, { error: e.message }); }
+  }
+  if (route === "/api/status/mission/log" && req.method === "GET") {
+    const query = new URLSearchParams(req.url.split("?")[1] || "");
+    try { return send(res, 200, status.missionLog(query.get("id") || "")); }
     catch (e) { return send(res, 500, { error: e.message }); }
   }
   if (STATUS_MUTATIONS[route] && req.method === "POST") return postJson(req, res, STATUS_MUTATIONS[route]);

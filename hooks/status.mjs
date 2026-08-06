@@ -17,6 +17,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, weekTier, totalsSince } from "./usage.mjs";
 import { clearbotStatus as budgetClearbotStatus } from "./budget.mjs";
+import * as mission from "./mission.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
@@ -203,4 +204,46 @@ export function clearbotOp(op) {
     return { ok: true };
   }
   throw new Error(`unknown clearbot op: ${op}`);
+}
+
+// -------------------------------------------------------- mission status panel
+//
+// Start Work tab (design spec §7): the "What Claude is working on now"
+// panel, the one self-contained slice of that tab not gated on the
+// Terminal/ConPTY transport (§7's own reason that tab shipped spec-only).
+// No "current mission id" is tracked here the way guards-gui.ps1's
+// $script:MissionId does across window-lifetime state -- a web request is
+// stateless, so this always resolves the same way that WinForms code's own
+// fallback branch does when nothing is already tracked: the most recently
+// created ACTIVE mission. That matches the one-mission-at-a-time UI this
+// panel presents; if more than one is ever active at once, this shows the
+// newest and the others are still reachable via mission.mjs directly.
+export function missionSummary() {
+  const missions = mission.activeMissions();
+  const g = missions.length ? missions[missions.length - 1] : null;
+  if (!g) return { active: false };
+  return { active: true, id: g.id, text: g.text, cwd: g.cwd, cycles: g.cycles };
+}
+
+export function finishMission(id, why) {
+  const g = mission.setStatus(id, "done", why || "marked finished from the Command Center");
+  if (!g) throw new Error(`mission not found: ${id}`);
+  return { ok: true };
+}
+
+export function stopMission(id) {
+  const g = mission.setStatus(id, "paused", "");
+  if (!g) throw new Error(`mission not found: ${id}`);
+  return { ok: true };
+}
+
+// The web equivalent of guards-gui.ps1's "Open the progress log" button
+// (which shells to notepad.exe -- no web analog): the tail, inline, same
+// bound logTail() already applies for the SessionStart injection so this
+// panel can never render an unbounded file. An unknown id returns '' rather
+// than throwing, same as mission.mjs's own logTail() does for a missing
+// file -- this is a read, not a mutation, so there is nothing to protect by
+// failing loudly here the way finishMission/stopMission do.
+export function missionLog(id) {
+  return { text: mission.logTail(id, 20000) };
 }
