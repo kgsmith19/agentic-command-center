@@ -71,12 +71,16 @@ function captureWindow(sid) {
 // fails SILENTLY (the request file just sits there). So every interactive session
 // start makes sure it is running. Fire-and-forget: detached, never waited on, so
 // it cannot slow the session down or wedge it if PowerShell is unhappy.
+// A deliberate stop must STICK. start-autopilot.cmd removes the stop file, so
+// without this check every new session would silently re-arm a watcher Kyle had
+// turned off on purpose. One definition, read by everything that acts on the
+// watcher — the restart AND the OI-046 wedge kill — so the two can never come
+// to different conclusions about whether the switch is engaged.
+const autopilotStopped = () => fs.existsSync(path.join(ROOT, "watcher", "autopilot.stop"));
+
 function ensureAutopilot() {
   try {
-    // A deliberate stop must STICK. start-autopilot.cmd removes the stop file, so
-    // without this check every new session would silently re-arm a watcher Kyle
-    // had turned off on purpose.
-    if (fs.existsSync(path.join(ROOT, "watcher", "autopilot.stop"))) return;
+    if (autopilotStopped()) return;
     const cmd = path.join(ROOT, "watcher", "start-autopilot.cmd");
     if (!fs.existsSync(cmd)) return;
     const child = spawn("cmd.exe", ["/c", cmd], {
@@ -105,7 +109,43 @@ function reviveAutopilotIfDead(policy) {
     } catch {
       stale = true;
     }
-    if (stale) ensureAutopilot();
+    if (stale && !autopilotStopped()) {
+      killWedgedAutopilot();
+      ensureAutopilot();
+    }
+  } catch {}
+}
+
+// guards OI-046: "dead" has to mean the same thing here and in the starter.
+// This function calls it dead on a stale heartbeat; start-autopilot.cmd calls it
+// alive whenever a matching process exists. A HUNG watcher satisfies the second
+// forever, so the revive above fired at every turn boundary and the start
+// declined every time - found live, with a heartbeat frozen eleven hours
+// earlier and a watcher process sitting there the whole time. A stale heartbeat
+// means the instance is not doing its job whether it is hung or gone, so clear
+// it out and let ensureAutopilot() put a fresh one up. Only reached when the
+// heartbeat is already stale, so a HEALTHY watcher is never a candidate.
+//
+// Scoped to THIS root's own watcher script rather than a machine-wide name
+// match: a worktree must never kill the canonical checkout's watcher. The $PID
+// exclusion is load-bearing, not defensive - the script path is embedded in
+// this very command string, so the probe matches itself without it, which is
+// precisely the bug guards OI-001 was. Contains() rather than -like keeps a
+// bracket in a real path from being read as a wildcard.
+function killWedgedAutopilot() {
+  try {
+    const script = path.join(ROOT, "watcher", "autopilot.ps1");
+    const lit = `'${script.replace(/'/g, "''")}'`;
+    execFileSync(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+        `$me=$PID; $t=${lit}; ` +
+        `Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | ` +
+        `Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -and ` +
+        `$_.CommandLine.Contains('-File') -and $_.CommandLine.Contains($t) } | ` +
+        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`],
+      { stdio: "ignore", windowsHide: true, timeout: 15000 },
+    );
   } catch {}
 }
 

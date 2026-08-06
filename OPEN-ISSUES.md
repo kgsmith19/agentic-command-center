@@ -31,9 +31,37 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-046 A WEDGED watcher can never be revived: the reviver and the starter disagree about what "dead" means
-- opened: 2026-08-05
+## OI-046 [SHRUNK 2026-08-05 — the restart is fixed; the wedge's own cause is not] A WEDGED watcher can never be revived
+- opened: 2026-08-05, shrunk: 2026-08-05
 - rank: safety
+- FIXED, first half: `hooks/budget.mjs`'s `reviveAutopilotIfDead` now clears a
+  wedged instance out before restarting, instead of asking a starter that will
+  always decline. `killWedgedAutopilot()` is reached ONLY when the heartbeat is
+  already stale, so a healthy watcher is never a candidate, and its query is
+  scoped to THIS root's own `watcher/autopilot.ps1` rather than matching the
+  name machine-wide — a worktree must not kill the canonical checkout's
+  watcher. It excludes its own `$PID` because the script path is embedded in
+  the probe's own command line, which is exactly the self-matching bug of
+  `OI-001`, and uses `.Contains()` rather than `-like` so a bracket in a real
+  path is not read as a wildcard. The kill-switch check moved into one shared
+  `autopilotStopped()` predicate read by both the restart and the kill, so an
+  engaged switch still means do nothing at all.
+- verification: `node --test hooks/budget.test.mjs` 20/20, RED-first and
+  genuinely so — the wedged case failed against the pre-fix code. Worth
+  recording that the FIRST draft of that test passed against unfixed code for
+  the wrong reason: the stub watcher was spawned `detached: true`, and
+  PowerShell launched with DETACHED_PROCESS gets no console and exits 0
+  immediately, so the process was already gone before the assertion ran.
+  Measured it rather than trusting the green. Full tier `npm run test:windows`
+  615 tests / 614 pass / 1 pre-existing skip; `npm run gates` clean;
+  `node hooks/covgate.mjs` exit 0.
+- STILL OPEN, deliberately: nothing diagnoses or escalates WHY a watcher wedges.
+  A fresh instance that hangs the same way is now restarted rather than left
+  sitting there, but if it wedges every few minutes this turns into a restart
+  loop nobody is told about. The eleven-hour silence that surfaced this had no
+  alert attached to it at any point, and still does not.
+- done when: a watcher that wedges repeatedly surfaces somewhere a human or the
+  loop actually reads, rather than only being silently replaced.
 - where: `hooks/budget.mjs` `reviveAutopilotIfDead`/`ensureAutopilot`,
   `watcher/start-autopilot.cmd`'s "already running" probe (same shape in
   `start-clearbot.cmd` on `main`)

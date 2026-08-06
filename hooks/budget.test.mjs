@@ -14,7 +14,7 @@
 // Run: node --test hooks/budget.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -317,6 +317,90 @@ test("a fresh heartbeat leaves the watcher alone", () => {
   heartbeat(sb, 2000);
   runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
   assert.equal(appears(marker, 2500), false, "a live watcher is not restarted");
+});
+
+// guards OI-046. The revive treats a stale heartbeat as dead, but
+// start-autopilot.cmd treats "a matching process exists" as alive, so a HUNG
+// watcher is invisible to the only check that gates the restart and the revive
+// becomes a permanent no-op. Found live: a watcher running with a heartbeat
+// frozen eleven hours earlier, re-declining the restart at every turn boundary.
+// The stub sleeps and never writes a heartbeat, which is exactly what a wedged
+// watcher looks like from the outside.
+const EOL = String.fromCharCode(13, 10);
+
+function wedgedWatcher(sb) {
+  const dir = path.join(sb.root, "watcher");
+  fs.mkdirSync(dir, { recursive: true });
+  const script = path.join(dir, "autopilot.ps1");
+  // Deliberately NOT `detached: true`: PowerShell launched with DETACHED_PROCESS
+  // gets no console and exits 0 immediately, so a detached stub would be gone
+  // before the assertion ran and every case below would pass for the wrong
+  // reason (confirmed by measuring it, after the first draft did exactly that).
+  fs.writeFileSync(script, `Start-Sleep -Seconds 300${EOL}`);
+  const child = spawn(
+    "powershell",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+    { stdio: "ignore", windowsHide: true },
+  );
+  child.unref();
+  return child.pid;
+}
+
+function alive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function gone(pid, ms = 8000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (!alive(pid)) return true;
+    sleepMs(200);
+  }
+  return false;
+}
+
+test("a WEDGED watcher is cleared out, not mistaken for a live one", { skip: process.platform !== "win32" }, () => {
+  const sb = sandbox();
+  const marker = fakeStarter(sb);
+  const pid = wedgedWatcher(sb);
+  try {
+    assert.ok(alive(pid), "the stub watcher must really be running before the hook fires");
+    heartbeat(sb, 120000); // running, but its heartbeat froze two minutes ago
+    runStop(sb, { sid: "s-wedged", transcript: writeTranscript(sb, "s-wedged", 10000), active: false });
+    assert.ok(gone(pid), "the hung watcher must be killed, or the restart below can never take");
+    assert.ok(appears(marker), "and a fresh watcher started in its place");
+  } finally {
+    try { process.kill(pid); } catch {}
+  }
+});
+
+test("a HEALTHY watcher is never killed by the wedge check", { skip: process.platform !== "win32" }, () => {
+  const sb = sandbox();
+  const marker = fakeStarter(sb);
+  const pid = wedgedWatcher(sb); // same stub, but this time the heartbeat is fresh
+  try {
+    heartbeat(sb, 2000);
+    runStop(sb, { sid: "s-healthy", transcript: writeTranscript(sb, "s-healthy", 10000), active: false });
+    assert.equal(appears(marker, 2500), false, "a live watcher is not restarted");
+    assert.ok(alive(pid), "and a live watcher is certainly not killed");
+  } finally {
+    try { process.kill(pid); } catch {}
+  }
+});
+
+test("the kill switch suppresses the wedge KILL, not just the restart", { skip: process.platform !== "win32" }, () => {
+  const sb = sandbox();
+  const marker = fakeStarter(sb);
+  const pid = wedgedWatcher(sb);
+  try {
+    fs.writeFileSync(path.join(sb.root, "watcher", "autopilot.stop"), "stopped on purpose");
+    heartbeat(sb, 120000); // stale, so the wedge path would otherwise fire
+    runStop(sb, { sid: "s-wedge-off", transcript: writeTranscript(sb, "s-wedge-off", 10000), active: false });
+    assert.ok(alive(pid), "an engaged kill switch means do nothing at all, including do not kill");
+    assert.equal(appears(marker, 2500), false, "and certainly do not restart");
+  } finally {
+    try { process.kill(pid); } catch {}
+  }
 });
 
 test("a deliberate stop is never overridden by the revive", () => {
