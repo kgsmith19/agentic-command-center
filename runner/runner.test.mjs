@@ -627,7 +627,19 @@ test("Full-repo review (2026-08-06) regression: a spawn failure (claude not foun
   assert.ok(!/Unhandled 'error' event/.test(r.stderr), `spawn failure must not surface as an uncaught exception:\n${r.stderr}`);
   const out = JSON.parse(r.stdout.trim().split("\n").pop());
   assert.notEqual(out.code, 0, "a spawn failure must not report success");
-  assert.match(out.err, /ENOENT|spawn/i, "the failure reason must be surfaced, not swallowed");
+  // The actual failure reaches this code by a DIFFERENT path per platform: on
+  // POSIX (no shell wrapper) spawn() itself emits an ENOENT "error" event,
+  // which is exactly what the child.on("error", ...) handler above catches
+  // (err starts with "spawn failed: ..."). On Windows the launch goes through
+  // sp.shell's cmd.exe wrapper (see spawnSpec in hooks/cmdline.mjs), so
+  // cmd.exe itself launches fine, fails to find "claude", and reports it via
+  // its own stderr/exit code -- that goes through the PRE-EXISTING "close"
+  // handler instead, with cmd.exe's own wording ("'claude' is not recognized
+  // as an internal or external command"). Both are legitimate, both must
+  // never crash the process (asserted above) and both must surface SOME
+  // non-empty reason -- the exact wording is inherently platform/shell
+  // dependent, not something this test should pin to one OS.
+  assert.match(out.err, /ENOENT|spawn|not recognized/i, "the failure reason must be surfaced, not swallowed");
 });
 
 test("integration: non-JSON stdout falls back to the raw text as result", async () => {
