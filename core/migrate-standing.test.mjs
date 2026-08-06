@@ -95,3 +95,44 @@ test("main() with no args defaults to runner/goals -> runner/standing, relative 
     process.chdir(cwd);
   }
 });
+
+// Found by running this migration against the REAL store, not in a fixture: it
+// moved 11 records and "skipped" 11 files, and those 11 were every cycle log.
+// core/standing.mjs reads a standing order's log at <standingDir>/<id>.log.md
+// (logPath), so leaving g-*.log.md behind in the legacy directory strands the
+// entire history of every order it just migrated — silently, because a missing
+// log tail reads as an order that simply has no cycles yet.
+test("a standing order's cycle log moves with it, renamed to match", () => {
+  fs.mkdirSync(path.join(BASE, "goals"), { recursive: true });
+  fs.writeFileSync(path.join(BASE, "goals/g-20260804-1-abcd.json"),
+    JSON.stringify({ id: "g-20260804-1-abcd", text: "keep going" }));
+  fs.writeFileSync(path.join(BASE, "goals/g-20260804-1-abcd.log.md"), "# cycles\n- one\n");
+
+  m.migrate({ from: path.join(BASE, "goals"), to: path.join(BASE, "standing") });
+
+  const movedLog = path.join(BASE, "standing/so-20260804-1-abcd.log.md");
+  assert.ok(fs.existsSync(movedLog), "the log follows its record, under the new id");
+  assert.equal(fs.readFileSync(movedLog, "utf8"), "# cycles\n- one\n", "contents are preserved verbatim");
+  assert.equal(
+    fs.existsSync(path.join(BASE, "goals/g-20260804-1-abcd.log.md")), false,
+    "and does not stay behind — two copies would let the loop read the stale one",
+  );
+});
+
+test("a done order's log moves too, not just the active one's", () => {
+  fs.mkdirSync(path.join(BASE, "goals/done"), { recursive: true });
+  fs.writeFileSync(path.join(BASE, "goals/done/g-1-a.json"), JSON.stringify({ id: "g-1-a", status: "done" }));
+  fs.writeFileSync(path.join(BASE, "goals/done/g-1-a.log.md"), "# done cycles\n");
+
+  m.migrate({ from: path.join(BASE, "goals"), to: path.join(BASE, "standing") });
+
+  assert.ok(fs.existsSync(path.join(BASE, "standing/done/so-1-a.log.md")), "archived logs migrate as well");
+});
+
+test("a log with no matching record is left alone rather than guessed at", () => {
+  fs.mkdirSync(path.join(BASE, "goals"), { recursive: true });
+  fs.writeFileSync(path.join(BASE, "goals/g-orphan-log.log.md"), "# no record\n");
+  const r = m.migrate({ from: path.join(BASE, "goals"), to: path.join(BASE, "standing") });
+  assert.ok(r.skipped.includes("g-orphan-log.log.md"), "reported as skipped, not silently deleted");
+  assert.ok(fs.existsSync(path.join(BASE, "goals/g-orphan-log.log.md")), "and still there to look at");
+});

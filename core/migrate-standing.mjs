@@ -27,6 +27,17 @@ function migrateFlat(fromDir, toDir) {
     const newId = "so-" + record.id.slice("g-".length);
     writeFileSync(join(toDir, `${newId}.json`), JSON.stringify({ ...record, id: newId }, null, 2));
     rmSync(join(fromDir, file));
+    // The cycle log travels WITH its record. core/standing.mjs reads it at
+    // <standingDir>/<id>.log.md, so a record that migrates without its log
+    // loses its whole history — and loses it silently, because a missing log
+    // tail is indistinguishable from an order that has not run a cycle yet.
+    // Found by running this against the real store: 11 records moved and the
+    // 11 files it reported as "skipped" were every one of their logs.
+    const legacyLog = join(fromDir, `${record.id}.log.md`);
+    if (existsSync(legacyLog)) {
+      writeFileSync(join(toDir, `${newId}.log.md`), readFileSync(legacyLog, "utf8"));
+      rmSync(legacyLog);
+    }
     moved.push(record.id);
   }
   return { moved, skipped };
