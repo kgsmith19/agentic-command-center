@@ -67,7 +67,7 @@
               },
     "autoApprove":  {
                         "enabled":  true,
-                        "_note":  "The Command Center runs pending runbox scripts itself instead of waiting for a human /approve (Kyle, 2026-07-31). Scripts marked [keep] are NEVER auto-run - they stay in the runbox after running, so auto-running them would loop forever. A failed script is attempted once per watcher lifetime and then left alone. Every run is appended to watcher/approvals.log. This does NOT touch the secrets list guard.mjs protects."
+                        "_note":  "The Command Center runs pending runbox scripts itself instead of waiting for a human /approve (Kyle, 2026-07-31). Scripts marked [keep] are NEVER auto-run - they stay in the runbox after running, so auto-running them would loop forever. A failed script is attempted once per watcher lifetime and then left alone. Every run is appended to watcher/approvals.log. This does NOT touch the secrets list guard.mjs protects. It DOES mean a runbox script reaching a guard.mjs `protected` path (e.g. guard machinery, ~/.claude/settings.json) runs unattended rather than after human review - accepted risk, OI-032 (Kyle, 2026-08-06), documented in AGENTS.md's autoApprove section."
                     },
     "profiles":  {
                      "_note":  "Chosen in the Command Center \u0027Start work\u0027 tab. The launcher sets ACC_PROFILE=\u003cname\u003e; budget.mjs and statusline.mjs (both via usage.mjs applyProfile) apply the SUBAGENT overrides for THAT SESSION only. Context limits ALWAYS come from the base dials above - single source of truth since 2026-07-31; do not add context blocks back here, they would shadow the Process-tab dials. Sessions with no ACC_PROFILE use the base policy unchanged.",

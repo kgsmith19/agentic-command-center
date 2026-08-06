@@ -23,7 +23,7 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-032 autoApprove:true means an agent writing a file IS an agent running code
+## OI-032 [RESOLVED 2026-08-06] autoApprove:true means an agent writing a file IS an agent running code
 - opened: 2026-08-04
 - where: policy.json `autoApprove.enabled`, watcher/clearbot.ps1 Invoke-AutoApprove
 - what: already named in docs/2026-08-03-acc-adversarial-review.md §2.1 and
@@ -42,6 +42,16 @@ line under `## Resolved`.
   claiming an agent "may not edit the rules that constrain it", since with
   autoApprove on that sentence is false, or (b) gates auto-approve (allowlist,
   or refuse scripts touching `config.protected` paths).
+- resolution 2026-08-06: Kyle's call — "Accept 100%". Option (a): `AGENTS.md`
+  no longer claims the guard is an absolute boundary — it now documents the
+  autoApprove tradeoff explicitly (new "autoApprove and self-protection —
+  accepted risk" section, right after the guard's own doc). `hooks/guard.mjs`'s
+  header comment and its own denial message (the exact string quoted above)
+  are both corrected in the same spirit: the denial still stands (a direct
+  edit is still refused), but neither the code comment nor the message told
+  to the agent claims that refusal is absolute anymore — the message now
+  names autoApprove's unattended-execution behavior directly, pointing at
+  this OI rather than implying a human reviews every runbox script.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
@@ -443,7 +453,7 @@ line under `## Resolved`.
   needed — never a test tuned to the current implementation's behavior. All
   work landed on branch `claude/work-queue-continuation-uzptsf`, PR #10.
 
-## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
+## OI-025 [RESOLVED 2026-08-06] e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
   `2026-08-03-acc-kernel-plan.md` T22, executed as Task 11 of
   `2026-08-03-acc-oi-closure-plan.md`)
@@ -556,6 +566,10 @@ line under `## Resolved`.
   call per the original plan: either `node e2e/loop.e2e.mjs` is re-run and
   scenarios 1-5 pass, or he's satisfied the launch cap being live end-to-end
   is sufficient credit.
+- resolution 2026-08-06: Kyle's call — hold off on the real-token re-run,
+  the launch cap being live end-to-end (confirmed above) is sufficient
+  credit. He's moving real-token e2e verification to a separate, dedicated
+  session focused on testing infrastructure rather than re-running it here.
 
 ## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
@@ -579,6 +593,35 @@ line under `## Resolved`.
   goal.mjs`, the `/goal` skill, the SessionStart injection format, and
   AGENTS.md are updated consistently with no stale references to the old
   name left in code or docs.
+- UPDATE 2026-08-06: Kyle recalled a replacement naming convention already
+  having been decided elsewhere ("I promise with 100% certainty we covered
+  this"). Searched exhaustively before asking him to point at it directly:
+  this repo's full git history (`git log --all`, pickaxe searches for
+  "goal"/"ACC GOAL"/"clearbot"/rename-related terms, not just `--grep` on
+  messages), `OPEN-ISSUES.md`, `AGENTS.md`, `notes/`, `docs/superpowers/`
+  specs and plans, and the working tree — nothing. Widened the search per
+  his direction to the sibling `lifeos` and `lifeos-ui` repos (the
+  "lifeos-ecosystem," cloned fresh for this — both were only shallow-cloned
+  at first, giving a false "1 commit" reading; unshallowed to their real
+  histories, 69 and 19 commits respectively, and re-searched properly:
+  full commit-by-commit read, `git log --all -S"goal"` /
+  `-S"ACC GOAL"` / `-S"clearbot"` / `-S"agentic command center"` pickaxe
+  searches, deleted-file scan, README/AGENTS.md/CLAUDE.md cross-references).
+  Also checked every other repo under his GitHub account for an "acc-"
+  prefixed name — none exists (`network-checker`, `helm`, `marketmind`,
+  `marketmind-dashboard`, and a handful of older personal projects; no
+  `acc-*` repo). Every "goal" hit in `lifeos`/`lifeos-ui` is that repo's own
+  unrelated "focus goals" habit-tracking feature; every "guards" hit there
+  references this repo only as the sibling ops/vault/cell-map enforcer, never
+  its `goal.mjs` concept or any plugin-naming collision. No commit, in any
+  repo searched, discusses or performs this rename. Reported the negative
+  result back to Kyle and asked directly whether to pick a name now or hold;
+  he held firm that it was covered somewhere and asked for the search above,
+  which still came up empty — most likely the decision happened in a
+  conversation that was never committed to any repo (chat history outside
+  this ledger, a document outside git, or a session that didn't land its
+  work). Left open, unrenamed, pending Kyle locating the actual source —
+  do not guess at a name and do not rename speculatively.
 
 ## Resolved
 

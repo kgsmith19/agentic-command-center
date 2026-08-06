@@ -2,8 +2,12 @@
 // Edit|Write|NotebookEdit|Read across all projects. Three checks, in order:
 //   1. secrets  — basename globs; reads AND writes blocked so keys never enter
 //                 the conversation.
-//   2. protected — guard machinery + its registration; writes blocked so an
-//                  agent cannot edit the rules that constrain it.
+//   2. protected — guard machinery + its registration; blocks a DIRECT write.
+//                  With policy.json autoApprove.enabled:true (accepted risk,
+//                  OI-032, Kyle 2026-08-06) an agent can still reach the same
+//                  target indirectly via a runbox script the watcher runs
+//                  unattended — this is a speed bump on the direct path, not
+//                  an absolute boundary. See AGENTS.md's autoApprove note.
 //   3. cells    — per-repo path ownership (see config.json "repos"), matched
 //                 by the TARGET file's path — not the session folder — so a
 //                 session launched from a parent folder is guarded the same
@@ -80,7 +84,7 @@ if (runboxDirs.some((d) => target === d || target.startsWith(d + "/"))) process.
 for (const p of config.protected ?? []) {
   const pref = norm(p);
   if (target === pref || target.startsWith(pref + "/")) {
-    deny(`guard: "${filePath}" is guard machinery — agents may not edit the rules that constrain them. To hand this change to the user, write a script into ${config.runboxDir ?? "the runbox"} instead and ask them to run it (/approve or the Guards GUI).`);
+    deny(`guard: "${filePath}" is guard machinery — this direct edit is refused. Write a script into ${config.runboxDir ?? "the runbox"} instead: with autoApprove off the user runs it after review (/approve or the Guards GUI); with autoApprove on (the current default) it runs unattended on the next watcher cycle — not a human gate, an accepted risk (OI-032).`);
   }
 }
 

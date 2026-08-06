@@ -28,6 +28,23 @@ Failure mode is **closed**: unreadable payload or config blocks with a message
 instead of silently allowing. Known ceiling: only tools in the matcher are
 seen — Bash writes bypass the hook. Convention enforcer, not a security boundary.
 
+**autoApprove and self-protection — accepted risk (OI-032, Kyle, 2026-08-06):**
+`policy.json`'s `autoApprove.enabled: true` means the Command Center runs a
+pending runbox script itself, unattended, on the watcher's next cycle — it does
+not wait for a human `/approve`. The guard above still refuses a DIRECT edit to
+its own machinery or to `~/.claude/settings.json`, but an agent can reach the
+same target indirectly: write the change as a runbox script (exactly the path
+the guard's own denial message points to) and it runs with Kyle's full
+authority a cycle later, no human actually reviewing it in the moment. Demonstrated
+live 2026-08-04: the guard correctly refused a direct edit to
+`~/.claude/settings.json`, a runbox script achieving the same edit was written
+instead per this doc's own instruction, and clearbot executed it ~30s later.
+So: **the guard is a speed bump against a direct, naive edit, not an absolute
+boundary, while autoApprove is on.** Kyle has reviewed this tradeoff and
+accepts it as-is — it is not a bug to fix unilaterally. If the risk profile
+ever needs to change, the lever is `policy.json`'s `autoApprove.enabled`, not
+this guard.
+
 ## The vault — how agents receive secrets
 
 The user uploads KEY=VALUE pairs via the GUI ("Give Claude keys" tab) into
