@@ -49,6 +49,46 @@ test("a repeated append with the same runId applies exactly once (AC-G4)", () =>
     "the first finalize wins; a duplicate must not rewrite the outcome");
 });
 
+test("OI-019: a repeated append RACING from CONCURRENT real processes still applies exactly once (AC-G4)", async () => {
+  // The launch lane retries transport failures (this file's own header
+  // comment: "a resumed kernel must not double-write"), so two processes
+  // genuinely can call appendStarted for the SAME runId at nearly the same
+  // instant. appendOnce's read-then-append was not atomic across processes —
+  // reproduced live: 20 concurrent callers produced 2 duplicate run_started
+  // lines for one runId, not the single line AC-G4 promises. The natural
+  // read-to-append window is a handful of microseconds, so forcing that
+  // interleaving by chance is unreliable (observed both outcomes across
+  // repeated runs) — ACC_LEDGER_APPEND_ONCE_DELAY_MS widens the window on
+  // purpose so this proves the fix deterministically, not by luck.
+  const script = path.join(BASE, "append-once-caller.mjs");
+  fs.writeFileSync(script, `
+    import { appendStarted } from ${JSON.stringify(pathToFileURL(LEDGER).href)};
+    const ok = appendStarted({
+      runId: "r-race", startedAt: "2026-08-06T00:00:00.000Z",
+      contract: {}, settingsSha256: "a",
+    });
+    process.stdout.write(String(ok));
+  `);
+  const { spawn } = await import("node:child_process");
+  const run = () => new Promise((resolve, reject) => {
+    const child = spawn("node", [script], {
+      env: { ...process.env, ACC_LEDGER_APPEND_ONCE_DELAY_MS: "50" },
+    });
+    let out = "", err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("close", (code) => {
+      if (code !== 0) reject(new Error(`append-once-caller exited ${code}: ${err}`));
+      else resolve(out === "true");
+    });
+  });
+  const N = 5;
+  const oks = await Promise.all(Array.from({ length: N }, run));
+  assert.equal(oks.filter(Boolean).length, 1, "exactly one of N concurrent callers may believe it went first");
+  assert.equal(L.readRuns().filter((r) => r.runId === "r-race" && r.event === "run_started").length, 1,
+    "exactly one run_started line must land on disk, whatever N concurrent processes raced to write it");
+});
+
 test("an abort still writes a finalized line (AC-L1 covers failure and abort)", () => {
   L.appendStarted(started("r3"));
   L.appendFinalized(finalized("r3", "aborted-by-budget"));
@@ -123,7 +163,7 @@ test("a lock held by a live, recent holder is NOT reaped as stale — acquisitio
   fs.writeFileSync(file, "held"); // fresh mtime — a genuine in-progress holder
   process.env.ACC_LEDGER_LOCK_TIMEOUT_MS = "50";
   try {
-    assert.throws(() => L.withDecisionLock("r12", () => {}), /timed out waiting for the decision lock on run r12/);
+    assert.throws(() => L.withDecisionLock("r12", () => {}), /timed out waiting for the "r12\.decisions" lock/);
   } finally {
     delete process.env.ACC_LEDGER_LOCK_TIMEOUT_MS;
     fs.rmSync(file, { force: true });

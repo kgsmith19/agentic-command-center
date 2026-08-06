@@ -199,12 +199,44 @@ line under `## Resolved`.
   `node hooks/covgate.mjs` scoped to the touched file (`kernel/run.mjs`
   100%/100%/92.9%, both isolated and merged with `ledger`/`guardhook`'s
   suites — above its existing OI-017 85% override, PASS).
-  Progress: 3/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
-  `kernel/run.mjs`; `kernel/ledger.mjs`'s new lock primitive is now also
-  covered by its own dedicated tests above, though a full scenario pass on
-  the REST of ledger.mjs — the run-record/query surface — is still open).
-  Remaining, in rough risk order: `kernel/ledger.mjs` (run-record/query
-  surface), `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
+  UPDATE 2026-08-06 (same cycle): fourth module done, `kernel/ledger.mjs`
+  (closing out its run-record/query surface — the last piece left open after
+  the lock primitive landed for the decisions surface). Found a THIRD REAL,
+  live bug in the same session, same shape as the guardhook.mjs finding: this
+  file's own header promises appends are "idempotent by (runId, event) ...
+  the FIRST record for a run wins and later duplicates are dropped (AC-G4)",
+  and names exactly the scenario that breaks it — "the launch lane retries
+  transport failures[,] a resumed kernel must not double-write." `appendOnce`
+  read the whole runs file, decided "not present yet," and appended, as two
+  separate steps with no synchronization — a TOCTOU race identical in shape
+  to the decisions-file one, just on a different file. Reproduced live: 20
+  concurrent `appendStarted` calls for the same runId produced 2 duplicate
+  `run_started` lines (two processes both read "not present" and both wrote).
+  The natural read-to-append window is only a few microseconds, so forcing
+  the interleaving by chance is unreliable for a regression test (confirmed:
+  reruns at N up to 80 mostly did NOT reproduce it) — added
+  `ACC_LEDGER_APPEND_ONCE_DELAY_MS`, a test-only seam widening that window on
+  demand, the same pattern `guardhook.mjs`'s `ACC_GUARDHOOK_STDIN_TIMEOUT_MS`
+  already uses, so the regression test is deterministic rather than a timing
+  coin flip. Fixed by generalizing the guardhook fix's lock primitive:
+  `acquireDecisionLock`/`lockFile(runId)` became `acquireLock`/`lockFile(name)`
+  plus an exported `withLock(name, fn)`, with `withDecisionLock` now a thin
+  wrapper (`withLock(\`${runId}.decisions\`, ...)`, byte-identical lock file
+  path to before — one existing test's exact error-message regex needed
+  updating for the now-generic wording, everything else needed no changes)
+  and `appendOnce` wrapped in `withLock("runs", ...)` — one lock file for the
+  whole `runs.jsonl` since the idempotency check scans the entire file, not a
+  per-run slice. New test in `kernel/ledger.test.mjs`: proven red
+  deterministically against the unfixed logic (5 of 5 concurrent callers
+  believed they went first) and green and stable across 5 repeated runs
+  after. Verified: `node --test kernel/ledger.test.mjs` (5 repeated runs, all
+  green, 21/21), full `npm test` (431/432 excluding known skips, same
+  pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched file (`kernel/ledger.mjs`
+  100%/100%/98.8%, no override needed, PASS).
+  Progress: 4/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  `kernel/run.mjs`, `kernel/ledger.mjs`). Remaining, in rough risk order:
+  `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
   `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
