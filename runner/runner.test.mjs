@@ -426,13 +426,42 @@ test("killTreePosix signals the process GROUP (negative pid), and falls back to 
   assert.equal(alive, false, "the real process must be dead, not orphaned");
 
   // Fallback path: an invalid pid makes process.kill(-pid,...) throw, and the
-  // catch must fall back to child.kill() rather than propagate.
-  assert.doesNotThrow(() => killTreePosix({ pid: -1, kill: () => {} }));
+  // catch must fall back to child.kill() rather than propagate. Use a large
+  // fake pid (matching this codebase's 999999-style "definitely not a real
+  // process" convention), NOT -1: this sandbox runs as root, and -(-1) is 1
+  // (init/PID 1). With the SIGTERM->SIGKILL escalation below, a real -1 pid
+  // here would send genuine signals to PID 1 and could kill the container.
+  assert.doesNotThrow(() => killTreePosix({ pid: 999999999, kill: () => {} }));
 
   // Both defenses failing at once must still not throw out of killTree —
   // it is called from inside a setTimeout in runClaudeOnce with nothing
   // downstream to catch it.
-  assert.doesNotThrow(() => killTreePosix({ pid: -1, kill: () => { throw new Error("also broken"); } }));
+  assert.doesNotThrow(() => killTreePosix({ pid: 999999999, kill: () => { throw new Error("also broken"); } }));
+});
+
+test("OI-035: killTreePosix escalates to SIGKILL if an uncooperative child ignores SIGTERM", async () => {
+  // A real child that traps/ignores SIGTERM (a hung/misbehaving job is
+  // exactly the kind of process most likely to do this — not hypothetical).
+  // A single SIGTERM with no escalation leaves it alive forever; killTree
+  // exists specifically to enforce runTimeoutMin, so that gap is a real bug.
+  const child = spawn(
+    "node",
+    ["-e", 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 30000);'],
+    { detached: true, stdio: "ignore", env: { ...process.env, NODE_V8_COVERAGE: undefined } }
+  );
+  await new Promise((r) => setTimeout(r, 50));
+  killTreePosix(child, { graceMs: 150 });
+
+  // Still alive right after SIGTERM: it's ignoring the signal, as designed.
+  await new Promise((r) => setTimeout(r, 50));
+  let alive = true;
+  try { process.kill(child.pid, 0); } catch { alive = false; }
+  assert.equal(alive, true, "an uncooperative child must survive the initial SIGTERM");
+
+  // Past the grace period, the SIGKILL escalation must have landed.
+  await new Promise((r) => setTimeout(r, 200));
+  try { process.kill(child.pid, 0); } catch { alive = false; }
+  assert.equal(alive, false, "the grace-period SIGKILL escalation must kill an uncooperative child");
 });
 
 // ------------------------------------------------------------- integration: fake claude

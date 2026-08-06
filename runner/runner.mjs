@@ -112,11 +112,39 @@ export function ensureJobGoal(job) {
 // only prove one of these by actually killing something; the other is proven
 // by asserting the command it would issue. `platform`/`exec` are injected for
 // exactly that reason; the real call site always uses the live OS default.
+// `/f` is already Windows' maximum-force termination -- there is no softer
+// signal to try first the way POSIX has SIGTERM, so no escalation ladder
+// applies here. Not authored/verified further tonight: the Windows half
+// of OI-035 (verifying taskkill actually worked, not just that it was
+// issued) needs a real Windows machine, same as every other taskkill claim
+// in this file.
 export function killTreeWin32(child, exec = execFileSync) {
   try { exec("taskkill", ["/pid", String(child.pid), "/t", "/f"]); } catch {}
 }
-export function killTreePosix(child) {
-  try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill(); } catch {} }
+// Lean review (2026-08-06), OI-035: a single SIGTERM with no escalation and
+// no verification meant an uncooperative child (traps/ignores SIGTERM --
+// not hypothetical, a lane-timeout kill target is exactly the kind of
+// hung/misbehaving process most likely to be one) stayed alive forever,
+// with `runOnce`'s await in runLoop blocked past the very runTimeoutMin
+// ceiling this function exists to enforce. SIGKILL cannot be trapped or
+// ignored by a conforming process, so escalating to it after a short grace
+// period (giving a COOPERATIVE process, the common case, a clean chance to
+// exit first) closes the gap. Stays fire-and-forget from the caller's
+// perspective (killTree is called from inside a bare setTimeout in
+// runClaudeOnce, never awaited -- the real "did it actually die" signal is
+// the child's own `close` event, already handled there) via an internal,
+// non-blocking setTimeout rather than a synchronous sleep, so one hung
+// job's kill sequence never stalls the runner's own event loop.
+export function killTreePosix(child, { graceMs = 300 } = {}) {
+  const signal = (sig) => {
+    try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch {} }
+  };
+  signal("SIGTERM");
+  setTimeout(() => {
+    let alive = true;
+    try { process.kill(child.pid, 0); } catch { alive = false; }
+    if (alive) signal("SIGKILL");
+  }, graceMs);
 }
 export function killTree(child, platform = process.platform) {
   if (platform === "win32") killTreeWin32(child);
