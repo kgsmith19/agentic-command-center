@@ -587,7 +587,7 @@ line under `## Resolved`.
   scenarios 1-5 pass, or he's satisfied the launch cap being live end-to-end
   is sufficient credit.
 
-## OI-026 "goal" terminology collides with the popular Claude Code Goal plugin
+## OI-026 [DECIDED 2026-08-06, execution deferred] "goal" terminology collides with the popular Claude Code Goal plugin
 - opened: 2026-08-03
 - where: `hooks/goal.mjs`, `/goal` skill, `[ACC GOAL g-...]` SessionStart
   injection, AGENTS.md "Goals" section, this repo's docs/specs generally
@@ -609,6 +609,56 @@ line under `## Resolved`.
   goal.mjs`, the `/goal` skill, the SessionStart injection format, and
   AGENTS.md are updated consistently with no stale references to the old
   name left in code or docs.
+- DECISION 2026-08-06: rename ACC's concept from "goal" to "mission" —
+  `hooks/mission.mjs`, `/mission` skill, `[ACC MISSION m-...]` injection,
+  `ACC_MISSION`/`ACC_MISSIONS_DIR` env vars, mission ids `m-...` (were
+  `g-...`), `AGENTS.md`'s "Goals" section retitled "Missions". Researched
+  before deciding rather than guessing: the collision is real and specific,
+  not just vague terminology overlap — `chrischabot/claude-code-goal` and
+  `jthack/claude-goal` are both real, installable Claude Code plugins
+  ("Persistent markdown-backed goal mode... keeps iterating until the
+  condition you've set is met... start, inspect, pause, resume, stop,
+  clear, and complete that state") describing something close enough to
+  ACC's own mechanism that installing either alongside ACC would collide
+  on the literal `/goal` slash-command namespace, not merely read as
+  confusing in conversation. Checked "mission" and the runner-up
+  "objective" against the same search — no evidence of a colliding
+  `/mission` or `/objective` plugin. "mission" chosen over "objective" as
+  the more distinctive word (less likely to appear incidentally in
+  unrelated prose/comments/grep results the way "objective" or "goal"
+  both would) and because it matches this repo's existing naming register
+  (`runbox`, `lane`, `ledger`, `watcher`, `clearbot` — plain functional
+  English, not jargon). Bonus, not the deciding factor: it also
+  disambiguates from a SECOND, unrelated, pre-existing use of the word
+  "goal" already in this same repo — `kernel/contract.mjs`'s
+  `REQUIRED_FIELDS` includes a `goal` field (a task contract's one-line
+  description, e.g. `"make the suite green"`), a completely different
+  concept from the interactive goal-loop store that happens to share the
+  same word today.
+  Execution deliberately NOT done tonight, per this entry's own original
+  instruction ("document now, dig into the actual rename later, not
+  decide it inline mid-unrelated-task") — that reasoning holds regardless
+  of how much else shipped tonight; a naming decision benefits from
+  being made carefully, but the mechanical rename itself is real,
+  multi-session work across a wide, confirmed surface (grepped, not
+  guessed): `hooks/goal.mjs` itself, `hooks/goal.test.mjs`,
+  `hooks/budget.mjs` (ACC_GOAL, goal context injection, the KICK constant
+  text "Continue the active ACC goal." — this exact string is ALSO
+  hardcoded in `watcher/clearbot.ps1`'s own `$KICK` constant and must
+  change in both places atomically, or clearbot types a string
+  budget.mjs's `KICK_CONSTANTS` no longer recognizes as a machine
+  continuation), `hooks/lane.mjs`, `hooks/statusline.mjs`,
+  `hooks/testplan.mjs`, `hooks/usage.mjs`, `hooks/covgate.mjs`,
+  `hooks/engine.mjs`, `kernel/autonomy.mjs`/`contract.mjs`/`run.mjs`/
+  `kernel/kernel.e2e.mjs` (the UNRELATED `contract.goal` field must NOT be
+  touched — same word, different concept, per the disambiguation note
+  above), `runner/runner.mjs`, `watcher/clearbot.ps1`/
+  `start-clearbot.cmd`, `guards-gui.ps1`, `e2e/loop.e2e.mjs`, `AGENTS.md`,
+  `notes/ACC-HANDOFF.md`, plus every `docs/superpowers/plans/*.md` and
+  `docs/superpowers/specs/*.md` file that describes the mechanism, and the
+  on-disk goal store itself (`runner/goals/*.json` → a live migration or
+  documented one-time break for any goal active at cutover). A future
+  session should treat this as its own dedicated pass, not a drive-by.
 
 ## Resolved
 
