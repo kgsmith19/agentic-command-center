@@ -412,7 +412,14 @@ export function bindSession({ sessionId, consolePid, cwd, missionId }) {
 export function appendCycle(id, { sessionId, ctx, text, costUsd }) {
   return withMissionLock(id, () => {
     const mission = readMission(id);
-    if (!mission) return null;
+    // Adversarial review (2026-08-06): matches resumeMission's own status
+    // guard -- a paused (or blocked/done) mission's cycles/cost must never
+    // silently grow, since that would corrupt the baseline resumeMission
+    // snapshots on its next resume (OI-039). Not reachable through any
+    // current caller (missionForSession already filters to active-only),
+    // but this function should not depend on every future caller getting
+    // that pre-filter right.
+    if (!mission || mission.status !== "active") return null;
     mission.cycles = Number(mission.cycles || 0) + 1;
     // Phase 1: real per-cycle cost (budget.mjs computes it via usage.mjs's
     // costOfTranscript before calling this), accumulated for the dollar

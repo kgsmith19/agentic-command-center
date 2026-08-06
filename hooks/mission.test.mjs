@@ -441,6 +441,26 @@ test("appendCycle on a nonexistent mission returns null; missing text/sessionId/
   assert.match(m.logTail(g.id, 10000), /no closing summary captured/);
 });
 
+// Adversarial review (2026-08-06), a fresh pass on this session's own
+// OI-039/041/043/044 fixes: appendCycle was the one mutating function in
+// this file with no status guard of its own -- resumeMission requires
+// status==="paused", reapCeilings/pendingKicks only ever iterate
+// activeMissions() -- but appendCycle would happily increment cycles/cost
+// on a PAUSED (or blocked/done) mission if anything ever called it without
+// pre-filtering through missionForSession() first. Not exploitable through
+// any CURRENT call path (missionForSession already filters to active-only),
+// but a paused mission's cycles/cost silently growing would corrupt the
+// baseline resumeMission snapshots on its next resume (OI-039). Guarding
+// appendCycle itself, not just its one current caller, matches the same
+// defense-in-depth resumeMission already practices for its own precondition.
+test("appendCycle refuses to mutate a mission that isn't active, matching resumeMission's own status guard", () => {
+  const g = m.createMission({ text: "t" });
+  m.setStatus(g.id, "paused", "CEILING REACHED: cycles (test)");
+  const result = m.appendCycle(g.id, { sessionId: "s1", text: "should not land" });
+  assert.equal(result, null, "appendCycle must refuse a non-active mission, not silently mutate it");
+  assert.equal(m.readMission(g.id).cycles, 0, "cycles must stay untouched");
+});
+
 test("appendCycle swallows a log-write failure instead of throwing", () => {
   const g = m.createMission({ text: "t" });
   fs.rmSync(m.logPath(g.id));
