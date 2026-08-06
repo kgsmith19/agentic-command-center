@@ -214,6 +214,39 @@ line under `## Resolved`.
   whose lines get parsed back as records program logic depends on —
   `ledger.mjs` was the only one.
 
+## OI-039 [RESOLVED 2026-08-06] resuming a ceiling-paused mission got re-paused on the very next poll
+
+- opened and resolved 2026-08-06, found by two of the three parallel
+  full-repo review agents run for the "BIG LEAN REVIEW" pass, independently
+  corroborating the same defect.
+- where: `hooks/mission.mjs`'s `resumeMission()` and `ceilingReached()`.
+- what: `resumeMission()` flipped a paused mission's status back to
+  `"active"` without resetting anything else — its `cycles`/`createdAt`/
+  `totalCostUsd` were still the exact numbers that had just tripped a
+  ceiling (Phase 1's `maxCycles`/`maxWallClockMinutes`/`maxCostUsd` dials).
+  The `pending` CLI verb calls `reapCeilings()` before every
+  `pendingKicks()` on every poll — so the very next poll after a resume saw
+  the identical over-ceiling numbers via `ceilingReached()` and paused the
+  mission right back, silently, with no new alert distinguishing it from
+  the original pause. A human hitting "resume" got a mission that looked
+  active for one poll interval and then quietly re-paused itself.
+  Reproduced directly: pause a mission at `maxCycles: 5`, resume it, call
+  `reapCeilings()` again with the same dials and no new cycles/cost/time
+  accrued — it paused again immediately.
+- fix: `resumeMission()` now stamps a fresh baseline on the mission
+  (`ceilingBaselineCycles`, `ceilingBaselineCostUsd`, `ceilingResumedAt`),
+  and `ceilingReached()` measures cycles/cost/wall-clock relative to that
+  baseline instead of the mission's raw totals. A mission that has never
+  been paused-and-resumed has no baseline fields, so this is a pure no-op
+  for the common case — identical behavior to before for every
+  never-ceilinged mission. Verified: new regression test in
+  `hooks/mission.test.mjs` RED against the unfixed code (reproduced the
+  exact re-pause), GREEN after the fix (71/71 in the file's own suite).
+  Full `npm test`: 534 pass, 1 pre-existing unrelated failure
+  (`hooks/lane.test.mjs`'s chmod-based test, root-sandbox limitation, not
+  a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
+  funcs, 93.8% branches — clears the 100/100/90 floor.
+
 ## OI-038 [RESOLVED 2026-08-06] four duplicated cross-process locks only tolerated EEXIST, not a real Windows CI EPERM
 
 - opened and resolved 2026-08-06, found by a real Windows CI failure on PR
