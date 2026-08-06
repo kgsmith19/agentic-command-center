@@ -141,7 +141,13 @@ export function readState(events) {
     if (!e || typeof e !== "object") continue;
     if (e.session_id) sessionId = e.session_id;
     if (e.type !== "assistant" || !e.message) continue;
+    // OI-019: the same tolerance the top-level event loop above already
+    // gives a malformed event — a stray null/non-object block (a stream
+    // hiccup, not necessarily anything wrong with the run) must not throw
+    // and abort the whole run via run.mjs's supervisor-fault path; skipping
+    // it just undercounts by that one entry, a safe direction to be wrong in.
     for (const block of e.message.content || []) {
+      if (!block || typeof block !== "object") continue;
       if (block.type === "tool_use") toolCalls++;
       else if (block.type === "text") texts.push(block.text);
     }

@@ -72,7 +72,7 @@ line under `## Resolved`.
   closing the session either way (Stop button and natural exit both).
   Screenshot or narrate what actually happened, don't just eyeball the diff.
 
-## OI-019 Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
+## OI-019 [RESOLVED 2026-08-06] Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
 - opened: 2026-08-03
 - where: kernel/*.test.mjs (all suites through Task 16; applies to every
   remaining kernel task, T17-T22)
@@ -383,12 +383,65 @@ line under `## Resolved`.
   pre-existing unrelated root-permissions artifact as above), `node
   hooks/covgate.mjs` scoped to the touched file (`kernel/run.mjs`
   100%/100%/93.3%, above its existing OI-017 override, PASS).
-  Progress: 9/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
-  `kernel/run.mjs`, `kernel/ledger.mjs`, `kernel/verifier.mjs`,
-  `kernel/autonomy.mjs`, `kernel/contract.mjs`, `kernel/credentials.mjs`,
-  `kernel/adapter.mjs`). Remaining, in rough risk order: `kernel/policy.mjs`
-  (the `saveKernelPolicy` race noted above is the only open item there),
-  `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
+  UPDATE 2026-08-06 (same cycle, closing this entry): tenth module done,
+  `kernel/adapters/claude-code.mjs`. Found an eighth REAL, live bug:
+  `readState`'s inner loop over `e.message.content` threw on a single
+  malformed (null or non-object) block — a stream hiccup or CLI version
+  quirk, not necessarily anything wrong with the run — while the OUTER event
+  loop two lines above already tolerates exactly that shape for a malformed
+  top-level event (`if (!e || typeof e !== "object") continue;`). This
+  specific crash was already CONTAINED by this cycle's earlier `run.mjs` fix
+  (the supervisor tick catches any `readState()` throw and aborts the run as
+  `"supervisor-fault"`), but containment isn't the same as correct behavior:
+  aborting an entire run over one skippable malformed block is needlessly
+  heavy when the fix is to just skip it and keep counting the rest, the same
+  tolerance the file already gives at the outer level. Fixed with a single
+  guard clause; new test in `kernel/adapters/claude-code.test.mjs` proves a
+  null, a string, and a number mixed into a content array alongside real
+  blocks are skipped while the real `tool_use`/`text` blocks are still
+  counted correctly (red beforehand — reproduced the exact uncaught
+  TypeError live; green and stable across 3 repeated runs after). Verified:
+  `node --test kernel/adapters/claude-code.test.mjs` (3 repeated runs, all
+  green, 22/22), full `npm test` (437/438 excluding known skips, same
+  pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched file
+  (`kernel/adapters/claude-code.mjs` 100%/100%/92.5%, no override needed,
+  PASS).
+  Eleventh and twelfth modules reviewed with no exploitable gap found:
+  `kernel/credentials.mjs` (see the UPDATE above — fail-closed by design,
+  vault values never touch disk/argv/the ledger, no type-confusion crash
+  path) and `kernel/settings.mjs` (fails closed via try/catch on pin
+  verification exactly like `kernel/guardhook.mjs` already proves at the
+  integration level; `cleanupRun`'s `force: true` makes it safely
+  idempotent; its one caller, `run.mjs`, only ever passes a contract that
+  has already cleared `validateContract`, so the theoretical
+  `toolsFor(null)` crash this file's `generateSettings` could otherwise hit
+  is not reachable through the real call path).
+  All 12/12 kernel modules now have a documented scenario-enumeration pass:
+  `kernel/guard.mjs`, `kernel/guardhook.mjs`, `kernel/run.mjs`,
+  `kernel/ledger.mjs`, `kernel/verifier.mjs`, `kernel/autonomy.mjs`,
+  `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
+  `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`, and
+  `kernel/policy.mjs` — the last carrying one explicitly accepted residual
+  risk (`saveKernelPolicy`'s read-modify-write-via-rename has this session's
+  general TOCTOU shape but is human-GUI-triggered at a frequency far below
+  the three machine-triggered races that WERE fixed; recorded, not silently
+  skipped, and not force-fitted a lock it doesn't yet need). Eight real,
+  live, independently reproduced bugs found and fixed across this pass —
+  three TOCTOU races (guardhook.mjs+ledger.mjs decisions, ledger.mjs run
+  records, autonomy.mjs state) and five uncaught-throw-crashes-the-whole-
+  process gaps (run.mjs's supervisor tick, verifier.mjs's three malformed-
+  criterion shapes as one fix, contract.mjs's two malformed-writeRoots
+  shapes as one fix, run.mjs's unresolvable-adapter path, and
+  claude-code.mjs's malformed content block) — every one of them reachable
+  through normal or only-mildly-abnormal operation, not adversarial input:
+  parallel tool calls, launch-lane retries, concurrent kernel processes, a
+  contract missing one optional field, an operator typo in policy.json, or a
+  single stray null in a CLI's own stream output. Done when this OI's own
+  clause asked for is met: every module has either a real test proving a
+  genuine regression can fail it, or an explicit, ledgered reason none was
+  needed — never a test tuned to the current implementation's behavior. All
+  work landed on branch `claude/work-queue-continuation-uzptsf`, PR #10.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
