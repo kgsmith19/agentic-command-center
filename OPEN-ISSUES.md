@@ -301,10 +301,51 @@ line under `## Resolved`.
   hooks/covgate.mjs` scoped to the touched files (`kernel/autonomy.mjs`
   100%/100%/97.6%, `kernel/ledger.mjs` 100%/100%/98.8% for the `sleepSync`
   export, neither needs an override, both PASS).
-  Progress: 6/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  UPDATE 2026-08-06 (same cycle): seventh module done, `kernel/contract.mjs`
+  (found while starting the scenario pass on `kernel/policy.mjs`, next in the
+  risk order — the bug turned out to live in `contract.mjs`'s call site, so
+  crediting it there instead). Found a sixth REAL, live bug, a different
+  shape from this session's three TOCTOU races: `validateContract`'s
+  writeRoots-vs-protected-paths overlap check calls `alwaysDenyWriteRoots()`
+  and `norm()` (both `kernel/policy.mjs`, `norm` = `path.resolve()`
+  underneath) with no try/catch, and `path.resolve()` throws a TypeError on
+  anything that isn't a string. Two INDEPENDENT, reachable sources of a
+  non-string value here: (1) a hand-edited or corrupted `policy.json` whose
+  `extraDenyWriteRoots` carries a non-string entry — `saveKernelPolicy`
+  validates this as a `strList` before ever writing it, but a direct file
+  edit bypasses that entirely; (2) a contract whose `allowedActions.writeRoots`
+  carries a non-string entry — the existing `Array.isArray(actions[key])`
+  check only confirms the field IS an array, never that its elements are
+  strings, and a contract is a plausibly LESS trusted source than policy.json
+  (could be LLM-generated). Reproduced live, both independently: either one
+  throws uncaught straight out of `validateContract` — called from `runTask`
+  (`kernel/run.mjs`) with NO try/catch around it either, crashing the WHOLE
+  kernel process before a single ledger entry exists, worse than every other
+  malformed-input shape this function already refuses cleanly with a normal
+  `{ok:false, errors:[...]}`. Fixed: the whole overlap-check block is now
+  wrapped in try/catch; a throw becomes a normal validation error naming what
+  couldn't be checked, so a contract this function cannot evaluate is
+  refused exactly like every other malformed shape here, never a crash. New
+  tests in `kernel/contract.test.mjs` cover both independent trigger paths
+  (malformed policy, malformed contract) — proven red against the unfixed
+  code (both reproduced the exact uncaught TypeError live before the fix)
+  and green and stable across 3 repeated runs after. Verified: `node --test
+  kernel/contract.test.mjs` (3 repeated runs, all green, 17/17), full
+  `npm test` (435/436 excluding known skips, same pre-existing unrelated
+  root-permissions artifact as above), `node hooks/covgate.mjs` scoped to
+  the touched file (`kernel/contract.mjs` 100%/100%/100%, PASS).
+  `kernel/policy.mjs` itself was also scanned this pass: `saveKernelPolicy`'s
+  own read-modify-write-via-rename has the same general TOCTOU shape as this
+  session's three lock fixes, but is human-GUI-triggered (a person clicking
+  Save) rather than machine-triggered at any real frequency (parallel tool
+  calls, launch-lane retries, concurrent kernel runs) — recorded here as an
+  accepted, much-lower-probability risk rather than force-fitting a fourth
+  lock onto a path that doesn't need one yet, not silently skipped.
+  Progress: 7/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
   `kernel/run.mjs`, `kernel/ledger.mjs`, `kernel/verifier.mjs`,
-  `kernel/autonomy.mjs`). Remaining, in rough risk order: `kernel/policy.mjs`,
-  `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
+  `kernel/autonomy.mjs`, `kernel/contract.mjs`). Remaining, in rough risk
+  order: `kernel/policy.mjs` (the `saveKernelPolicy` race noted above is the
+  only open item there), `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
