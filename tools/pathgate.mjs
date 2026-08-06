@@ -58,7 +58,7 @@ export function realIo() {
 // Empty, and worth keeping that way. Its only entry was hooks/usage.mjs's
 // hardcoded POLICY_PATH, deferred because fixing that one line dragged the
 // file's pre-existing ~35% coverage gap under covgate's floor. That gap was
-// closed on 2026-08-05 (guards OI-045), the line now derives from
+// closed on 2026-08-05 (guards OI-049), the line now derives from
 // core/paths.mjs, and the deferral came out with it.
 const DEFERRED = new Map([]);
 

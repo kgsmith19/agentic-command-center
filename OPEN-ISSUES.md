@@ -31,7 +31,11 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-046 [SHRUNK 2026-08-05 — the restart is fixed; the wedge's own cause is not] A WEDGED watcher can never be revived
+## OI-050 [SHRUNK 2026-08-05 — the restart is fixed; the wedge's own cause is not] A WEDGED watcher can never be revived
+- RENUMBERED 2026-08-06, was OI-046 on this branch. `main` had independently
+  used 046 the same day for an unrelated hooks/prompts.mjs issue, and this
+  file's own rule is that IDs are never reused. Commits `7a54114`, `5b66d07`
+  and `f10b5bc` name the old number in their messages; they mean this entry.
 - opened: 2026-08-05, shrunk: 2026-08-05
 - rank: safety
 - FIXED, first half: `hooks/budget.mjs`'s `reviveAutopilotIfDead` now clears a
@@ -80,7 +84,9 @@ line under `## Resolved`.
   when the wedge happens — the live incident ran eleven hours precisely because
   every ACC alert requires him to already be looking.
 
-## OI-047 One unattributed test failure in four consecutive full-suite runs
+## OI-051 One unattributed test failure in four consecutive full-suite runs
+- RENUMBERED 2026-08-06, was OI-047 on this branch; `main` had already used 047
+  for a kernel/run.test.mjs flake. Commit `f10b5bc` names the old number.
 - opened: 2026-08-05
 - rank: reliability
 - where: `npm run test:windows` (which file is unknown — that is the entry)
@@ -139,7 +145,10 @@ line under `## Resolved`.
   with the restart fixed if the fresh instance wedged the same way — the
   root cause of the wedge itself is NOT diagnosed by this entry.
 
-## OI-045 hooks/usage.mjs hardcodes its policy.json fallback path, and fixing it drags ~30% pre-existing coverage into covgate's floor
+## OI-049 hooks/usage.mjs hardcodes its policy.json fallback path, and fixing it drags ~30% pre-existing coverage into covgate's floor
+- RENUMBERED 2026-08-06, was OI-045 on this branch; `main` had already used 045
+  for a clearbot settle-test flake. Commits `abbe4bc` and `7a54114` name the old
+  number, as do in-code citations that were updated with this renumber.
 - opened: 2026-08-05
 - rank: maintainability
 - where: `hooks/usage.mjs` (`POLICY_PATH` fallback), `tools/pathgate.mjs` `DEFERRED`

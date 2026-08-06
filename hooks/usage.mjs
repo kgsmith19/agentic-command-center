@@ -19,11 +19,11 @@ import { resolve } from "../core/paths.mjs";
 // under a cache-busting URL, and node's lcov merge is last-write-wins per file
 // path — so those duplicate instances silently discard this file's real
 // coverage. That is why usage.mjs measured ~65% with a suite that genuinely
-// exercised it (guards OI-045).
+// exercised it (guards OI-049).
 const projectsDir = () =>
   path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects");
 // Derived from core/paths.mjs rather than written down, so the Task 12 folder
-// rename cannot strand it (guards OI-045).
+// rename cannot strand it (guards OI-049).
 const policyPath = () => process.env.ACC_POLICY || resolve("policy.json");
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const cachePath = () =>

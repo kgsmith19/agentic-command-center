@@ -31,7 +31,7 @@ test("a bare pathgate-ok with no reason is still a finding", () => {
 
 // Against a FIXTURE deferral, not the live map. These used to assert on the one
 // real entry the live map happened to carry, so closing that entry (guards
-// OI-045, once hooks/usage.mjs stopped hardcoding its policy path) broke a test
+// OI-049, once hooks/usage.mjs stopped hardcoding its policy path) broke a test
 // of machinery that had not changed at all.
 const DEFERRAL = new Map([
   ['a.mjs|const P = "C:/code/guards/policy.json";', "fixture reason"],

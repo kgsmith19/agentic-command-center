@@ -318,7 +318,7 @@ the loop — observed dead for 18 minutes.
 the statusline shows `bot DEAD` and SessionStart warns when it goes stale;
 `budget.mjs reviveAutopilotIfDead` restarts a stale watcher at every turn
 boundary (honouring the kill switch), and a Startup-folder launcher covers
-logon. A watcher that is HUNG rather than gone is cleared out first (OI-046):
+logon. A watcher that is HUNG rather than gone is cleared out first (OI-050):
 the starter treats any matching process as alive, so without that the restart
 declined forever while the heartbeat stayed frozen. The external Scheduled Task version is optional and needs an elevated
 shell — `watcher/watchdog/` holds it and its undo scripts.

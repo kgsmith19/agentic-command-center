@@ -81,7 +81,7 @@ function captureWindow(sid) {
 // A deliberate stop must STICK. start-autopilot.cmd removes the stop file, so
 // without this check every new session would silently re-arm a watcher Kyle had
 // turned off on purpose. One definition, read by everything that acts on the
-// watcher — the restart AND the OI-046 wedge kill — so the two can never come
+// watcher — the restart AND the OI-050 wedge kill — so the two can never come
 // to different conclusions about whether the switch is engaged.
 const autopilotStopped = () => fs.existsSync(path.join(ROOT, "watcher", "autopilot.stop"));
 
@@ -123,7 +123,7 @@ function reviveAutopilotIfDead(policy) {
   } catch {}
 }
 
-// guards OI-046: "dead" has to mean the same thing here and in the starter.
+// guards OI-050: "dead" has to mean the same thing here and in the starter.
 // This function calls it dead on a stale heartbeat; start-autopilot.cmd calls it
 // alive whenever a matching process exists. A HUNG watcher satisfies the second
 // forever, so the revive above fired at every turn boundary and the start
@@ -141,7 +141,7 @@ function reviveAutopilotIfDead(policy) {
 // bracket in a real path from being read as a wildcard.
 // Replacing a wedged watcher is silent by construction, so one that hangs every
 // few minutes is replaced every few minutes and nothing ever says so. Recorded
-// here and escalated at SessionStart (OI-046): restarting it is not the same as
+// here and escalated at SessionStart (OI-050): restarting it is not the same as
 // fixing it, and only a COUNT distinguishes the two.
 const WEDGE_LOG = () => path.join(ROOT, "watcher", "autopilot-wedges.jsonl");
 const WEDGE_WINDOW_MS = 2 * 3600_000;
@@ -554,7 +554,7 @@ function onSessionStart(p, policy) {
     const hb = path.join(ROOT, "watcher", "autopilot.heartbeat");
     if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
       // A watcher being restarted over and over is a DIFFERENT problem from one
-      // that is simply down, and the restart hides it (OI-046). Say which.
+      // that is simply down, and the restart hides it (OI-050). Say which.
       const wedges = recentWedges();
       if (wedges >= 2) {
         lines.push(

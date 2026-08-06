@@ -322,7 +322,7 @@ test("a fresh heartbeat leaves the watcher alone", () => {
   assert.equal(appears(marker, 2500), false, "a live watcher is not restarted");
 });
 
-// guards OI-046. The revive treats a stale heartbeat as dead, but
+// guards OI-050. The revive treats a stale heartbeat as dead, but
 // start-autopilot.cmd treats "a matching process exists" as alive, so a HUNG
 // watcher is invisible to the only check that gates the restart and the revive
 // becomes a permanent no-op. Found live: a watcher running with a heartbeat
@@ -364,7 +364,7 @@ test("a WEDGED watcher is cleared out, not mistaken for a live one", { skip: pro
     assert.ok(gone(pid), "the hung watcher must be killed, or the restart below can never take");
     assert.ok(appears(marker), "and a fresh watcher started in its place");
     // The kill is what feeds the escalation; without this the two halves of
-    // OI-046 are only tested against each other's assumptions.
+    // OI-050 are only tested against each other's assumptions.
     const log = path.join(sb.root, "watcher", "autopilot-wedges.jsonl");
     assert.ok(fs.existsSync(log), "a real wedge is recorded, not just silently repaired");
     const entries = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
@@ -520,10 +520,10 @@ test("ptyAnchorPid falls back to the first ancestor when all are shells", () => 
   assert.equal(ptyAnchorPid([{ pid: 888, name: "cmd.exe" }]), 888);
 });
 
-// guards OI-046, second half. Killing a wedged watcher and restarting it is
+// guards OI-050, second half. Killing a wedged watcher and restarting it is
 // silent by construction: a watcher that hangs every few minutes gets replaced
 // every few minutes and nothing ever says so. The eleven-hour outage that
-// surfaced OI-046 had no alert attached to it at any point, and "the statusline
+// surfaced OI-050 had no alert attached to it at any point, and "the statusline
 // shows it" only helps someone sitting there watching the statusline.
 function runSessionStart(sb, sid) {
   return execFileSync("node", [HOOK], {
