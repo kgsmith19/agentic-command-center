@@ -23,6 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { accActive } from "./usage.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
@@ -54,6 +55,10 @@ export function contract() {
 }
 
 function hook() {
+  // Phase 3 (full-remediation-prompt.md): only orchestrate inside a session
+  // ACC itself launched or is actively driving -- Kyle's own everyday,
+  // non-ACC Claude Code usage in some other project must see nothing.
+  if (!accActive()) return;
   let p = {};
   try { p = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); } catch { return; }
   if (!shouldFire(p.prompt)) return;

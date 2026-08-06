@@ -46,6 +46,14 @@ const HOOK = path.join(HERE, "budget.mjs");
 // with --test-concurrency=1, so not a race).
 delete process.env.NODE_V8_COVERAGE;
 
+// Phase 3 (full-remediation-prompt.md): every hook-dispatch test in this file
+// models an ACC-launched session (that's what onSessionStart/onStop are FOR),
+// so it must carry an ACC-active signal or accActive()'s new gate would
+// early-allow before any of the behavior under test ever runs. runStop()'s
+// env spreads ...process.env, so this one line covers every call site here.
+// The dedicated "inactive" tests below explicitly override/clear this.
+process.env.ACC_SESSION = "1";
+
 // Small dials keep the fixture transcripts tiny; autoClear stays on because the
 // clear-request file IS the assertion. Shape mirrors the live policy.json.
 const POLICY = {
@@ -228,6 +236,33 @@ test("under hard: stop passes silently", () => {
   const t = writeTranscript(sb, sid, 10000);
   const out = runStop(sb, { sid, transcript: t, active: false });
   assert.equal(out.trim(), "");
+});
+
+test("Phase 3: with NO ACC-active env var, an over-budget stop produces no block at all", () => {
+  const sb = sandbox();
+  const sid = "s-inactive";
+  seedWindow(sb, sid);
+  const t = writeTranscript(sb, sid, 60000); // over hardK 50 -- would normally block
+  const env = {
+    ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "",
+    ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+    CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"), CLAUDE_CODE_RUNNER: "",
+  };
+  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  const out = execFileSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: "Stop", session_id: sid, transcript_path: t, stop_hook_active: false, cwd: sb.root }),
+    env, encoding: "utf8",
+  });
+  assert.equal(out.trim(), "", "no ACC session active -> budget.mjs must not block, latch, or inject anything");
+  assert.equal(fs.existsSync(statePath(sb, sid, "budget")), false, "no latch written either");
+});
+
+test("Phase 3: CLI helpers (fanout/unstop/clear-now/clearbot-status) run unconditionally, with no ACC env set at all", () => {
+  const sb = sandbox();
+  const env = { ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath };
+  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  const out = execFileSync("node", [HOOK, "fanout", "10"], { env, encoding: "utf8" });
+  assert.match(out, /fan-out granted for 10 min/, "the CLI helper path must not be gated by accActive()");
 });
 
 // Single source of truth (2026-07-31): the Process-tab dials are the budget for

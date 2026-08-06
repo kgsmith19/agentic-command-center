@@ -233,3 +233,37 @@ test("costOfTranscript defaults to the live policy's rates when none are passed"
   assert.equal(costUsd, 1); // 1,000,000 input tokens * $1/M
   delete process.env.ACC_POLICY;
 });
+
+test("Phase 3: accActive() is true when ANY of ACC_SESSION/ACC_GOAL/ACC_PROFILE/ACC_PTY is set, false when none are", async () => {
+  const sb = sandbox();
+  const u = await loadUsage(sb);
+  const VARS = ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"];
+  const saved = {};
+  for (const k of VARS) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    assert.equal(u.accActive(), false, "none set -> inactive");
+    process.env.ACC_SESSION = "1";
+    assert.equal(u.accActive(), true, "ACC_SESSION=1");
+    delete process.env.ACC_SESSION;
+
+    process.env.ACC_GOAL = "g-1";
+    assert.equal(u.accActive(), true, "ACC_GOAL set");
+    delete process.env.ACC_GOAL;
+
+    process.env.ACC_PROFILE = "Normal";
+    assert.equal(u.accActive(), true, "ACC_PROFILE set");
+    delete process.env.ACC_PROFILE;
+
+    process.env.ACC_PTY = "some-pipe-name";
+    assert.equal(u.accActive(), true, "ACC_PTY set");
+    delete process.env.ACC_PTY;
+
+    process.env.ACC_SESSION = "0"; // present but not "1" must NOT count as active
+    assert.equal(u.accActive(), false, "ACC_SESSION=0 is not active");
+  } finally {
+    for (const k of VARS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+});

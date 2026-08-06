@@ -17,6 +17,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { accActive } from "./usage.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path at a throwaway tree so tests exercise
@@ -204,6 +205,10 @@ function cdRequest(p, sid, r, cwd, midSession, prev) {
 }
 
 function hook() {
+  // Phase 3 (full-remediation-prompt.md): the --text CLI helper (the GUI's
+  // route-preselect) stays unconditional -- only THIS orchestration path
+  // gates on an active ACC session.
+  if (!accActive()) return;
   let p = {};
   try { p = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); } catch { return; }
   const sid = String(p.session_id || "unknown").slice(0, 40);

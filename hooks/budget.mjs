@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain, costOfTranscript } from "./usage.mjs";
+import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain, costOfTranscript, accActive } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, readGoal, listGoals } from "./goal.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -790,6 +790,11 @@ function main() {
     if (running === "0") console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-clearbot.cmd`);
     return;
   }
+
+  // Phase 3 (full-remediation-prompt.md): the CLI helpers above stay
+  // unconditional (the GUI/engine call them directly); only hook dispatch
+  // from here down requires an active ACC session.
+  if (!accActive()) allow();
 
   const p = readStdin();
   const event = p.hook_event_name || "";

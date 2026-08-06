@@ -182,7 +182,35 @@ includes the repo. AGENTS.md matches `config.json`, not the other way around.
 
 ## Phase 3 — Session-scoped ACC activation
 
-**Status: not started**
+**Status: DONE — commit (see next commit in this branch)**
+
+Shipped 2026-08-06, as specified: `accActive()` in `hooks/usage.mjs`
+(`ACC_SESSION==="1" || ACC_GOAL || ACC_PROFILE || ACC_PTY`), gating
+`budget.mjs main()` (right before `readStdin()`, after the CLI-helper
+branches which stay unconditional), `route.mjs hook()`, and `testplan.mjs
+hook()`. `hooks/guard.mjs` (the always-on security floor) deliberately left
+untouched, as specified. Note: this doc's own text says this phase "closes
+OI-006 by construction" — guards' own `OI-006` (OPEN-ISSUES.md, this repo)
+is already resolved and is unrelated (a `bindSession` rebind-hijack fix, not
+session-scoping); that reference is presumably to the cross-repo `C:\code\
+OPEN-ISSUES.md` ledger, which this remote session cannot read — flagging
+rather than guessing.
+Red-first: dedicated "with no ACC-active env var, the hook produces no
+output" tests were committed failing (confirmed against the pre-Phase-3
+code) before the gates existed, then passed once each was added. Every
+PRE-EXISTING test in `route.test.mjs`/`testplan.test.mjs`/`budget.test.mjs`
+now carries `ACC_SESSION=1` (set once at module scope, inherited by every
+spawned child, not edited per call site) so they keep representing an
+ACC-launched session rather than silently going inert. Verified: `node
+--test` across the four touched files, 66 pass / 5 pre-existing platform
+skips; full `npm test` 448/449 (1 pre-existing unrelated `lane.test.mjs`
+flake). `node hooks/covgate.mjs`: `testplan.mjs` 100%/100%/90.9%; `usage.mjs`/
+`budget.mjs` remain under OI-033 (unchanged by this phase); `route.mjs`
+measures ~45% in isolation both BEFORE and AFTER this change (confirmed via
+git stash — this is a pre-existing "needs the full combined test list to
+measure accurately" artifact of this sandbox's environment, not a
+regression; the new `accActive()` line itself is directly proven covered by
+the dedicated red-green tests).
 
 Designed in the 08-02 ROI plan (T1.2) and never shipped. Closes OI-006 by
 construction and is the prerequisite for Phase 2 step 2.

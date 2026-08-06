@@ -13,6 +13,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 process.env.ACC_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "acc-testplan-test-"));
+// Phase 3 (full-remediation-prompt.md): every execFileSync call in this file
+// spreads ...process.env, and testplan.mjs's hook() now early-returns unless
+// an ACC-active signal is present. This one line keeps every existing test
+// representative of an ACC-launched session; the dedicated "inactive" test
+// below overrides it explicitly.
+process.env.ACC_SESSION = "1";
 const { shouldFire, contract } = await import("./testplan.mjs");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -134,4 +140,15 @@ test("fail-open: garbage stdin exits 0 with no output", () => {
     env: { ...process.env, ACC_ROOT: ROOT },
   });
   assert.equal(out, "");
+});
+
+test("Phase 3: with NO ACC-active env var, a genuine planning prompt still produces no injection", () => {
+  const env = { ...process.env, ACC_ROOT: ROOT };
+  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  const out = execFileSync("node", [path.join(HERE, "testplan.mjs")], {
+    input: JSON.stringify({ session_id: "tp-inactive", prompt: "plan out the retry queue for the watcher" }),
+    encoding: "utf8", env,
+  });
+  assert.equal(out, "", "no ACC session active -> no Test contract injection, even for planning language");
+  assert.equal(fs.existsSync(path.join(ROOT, "runner", "state", "tp-inactive.testplan")), false, "no latch written either");
 });

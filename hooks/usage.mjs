@@ -66,6 +66,20 @@ export function loadPolicy() {
 // subagents; context limits come from the base dials (single source of truth,
 // 2026-07-31). A profile carrying a context block still wins for that session
 // - the live policy.json deliberately has none. No profile = base policy.
+// Phase 3 (full-remediation-prompt.md). Whether THIS session is one ACC
+// actually launched or is orchestrating, vs. Kyle's own everyday
+// non-ACC-related Claude Code usage in some other project. Claude Code
+// spawns hooks as child processes, so any of these set at launch reach
+// every hook fire for that session's whole lifetime. guard.mjs (the
+// security floor) deliberately does NOT gate on this -- it must stay
+// always-on regardless of whether ACC orchestration is active.
+export function accActive() {
+  return process.env.ACC_SESSION === "1"
+      || !!process.env.ACC_GOAL
+      || !!process.env.ACC_PROFILE
+      || !!process.env.ACC_PTY;
+}
+
 export function applyProfile(policy) {
   const name = String(process.env.ACC_PROFILE || "").trim();
   if (!name) return policy;

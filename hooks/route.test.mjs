@@ -12,6 +12,12 @@ import os from "node:os";
 // every write lands in a throwaway tree. Live runner/state must never see
 // test files (OI-009: ~60 strays were mixed in with real session state).
 process.env.ACC_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "acc-route-test-"));
+// Phase 3 (full-remediation-prompt.md): fire()'s spawned children inherit
+// process.env, and route.mjs's hook() now early-returns unless an ACC-active
+// signal is present. Every test here models an ACC-launched session, so this
+// one line (not a per-call-site edit) keeps them all representative; the
+// dedicated "inactive" test below overrides it explicitly.
+process.env.ACC_SESSION = "1";
 // See budget.test.mjs's matching comment: fire()'s child processes below
 // inherit process.env, which would otherwise carry a live NODE_V8_COVERAGE
 // straight through, and route.mjs is not itself gated this session — that
@@ -245,4 +251,25 @@ test("replayable rejects exactly what the injector cannot be trusted with", () =
   assert.ok(!replayable("tab\there"));
   assert.ok(!replayable(""));
   assert.ok(!replayable("x".repeat(2001)));
+});
+
+test("Phase 3: with NO ACC-active env var, the hook produces no output at all, even for a scoring prompt", () => {
+  const env = { ...process.env };
+  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  const out = execFileSync(process.execPath, [path.join(HERE, "route.mjs")], {
+    input: JSON.stringify({ session_id: `t${process.pid}inactive`, prompt: "add a supabase migration", cwd: "C:\\code" }),
+    encoding: "utf8", env,
+  }).trim();
+  assert.equal(out, "", "no ACC session active -> the router must not inject anything");
+});
+
+test("Phase 3: the --text CLI helper runs unconditionally, with no ACC env set at all", () => {
+  const env = { ...process.env };
+  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  const out = execFileSync(
+    process.execPath,
+    [path.join(HERE, "route.mjs"), "--text", "fix the playwright e2e run"],
+    { encoding: "utf8", env }
+  );
+  assert.equal(JSON.parse(out).label, "lifeos-ui", "the GUI's route-preselect CLI must work with no ACC session active");
 });
