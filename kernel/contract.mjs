@@ -62,6 +62,33 @@ export function validateContract(contract) {
     errors.push("acceptanceCriteria must be an array");
   }
 
+  // OI-019 scenario-enumeration pass: a malformed budget field (wrong type,
+  // negative, zero) used to pass validation silently and then defeat the
+  // ceiling it names downstream instead of being refused here. A string
+  // wallClockMin, for one concrete example: `Number.isFinite(wall) &&
+  // wall > caps.wallClockMin` below was false either way (isFinite("x") is
+  // false), so no error was ever raised, and effectiveCeilings' `b.wallClockMin
+  // ?? policy.budget.wallClockMin` picked the string anyway (?? only falls
+  // back on null/undefined, not on wrong type) -- Math.min/Math.round then
+  // silently produced NaN, and checkpointVerdict's `elapsedMs >
+  // ceilings.wallClockMs` is false against NaN no matter how long the run
+  // runs, so the wall-clock ceiling — one of the kernel's core safety
+  // limits — was silently unenforced for the whole run, not merely
+  // unvalidated. Each of these three budget fields is optional (falls back
+  // to the policy default when absent, per effectiveCeilings), so only
+  // validate the ones actually present, but validate them for real.
+  if (c.budget && typeof c.budget === "object") {
+    if (c.budget.wallClockMin !== undefined && !(Number.isFinite(c.budget.wallClockMin) && c.budget.wallClockMin > 0)) {
+      errors.push(`budget.wallClockMin ${JSON.stringify(c.budget.wallClockMin)} must be a positive number`);
+    }
+    if (c.budget.toolCalls !== undefined && !(Number.isInteger(c.budget.toolCalls) && c.budget.toolCalls >= 1)) {
+      errors.push(`budget.toolCalls ${JSON.stringify(c.budget.toolCalls)} must be an integer >= 1`);
+    }
+    if (c.budget.tokens !== undefined && !(Number.isInteger(c.budget.tokens) && c.budget.tokens >= 1)) {
+      errors.push(`budget.tokens ${JSON.stringify(c.budget.tokens)} must be an integer >= 1`);
+    }
+  }
+
   const caps = loadKernelPolicy().hardCaps;
   const wall = c.budget?.wallClockMin;
   if (Number.isFinite(wall) && wall > caps.wallClockMin) {

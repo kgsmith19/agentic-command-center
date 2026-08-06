@@ -359,8 +359,31 @@ line under `## Resolved`.
   handling tested, corrupt-file-throws tested). Verified: `node --test
   kernel/policy.test.mjs` (14/14), `node hooks/covgate.mjs` (policy.mjs
   100%/100%/98.1%, up from 90.4%).
-  Progress: 7/12 modules done. Remaining, in rough risk order:
-  `kernel/contract.mjs`,
+  `kernel/contract.mjs` pass (2026-08-06): found a REAL, live safety
+  bypass — `validateContract`'s only budget check was "does
+  `wallClockMin` exceed the hard cap," gated on `Number.isFinite(wall)`.
+  A malformed value (wrong type, negative, zero) makes that `isFinite`
+  check itself false, so no error was EVER raised for it — the contract
+  validates clean. Reproduced concretely: `budget.wallClockMin: "sixty"`
+  passes `validateContract` with zero errors, then `effectiveCeilings`'
+  `b.wallClockMin ?? policy.budget.wallClockMin` picks the string anyway
+  (`??` only falls back on null/undefined, not wrong type), `Math.min`/
+  `Math.round` silently produce `NaN`, and `checkpointVerdict`'s `elapsedMs
+  > ceilings.wallClockMs` is false against `NaN` no matter how long the
+  run goes — the wall-clock ceiling, one of the kernel's core safety
+  limits, was silently UNENFORCED for the run's entire lifetime (verified:
+  a run at 999999999ms / ~11 days elapsed still returned `stop: false`),
+  not merely unvalidated. `toolCalls`/`tokens` had the identical gap (no
+  validation at all, not even the flawed hard-cap check). Fixed: each of
+  the three budget fields, when present, must now be a real positive
+  number (`toolCalls`/`tokens` additionally integers), refused before the
+  run starts — matching the same rigor `kernel/policy.mjs`'s
+  `validateKernelBlock` already applies to the policy's own budget
+  defaults, which this per-contract validation had never picked up.
+  Verified: `node --test kernel/contract.test.mjs` (16/16, RED confirmed
+  first — the malformed-budget test failed pre-fix, contract validated
+  clean), `node hooks/covgate.mjs` (contract.mjs 100%/100%/100%).
+  Progress: 8/12 modules done. Remaining, in rough risk order:
   `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 

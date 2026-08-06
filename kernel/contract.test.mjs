@@ -114,6 +114,31 @@ test("a budget above a policy hard cap is rejected (AC-C5)", () => {
   assert.match(C.validateContract(c).errors.join(" "), /hard cap/i);
 });
 
+// OI-019 scenario-enumeration pass: a REAL, live bug -- a malformed budget
+// field used to pass validateContract silently and then defeat the ceiling
+// it names downstream instead of being refused before the run ever starts.
+// A string wallClockMin is the clearest case: Number.isFinite("sixty") is
+// false, so the old hard-cap check (`isFinite(wall) && wall > cap`) never
+// fired either way -- no error, ever. Then effectiveCeilings' `b.wallClockMin
+// ?? policy.budget.wallClockMin` picked the string regardless (?? only
+// falls back on null/undefined), Math.min/Math.round produced NaN, and
+// checkpointVerdict's `elapsedMs > ceilings.wallClockMs` is false against
+// NaN no matter how long the run goes -- the wall-clock ceiling was
+// silently UNENFORCED for the run's entire lifetime, not merely unvalidated.
+test("a wrong-type or non-positive budget field is refused, not silently allowed through (OI-019)", () => {
+  for (const bad of [
+    { wallClockMin: "sixty" }, { wallClockMin: -5 }, { wallClockMin: 0 }, { wallClockMin: NaN },
+    { toolCalls: "many" }, { toolCalls: -1 }, { toolCalls: 0 }, { toolCalls: 1.5 },
+    { tokens: "lots" }, { tokens: -1 }, { tokens: 0 }, { tokens: 1.5 },
+  ]) {
+    const c = good();
+    c.budget = { ...c.budget, ...bad };
+    const r = C.validateContract(c);
+    assert.equal(r.ok, false, `expected ${JSON.stringify(bad)} to be refused`);
+    assert.ok(r.errors.some((e) => e.startsWith("budget.")), `expected a budget.* error for ${JSON.stringify(bad)}, got: ${r.errors.join(" | ")}`);
+  }
+});
+
 test("the tool allowlist is derived from allowedActions", () => {
   assert.deepEqual(C.toolsFor(good()).sort(), ["Bash", "Edit", "Glob", "Grep", "Read", "TodoWrite", "Write"].sort());
   const readOnly = good();
