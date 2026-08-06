@@ -31,6 +31,47 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-046 A WEDGED watcher can never be revived: the reviver and the starter disagree about what "dead" means
+- opened: 2026-08-05
+- rank: safety
+- where: `hooks/budget.mjs` `reviveAutopilotIfDead`/`ensureAutopilot`,
+  `watcher/start-autopilot.cmd`'s "already running" probe (same shape in
+  `start-clearbot.cmd` on `main`)
+- what: found live on Kyle's machine while smoke-testing Task 6, not
+  theorised. `clearbot.ps1` pid 20580 was RUNNING, while
+  `watcher/clearbot.heartbeat` was last written 12:40 and the last line in
+  `watcher/clearbot.log` was 11:57 — at 23:01. Roughly eleven hours of a
+  watcher that exists but does nothing. This session's own SessionStart
+  banner said "the autopilot watcher looks DEAD (stale heartbeat)", which
+  was correct and had been correct all day, and nothing acted on it.
+  The two halves of self-healing use different definitions of dead:
+  `reviveAutopilotIfDead` says dead = heartbeat older than 30s, and on that
+  basis calls `ensureAutopilot()`, which shells `start-autopilot.cmd`; but
+  that script's FIRST action is to count processes matching
+  `-File*autopilot.ps1*` and `exit 0` if any exist. A hung watcher satisfies
+  "a process exists" forever, so the revive is a permanent no-op: the hook
+  re-fires it at every single turn boundary and the starter declines every
+  time. OI-007 closed the CRASHED-watcher case (no process) and the REBOOT
+  case (Startup launcher). The HUNG case is the one failure mode neither
+  half covers, and it is the one that is indistinguishable from healthy to
+  the only check that gates the restart.
+- why open: the fix is a real behaviour change to the single entry point
+  every caller shares (the turn-boundary hook, the Command Center's Start
+  button, and the Startup-folder launcher), and it must not break the
+  property that makes that entry point safe today — running it twice against
+  a HEALTHY watcher must still be a no-op, and a deliberate
+  `autopilot.stop` must still stick. Logged rather than bolted onto Task 6's
+  close, which was a rename.
+- done when: `start-autopilot.cmd`'s probe treats "a process exists but its
+  heartbeat is stale" as dead rather than as running — killing the wedged
+  instance and starting a fresh one — with a test proving all three cases
+  separately: a healthy watcher is left alone (still idempotent), a wedged
+  one is replaced, and an engaged kill switch still suppresses both. Also
+  worth deciding, separately: nothing anywhere escalates a watcher that has
+  been stale for hours, so the same eleven-hour silence would recur even
+  with the restart fixed if the fresh instance wedged the same way — the
+  root cause of the wedge itself is NOT diagnosed by this entry.
+
 ## OI-045 hooks/usage.mjs hardcodes its policy.json fallback path, and fixing it drags ~30% pre-existing coverage into covgate's floor
 - opened: 2026-08-05
 - rank: maintainability
@@ -53,6 +94,20 @@ line under `## Resolved`.
   tracked rather than silently skipped.
 - why open: out of scope for sub-project J; real fix is test depth, which is
   sub-project G's job (`OI-019`, test-depth program).
+- UPDATE 2026-08-05 (`23f6a4d`, Task 6's close): hit for the second time and
+  in the way this entry predicted. Finishing the watcher rename required
+  changing exactly one COMMENT in `hooks/usage.mjs` (line 493 named
+  `clearbot`, a file that no longer exists), and that alone made covgate
+  grade the whole file: 65.5% lines / 52.5% funcs / 55.3% branches against
+  100/100/90. Nothing was loosened to get around it — no override, no
+  `subprocessOnlyLibs` listing (it does not qualify; `hooks/usage.test.mjs`
+  performs zero subprocess spawns, so its low number is a real gap and not a
+  measurement artifact, unlike `hooks/statusline.mjs` which was verified and
+  listed in that same commit). The comment fix landed and this file is the
+  single remaining red in `node hooks/covgate.mjs`. Worth noting for whoever
+  picks this up: the gap is concentrated in `hooks/usage.mjs` lines 378-571
+  (the CLI/reporting half), not spread thinly, so it is a bounded piece of
+  work rather than a whole-file rewrite.
 - done when: `hooks/usage.mjs` has enough of its own suite to clear
   covgate's 100/100/90 floor on the whole file, the `POLICY_PATH` default is
   changed to `resolve("policy.json")` (`core/paths.mjs`), and the matching
