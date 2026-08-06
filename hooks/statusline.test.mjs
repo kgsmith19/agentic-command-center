@@ -141,3 +141,16 @@ test("Phase 1: no ceiling alert -> no goal PAUSED segment", () => {
   const sb = sandbox(BASE_POLICY);
   assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /goal PAUSED/);
 });
+
+test("OI-034: an unread dead-goal alert shows 'goal DIED' on the status line", () => {
+  const sb = sandbox(BASE_POLICY);
+  const alerts = path.join(sb.root, "runner", "alerts");
+  fs.mkdirSync(alerts, { recursive: true });
+  fs.writeFileSync(path.join(alerts, "g-test.dead.json"), JSON.stringify({ id: "g-test" }));
+  assert.match(run(sb, writeTranscript(sb, 10000)), /goal DIED/);
+});
+
+test("OI-034: no dead-goal alert -> no goal DIED segment", () => {
+  const sb = sandbox(BASE_POLICY);
+  assert.doesNotMatch(run(sb, writeTranscript(sb, 10000)), /goal DIED/);
+});

@@ -67,6 +67,21 @@ function goalPaused() {
   }
 }
 
+// OI-034: a goal reaped as dead (console gone -- a reboot, a crash, power
+// loss) writes a `.dead.json` alert the same way a paused goal's ceiling
+// does. Unlike the ceiling alert, nothing "resumes" a dead goal to clear
+// this one -- hooks/budget.mjs's SessionStart consumes (reads + deletes)
+// it once, inline in chat; this indicator is a secondary, persistent
+// surface for the window between the reap and that next SessionStart.
+function goalDied() {
+  try {
+    const dir = process.env.ACC_ALERTS_DIR || path.join(ROOT, "runner", "alerts");
+    return fs.readdirSync(dir).some((f) => f.endsWith(".dead.json"));
+  } catch {
+    return false;
+  }
+}
+
 function weekPct() {
   try {
     const t = JSON.parse(fs.readFileSync(path.join(STATE, "tier.json"), "utf8"));
@@ -99,6 +114,7 @@ function main() {
 
   if (botDead()) parts.push(`${RED}bot DEAD${RESET}`);
   if (goalPaused()) parts.push(`${RED}goal PAUSED${RESET}`);
+  if (goalDied()) parts.push(`${RED}goal DIED${RESET}`);
 
   const wk = weekPct();
   if (wk) {

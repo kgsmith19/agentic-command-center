@@ -235,12 +235,57 @@ export function consoleAlive(pid) {
 // per active goal, same cost pendingKicks already pays), and it means every
 // reader - list, pending, goalForSession - sees the reaped result
 // immediately instead of a stale one.
+// OI-034 (2026-08-06): a reboot (or crash, or power loss) leaves a dead
+// goal's reap totally silent -- clean, not a zombie, but nothing ever told
+// Kyle work was interrupted; he'd only notice by chance. This does NOT
+// auto-resume anything (OI-034's own entry explains why not: unattended
+// work resuming when he didn't ask for it is a real, separate risk this
+// alert-only fix deliberately avoids) -- it only makes the interruption
+// visible, the same way `.ceiling.json` already does for a paused goal.
+// hooks/statusline.mjs shows it persistently; hooks/budget.mjs's
+// deadGoalWarning() (SessionStart) surfaces it inline in chat once and
+// clears it, since unlike a paused goal there is no "resume" command whose
+// own success would clear it instead.
+function writeDeadAlert(g, why) {
+  try {
+    fs.mkdirSync(alertsDir(), { recursive: true });
+    fs.writeFileSync(
+      path.join(alertsDir(), `${safeId(g.id)}.dead.json`),
+      JSON.stringify({ id: g.id, text: g.text || "", why, at: nowIso() }, null, 2) + "\n"
+    );
+  } catch {}
+}
+
+// Read-and-clear: hooks/budget.mjs's SessionStart calls this once per
+// session so a reboot-orphaned goal gets shown inline in chat exactly once,
+// then stops repeating (unlike the ceiling alert, a dead goal has no
+// "resume" command whose success would clear it instead -- this call IS
+// the acknowledgement).
+export function consumeDeadGoalAlerts() {
+  let files;
+  try {
+    files = fs.readdirSync(alertsDir()).filter((f) => f.endsWith(".dead.json"));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const f of files) {
+    const p = path.join(alertsDir(), f);
+    const a = readJson(p, null);
+    fs.rmSync(p, { force: true });
+    if (a && a.id) out.push(a);
+  }
+  return out;
+}
+
 export function reapDeadGoals() {
   const reaped = [];
   for (const g of listGoals()) {
     if (g.status !== "active") continue;
     if (!g.consolePid || consoleAlive(g.consolePid)) continue;
-    setStatus(g.id, "dead", `console pid ${g.consolePid} is gone (reaped)`);
+    const why = `console pid ${g.consolePid} is gone (reaped)`;
+    writeDeadAlert(g, why);
+    setStatus(g.id, "dead", why);
     reaped.push(g.id);
   }
   return reaped;

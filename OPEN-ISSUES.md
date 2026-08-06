@@ -52,6 +52,28 @@ line under `## Resolved`.
   wired it to the goal store, rather than another interactive console),
   or this gap is formally accepted as permanent and this entry closes on
   that decision alone.
+- UPDATE 2026-08-06: shipped a THIRD path this entry's own "done when"
+  didn't originally name — neither auto-respawn nor silent-accept, but
+  making the interruption VISIBLE without ever auto-resuming anything
+  (the specific risk "why open" named — unattended work resuming when
+  Kyle didn't ask for it — stays fully avoided, since nothing here
+  launches a console or resumes a goal on its own). `reapDeadGoals()`
+  now writes a `<id>.dead.json` alert (same `runner/alerts/` mechanism
+  the ceiling-pause alert already uses) the moment it reaps a goal;
+  `hooks/statusline.mjs` shows `goal DIED` persistently while it's
+  unread (same pattern as `goal PAUSED`); `hooks/budget.mjs`'s
+  SessionStart consumes (reads + deletes) every pending dead-goal alert
+  once, inline in chat, telling Kyle exactly which goal died, why, and
+  that it was NOT auto-resumed — since a dead goal has no "resume"
+  command the way a paused one does, THIS is what clears it, not a
+  follow-up action. Tests: `hooks/goal.test.mjs` (alert write + consume-
+  and-clear), `hooks/statusline.test.mjs` (the new segment), `hooks/
+  budget.test.mjs` (the SessionStart injection fires once and does not
+  repeat on a second session). This closes the "silent" half of the gap
+  — Kyle now finds out, promptly, every time — but does NOT close the
+  "console respawn" half; if he still wants real auto-resume (headless
+  via `runner.mjs`, per this entry's own suggestion above), that remains
+  open, now as a smaller, separable follow-up rather than the whole gap.
 
 ## OI-035 runner.mjs's kill is single-shot: no SIGKILL escalation, no verification the tree actually died
 - opened: 2026-08-06, found by the lean-review sweep (kernel/hooks/gui/

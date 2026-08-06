@@ -14,7 +14,7 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain, costOfTranscript, accActive } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, readGoal, listGoals } from "./goal.mjs";
+import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, readGoal, listGoals, consumeDeadGoalAlerts } from "./goal.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
@@ -444,6 +444,30 @@ export function pausedGoalWarning(p, win) {
   return `[ACC GOAL ${paused.id}] PAUSED at a ceiling (${paused.why || "reason not recorded"}). This session was NOT resumed for it. Review the goal (\`node C:/code/guards/hooks/goal.mjs show ${paused.id}\`) and, if the work should continue, run \`node C:/code/guards/hooks/goal.mjs resume ${paused.id}\`.`;
 }
 
+// OI-034: a goal reaped as dead (its bound console gone — a reboot, a
+// crash, power loss) does NOT auto-resume (see that entry for why not);
+// it just stopped silently until now. Unlike pausedGoalWarning, this is
+// NOT scoped to the current session's own consolePid — the dead goal's
+// pid is, definitionally, gone, so there is no "this session" it could
+// still match. Shown to whichever session starts next, then consumed
+// (deleted) so it never repeats — there is no "resume" command whose
+// success would clear it the way a paused goal's alert clears itself.
+export function deadGoalWarning() {
+  let alerts;
+  try {
+    alerts = consumeDeadGoalAlerts();
+  } catch {
+    return "";
+  }
+  if (!alerts.length) return "";
+  return alerts
+    .map(
+      (a) =>
+        `[ACC GOAL ${a.id}] DIED — its console went away (${a.why || "reason not recorded"}), most likely a reboot or crash. Work was interrupted and NOT auto-resumed. Review it (\`node C:/code/guards/hooks/goal.mjs show ${a.id}\`) and start a fresh goal if it should continue: the old one is archived, not resumable.`
+    )
+    .join("\n");
+}
+
 export function goalContext(p, win, policy) {
   const goal = bindSession({
     sessionId: p.session_id,
@@ -576,6 +600,13 @@ function onSessionStart(p, policy) {
       const paused = pausedGoalWarning(p, win);
       if (paused) lines.push(paused);
     }
+  } catch {}
+  // OI-034: independent of the goal/paused check above — a dead goal has
+  // no consolePid left to match against THIS session, so it can't be
+  // folded into that if/else the way paused is.
+  try {
+    const died = deadGoalWarning();
+    if (died) lines.push(died);
   } catch {}
   try {
     const queued = queuedPromptContext(win);

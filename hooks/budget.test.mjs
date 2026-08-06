@@ -230,6 +230,40 @@ test("Phase 1: SessionStart warns instead of saying nothing when the adopted goa
   assert.match(out, new RegExp(`resume ${g.id}`));
 });
 
+// OI-034: unlike the paused-at-ceiling warning above (scoped to a specific
+// goal via ACC_GOAL/consolePid), a dead-goal alert isn't scoped to THIS
+// session at all -- its own console is gone, so any next SessionStart is
+// the one that shows it, once, then it's gone (consumed, not merely read).
+test("OI-034: SessionStart surfaces a reboot-orphaned goal's alert once, then clears it", () => {
+  const sb = sandbox();
+  const sid = SID(93);
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_GOALS_DIR = "";
+  const g = gm.createGoal({ text: "interrupted overnight", cwd: sb.root });
+  gm.bindSession({ sessionId: SID(94), consolePid: 999999, goalId: g.id }); // a pid that is NOT alive
+  gm.reapDeadGoals(); // writes the .dead.json alert as a side effect
+
+  const env = {
+    ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "",
+    ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+    CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"), CLAUDE_CODE_RUNNER: "1",
+  };
+  delete env.ACC_GOAL;
+
+  const first = execFileSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
+    env, encoding: "utf8",
+  });
+  assert.match(first, new RegExp(`\\[ACC GOAL ${g.id}\\] DIED`));
+  assert.match(first, /most likely a reboot or crash/);
+
+  const second = execFileSync("node", [HOOK], {
+    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: SID(95), cwd: sb.root }),
+    env, encoding: "utf8",
+  });
+  assert.doesNotMatch(second, /DIED/, "the alert must not repeat once shown");
+});
+
 test("Phase 4 D1: a valid-JSON-but-incomplete policy.json (missing runner/subagents/review) still delivers the checkpoint block, not a silently-consumed latch", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "acc-budget-crash-"));
   fs.mkdirSync(path.join(root, "runner", "state"), { recursive: true });

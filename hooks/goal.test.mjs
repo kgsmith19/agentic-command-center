@@ -325,6 +325,65 @@ test("OI-031: activeGoals()/list only ever show genuinely live goals -- a dead-c
   assert.equal(m.readGoal(dead.id), null, "the dead one was reaped as a side effect of listing");
 });
 
+// OI-034: a reboot leaves a reaped goal totally silent. Not auto-resumed
+// (deliberately — see the entry) but no longer silent: reaping now writes
+// an alert, and hooks/budget.mjs's SessionStart consumes it once.
+test("OI-034: reapDeadGoals writes a dead-goal alert file alongside archiving it", async () => {
+  const { m, dir } = await loadGoal();
+  const alerts = path.join(dir, "alerts");
+  process.env.ACC_ALERTS_DIR = alerts;
+  try {
+    const g = m.createGoal({ text: "interrupted work" });
+    m.bindSession({ sessionId: SID(54), consolePid: 999999, goalId: g.id });
+    assert.deepEqual(m.reapDeadGoals(), [g.id]);
+
+    const alertFile = path.join(alerts, `${g.id}.dead.json`);
+    assert.ok(fs.existsSync(alertFile), "an alert file is written for the reaped goal");
+    const alert = JSON.parse(fs.readFileSync(alertFile, "utf8"));
+    assert.equal(alert.id, g.id);
+    assert.equal(alert.text, "interrupted work");
+    assert.match(alert.why, /console pid 999999 is gone/);
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
+test("OI-034: consumeDeadGoalAlerts reads and clears every alert; a second call finds nothing left", async () => {
+  const { m, dir } = await loadGoal();
+  const alerts = path.join(dir, "alerts");
+  process.env.ACC_ALERTS_DIR = alerts;
+  try {
+    const g1 = m.createGoal({ text: "one" });
+    m.bindSession({ sessionId: SID(55), consolePid: 999998, goalId: g1.id });
+    const g2 = m.createGoal({ text: "two" });
+    m.bindSession({ sessionId: SID(56), consolePid: 999997, goalId: g2.id });
+    m.reapDeadGoals();
+
+    const consumed = m.consumeDeadGoalAlerts();
+    assert.equal(consumed.length, 2);
+    assert.deepEqual(consumed.map((a) => a.id).sort(), [g1.id, g2.id].sort());
+    assert.deepEqual(fs.readdirSync(alerts).filter((f) => f.endsWith(".dead.json")), [], "every alert file is cleared");
+    assert.deepEqual(m.consumeDeadGoalAlerts(), [], "nothing left to consume the second time");
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
+test("OI-034: consumeDeadGoalAlerts returns [] when the alerts dir does not exist at all", async () => {
+  const { m, dir } = await loadGoal();
+  // A dedicated, never-touched subdirectory -- other tests in this file
+  // that don't override ACC_ALERTS_DIR share the module's DEFAULT alerts
+  // path, and (correctly, now that reapDeadGoals always alerts) leave real
+  // .dead.json files there, so asserting "nothing exists yet" against that
+  // shared default would be order-dependent on whatever ran earlier.
+  process.env.ACC_ALERTS_DIR = path.join(dir, "alerts-never-touched");
+  try {
+    assert.deepEqual(m.consumeDeadGoalAlerts(), []);
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
 test("CLI: main() 'reap' reports which goals it archived", () => {
   const g = m.createGoal({ text: "t" });
   m.bindSession({ sessionId: SID(54), consolePid: 999999, goalId: g.id });
