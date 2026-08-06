@@ -182,7 +182,7 @@ includes the repo. AGENTS.md matches `config.json`, not the other way around.
 
 ## Phase 3 — Session-scoped ACC activation
 
-**Status: DONE — commit (see next commit in this branch)**
+**Status: DONE — commit 5582169**
 
 Shipped 2026-08-06, as specified: `accActive()` in `hooks/usage.mjs`
 (`ACC_SESSION==="1" || ACC_GOAL || ACC_PROFILE || ACC_PTY`), gating
