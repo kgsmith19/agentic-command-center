@@ -1,4 +1,4 @@
-// node --test tools/inventory.test.mjs   (run from C:\code\guards)
+// node --test tools/inventory.test.mjs   (run from the repo root)
 //
 // Hermetic: every case is an inline ledger fragment. Only Task 9 reads the
 // real ledgers on disk.
@@ -13,7 +13,7 @@ const ONE_ENTRY = `# Open issues
 ## OI-034 A console PID is treated as a console IDENTITY
 - opened: 2026-08-04
 - rank: reliability
-- where: hooks/goal.mjs
+- where: core/standing.mjs
 - what: liveness is a bare process.kill(pid, 0) existence test.
 `;
 
@@ -189,7 +189,7 @@ test("the real ledgers parse and rank without throwing", { skip: !haveAll }, () 
 
 // main() is a spawned subprocess's entry point in real use, invisible to this
 // file's own coverage instrumentation when spawned — so it's called directly,
-// in-process, the same way hooks/goal.test.mjs exercises hooks/goal.mjs's
+// in-process, the same way core/standing.test.mjs exercises core/standing.mjs's
 // exported main(). It writes real stdout as a side effect; that's expected.
 test("main() runs --check against the real ledgers and returns run()'s exit code", { skip: !haveAll }, () => {
   assert.equal(m.main(["--check"]), 0);

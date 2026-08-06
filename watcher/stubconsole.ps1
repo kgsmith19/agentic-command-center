@@ -1,9 +1,9 @@
-# Test double for a Claude Code console (hooks/clearbot.test.mjs).
+# Test double for a Claude Code console (hooks/autopilot.test.mjs).
 #
 # It exists to give the injector something real to type into: it owns a genuine
 # console, so AttachConsole + WriteConsoleInput behave exactly as they do
 # against claude.exe, and every line it reads lands in -LogFile. That log is the
-# assertion - "did clearbot type, and what" - and its EMPTINESS is the assertion
+# assertion - "did autopilot type, and what" - and its EMPTINESS is the assertion
 # for every refusal case.
 #
 # Writes its own PID to -PidFile at startup, because the launcher (cmd /c start)

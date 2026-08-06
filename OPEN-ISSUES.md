@@ -31,6 +31,196 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-050 [SHRUNK 2026-08-05 — the restart is fixed; the wedge's own cause is not] A WEDGED watcher can never be revived
+- RENUMBERED 2026-08-06, was OI-046 on this branch. `main` had independently
+  used 046 the same day for an unrelated hooks/prompts.mjs issue, and this
+  file's own rule is that IDs are never reused. Commits `7a54114`, `5b66d07`
+  and `f10b5bc` name the old number in their messages; they mean this entry.
+- opened: 2026-08-05, shrunk: 2026-08-05
+- rank: safety
+- FIXED, first half: `hooks/budget.mjs`'s `reviveAutopilotIfDead` now clears a
+  wedged instance out before restarting, instead of asking a starter that will
+  always decline. `killWedgedAutopilot()` is reached ONLY when the heartbeat is
+  already stale, so a healthy watcher is never a candidate, and its query is
+  scoped to THIS root's own `watcher/autopilot.ps1` rather than matching the
+  name machine-wide — a worktree must not kill the canonical checkout's
+  watcher. It excludes its own `$PID` because the script path is embedded in
+  the probe's own command line, which is exactly the self-matching bug of
+  `OI-001`, and uses `.Contains()` rather than `-like` so a bracket in a real
+  path is not read as a wildcard. The kill-switch check moved into one shared
+  `autopilotStopped()` predicate read by both the restart and the kill, so an
+  engaged switch still means do nothing at all.
+- verification: `node --test hooks/budget.test.mjs` 20/20, RED-first and
+  genuinely so — the wedged case failed against the pre-fix code. Worth
+  recording that the FIRST draft of that test passed against unfixed code for
+  the wrong reason: the stub watcher was spawned `detached: true`, and
+  PowerShell launched with DETACHED_PROCESS gets no console and exits 0
+  immediately, so the process was already gone before the assertion ran.
+  Measured it rather than trusting the green. Full tier `npm run test:windows`
+  615 tests / 614 pass / 1 pre-existing skip; `npm run gates` clean;
+  `node hooks/covgate.mjs` exit 0.
+- STILL OPEN, deliberately: nothing diagnoses or escalates WHY a watcher wedges.
+  A fresh instance that hangs the same way is now restarted rather than left
+  sitting there, but if it wedges every few minutes this turns into a restart
+  loop nobody is told about. The eleven-hour silence that surfaced this had no
+  alert attached to it at any point, and still does not.
+- done when: a watcher that wedges repeatedly surfaces somewhere a human or the
+  loop actually reads, rather than only being silently replaced.
+- SECOND HALF DONE 2026-08-05: a kill that actually removed a process is now
+  recorded to `watcher/autopilot-wedges.jsonl` (bounded to 20 entries — a
+  breadcrumb trail appended from a turn boundary, not an audit log), and
+  SessionStart escalates when two or more land inside two hours: "has wedged N
+  times in the last 2h and been restarted each time — restarting it is NOT
+  fixing it." A stale heartbeat with NO process behind it still gets the
+  ordinary dead-watcher warning, because that one restarting genuinely does fix.
+  Four tests, RED-first: one wedge is not an escalation, three are, wedges aged
+  out of the window stop escalating, and the kill really does write the file the
+  escalation reads (without that last one the two halves would only have been
+  tested against each other's assumptions).
+- STILL OPEN: why a watcher wedges is still undiagnosed. The escalation makes a
+  repeat visible instead of silent, which is what this entry asked for, but it
+  is a smoke alarm, not a fix. Also unaddressed: it only surfaces at
+  SessionStart, so it reaches Kyle when he next starts a session rather than
+  when the wedge happens — the live incident ran eleven hours precisely because
+  every ACC alert requires him to already be looking.
+
+## OI-051 One unattributed test failure in four consecutive full-suite runs
+- RENUMBERED 2026-08-06, was OI-047 on this branch; `main` had already used 047
+  for a kernel/run.test.mjs flake. Commit `f10b5bc` names the old number.
+- opened: 2026-08-05
+- rank: reliability
+- where: `npm run test:windows` (which file is unknown — that is the entry)
+- what: during Task 6's verification the full tier reported 641 tests / 639
+  pass / 1 fail, and the failure detail was not captured before the next run
+  overwrote it. Three immediately-subsequent full runs were clean (640 pass, 0
+  fail, 1 pre-existing skip each), so it is intermittent at roughly 1-in-4 and
+  not reproducible on demand. Recorded rather than dismissed because the same
+  session ADDED timing-sensitive tests that spawn real PowerShell processes and
+  poll for them (`hooks/budget.test.mjs`'s wedged-watcher cases: an 8s
+  `gone(pid)` poll and a 2.5s negative `appears(marker)` window), and those are
+  the most likely candidates under full-suite load even though they pass
+  in isolation and in three of four full runs.
+- why open: chasing an unreproduced, unidentified failure by guessing is how
+  the OI-018 jitter test got "fixed" wrongly the first time. The next full-tier
+  failure needs its output CAPTURED, not re-run.
+- done when: a failing run is captured with the test name and assertion, and the
+  cause is either fixed or shown to be one of the already-known flakes. If it is
+  one of this session's new tests, the fix is to make the poll windows generous
+  enough for a loaded machine rather than to loosen the assertion.
+- where: `hooks/budget.mjs` `reviveAutopilotIfDead`/`ensureAutopilot`,
+  `watcher/start-autopilot.cmd`'s "already running" probe (same shape in
+  `start-clearbot.cmd` on `main`)
+- what: found live on Kyle's machine while smoke-testing Task 6, not
+  theorised. `clearbot.ps1` pid 20580 was RUNNING, while
+  `watcher/clearbot.heartbeat` was last written 12:40 and the last line in
+  `watcher/clearbot.log` was 11:57 — at 23:01. Roughly eleven hours of a
+  watcher that exists but does nothing. This session's own SessionStart
+  banner said "the autopilot watcher looks DEAD (stale heartbeat)", which
+  was correct and had been correct all day, and nothing acted on it.
+  The two halves of self-healing use different definitions of dead:
+  `reviveAutopilotIfDead` says dead = heartbeat older than 30s, and on that
+  basis calls `ensureAutopilot()`, which shells `start-autopilot.cmd`; but
+  that script's FIRST action is to count processes matching
+  `-File*autopilot.ps1*` and `exit 0` if any exist. A hung watcher satisfies
+  "a process exists" forever, so the revive is a permanent no-op: the hook
+  re-fires it at every single turn boundary and the starter declines every
+  time. OI-007 closed the CRASHED-watcher case (no process) and the REBOOT
+  case (Startup launcher). The HUNG case is the one failure mode neither
+  half covers, and it is the one that is indistinguishable from healthy to
+  the only check that gates the restart.
+- why open: the fix is a real behaviour change to the single entry point
+  every caller shares (the turn-boundary hook, the Command Center's Start
+  button, and the Startup-folder launcher), and it must not break the
+  property that makes that entry point safe today — running it twice against
+  a HEALTHY watcher must still be a no-op, and a deliberate
+  `autopilot.stop` must still stick. Logged rather than bolted onto Task 6's
+  close, which was a rename.
+- done when: `start-autopilot.cmd`'s probe treats "a process exists but its
+  heartbeat is stale" as dead rather than as running — killing the wedged
+  instance and starting a fresh one — with a test proving all three cases
+  separately: a healthy watcher is left alone (still idempotent), a wedged
+  one is replaced, and an engaged kill switch still suppresses both. Also
+  worth deciding, separately: nothing anywhere escalates a watcher that has
+  been stale for hours, so the same eleven-hour silence would recur even
+  with the restart fixed if the fresh instance wedged the same way — the
+  root cause of the wedge itself is NOT diagnosed by this entry.
+
+## OI-049 hooks/usage.mjs hardcodes its policy.json fallback path, and fixing it drags ~30% pre-existing coverage into covgate's floor
+- RENUMBERED 2026-08-06, was OI-045 on this branch; `main` had already used 045
+  for a clearbot settle-test flake. Commits `abbe4bc` and `7a54114` name the old
+  number, as do in-code citations that were updated with this renumber.
+- opened: 2026-08-05
+- rank: maintainability
+- where: `hooks/usage.mjs` (`POLICY_PATH` fallback), `tools/pathgate.mjs` `DEFERRED`
+- what: sub-project J's Task 3 (de-hardcode every absolute repo path so the
+  Task 12 folder rename is a single command, not an audit) hit one file it
+  could not fix in place: `hooks/usage.mjs`'s `POLICY_PATH` default is still
+  `"C:/code/guards/policy.json"`. Unlike `hooks/budget.mjs` (genuinely
+  subprocess-only, 0% is the honest floor per `tests.subprocessOnlyLibs`),
+  `usage.mjs` is a normal importable module whose existing suite
+  (`hooks/usage.test.mjs`) only covers the OI-005 per-file bucket cache, not
+  the rest of the ~570-line file (~30-65% measured depending on which suite
+  runs). Any edit — even a one-line path fix — makes covgate grade the WHOLE
+  file against the 100/100/90 floor, which it is nowhere near. Fixing the
+  path first would either fail the gate honestly or require writing a full
+  test suite for an unrelated module inside a naming-migration task.
+  `tools/pathgate.mjs`'s `DEFERRED` map carries this one finding by exact
+  file+text match (not a blanket allowlist — the match breaks the moment the
+  line changes) so `node tools/pathgate.mjs` stays green while this is
+  tracked rather than silently skipped.
+- why open: out of scope for sub-project J; real fix is test depth, which is
+  sub-project G's job (`OI-019`, test-depth program).
+- UPDATE 2026-08-05 (second pass, same day): **three of the four done-when
+  clauses are now met.** `POLICY_PATH` is gone — the policy path derives from
+  `core/paths.mjs` — and `tools/pathgate.mjs`'s `DEFERRED` map is empty again.
+  Coverage went **65.5/52.5/55.3 -> 99.3/88.5/82.6** on 21 new tests.
+  The root cause was not simply "no tests": `hooks/usage.test.mjs` re-imported
+  the module under `./usage.mjs?t=${n}` per test, and node's lcov merge is
+  last-write-wins per file path, so every instance discarded the previous one's
+  coverage — the same trap `OI-006` found. Fixed the same way: every path
+  (`CLAUDE_CONFIG_DIR`, `ACC_SCAN_CACHE`, `ACC_POLICY`) resolves on CALL, the
+  bucket cache reloads when its path changes, and the whole suite now shares one
+  instance with no cache-busting anywhere.
+  Two real defects were found while doing it, both fixed: `cmdCheck` ran
+  `weekTotals()` — a full scan of every transcript in the rolling window — and
+  threw the result away unused, on the command `budget.mjs` polls behind a
+  10-minute cache; and the CLI was an inline `if (isMain)` block, invisible to
+  its own coverage, now an exported `main(argv)` returning an exit code.
+- STILL OPEN, and this is the whole remainder: covgate is **not** satisfied,
+  because two `catch` blocks are unreachable from a test on this platform —
+  `listSessions`'s `readdirSync(proj)` failure (a directory that lists but will
+  not read) and `bucketsOf`'s `statSync` failure (a file that lists but will not
+  stat). Both need OS-level fault injection: POSIX `chmod 000` would do it, but
+  this repo's own ledger already records that these suites run as root/admin on
+  Windows, where `chmod` does not block anything (see `OI-031`). They are real
+  runtime paths — a transcript tree being written concurrently genuinely loses
+  files mid-scan — so deleting them would be wrong, and a `branchFloorOverrides`
+  entry would not help since the miss is on LINES, which has no per-file
+  override.
+- done when: either those two paths get a genuine fault-injection seam (the
+  honest options are an injectable `fs` for `listSessions`/`bucketsOf`, or a
+  POSIX-only test that CI's Linux job runs and Windows skips — the latter is
+  cheaper and this repo already skips Windows-only tests the other way round),
+  or covgate grows a documented per-file LINE override with the same
+  proof-required discipline `branchFloorOverrides` has.
+- UPDATE 2026-08-05 (`23f6a4d`, Task 6's close): hit for the second time and
+  in the way this entry predicted. Finishing the watcher rename required
+  changing exactly one COMMENT in `hooks/usage.mjs` (line 493 named
+  `clearbot`, a file that no longer exists), and that alone made covgate
+  grade the whole file: 65.5% lines / 52.5% funcs / 55.3% branches against
+  100/100/90. Nothing was loosened to get around it — no override, no
+  `subprocessOnlyLibs` listing (it does not qualify; `hooks/usage.test.mjs`
+  performs zero subprocess spawns, so its low number is a real gap and not a
+  measurement artifact, unlike `hooks/statusline.mjs` which was verified and
+  listed in that same commit). The comment fix landed and this file is the
+  single remaining red in `node hooks/covgate.mjs`. Worth noting for whoever
+  picks this up: the gap is concentrated in `hooks/usage.mjs` lines 378-571
+  (the CLI/reporting half), not spread thinly, so it is a bounded piece of
+  work rather than a whole-file rewrite.
+- done when: `hooks/usage.mjs` has enough of its own suite to clear
+  covgate's 100/100/90 floor on the whole file, the `POLICY_PATH` default is
+  changed to `resolve("policy.json")` (`core/paths.mjs`), and the matching
+  entry is removed from `tools/pathgate.mjs`'s `DEFERRED` map.
 ## OI-048 hooks/lane.test.mjs is flaky, both under full-suite concurrency and occasionally standalone
 - opened: 2026-08-05
 - rank: reliability
@@ -337,8 +527,32 @@ line under `## Resolved`.
   autoApprove on that sentence is false, or (b) gates auto-approve (allowlist,
   or refuse scripts touching `config.protected` paths).
 
-## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
+## OI-015 [RETIRED 2026-08-05 — the screen it was waiting on no longer exists] guards-gui.ps1 interactive-lane wiring
 - rank: control
+- retired: 2026-08-05, on Kyle's direct observation at the machine, which is the
+  evidence this entry had been open for. He ran the smoke: pressing Go once
+  launched normally. Pressing Go a SECOND time is not possible — once a session
+  starts, the GUI replaces the Go button and its surrounding controls with
+  "AUTO-ACC is driving. Click to take over" plus Stop. So the double-launch this
+  entry existed to guard against is now prevented BY CONSTRUCTION rather than by
+  a busy MessageBox, and the "press Go twice, watch for the MessageBox" done-when
+  describes a screen that has since been redesigned away. A test cannot be
+  written for a control that is not reachable, and waiting for a human to
+  observe it would wait forever.
+- what remains covered, and by what: the reserve -> reown -> release handshake is
+  proven headlessly by `gui/guards-gui.test.mjs` against the real `hooks/lane.mjs`
+  (which is itself 44/44), so the LOGIC this entry cared about is tested. What is
+  genuinely no longer tested is the MessageBox rendering — because it is no
+  longer reachable from this path. If a future GUI change reintroduces a
+  simultaneous-launch route, that route needs its own entry; this one should not
+  be reopened, since it is written against the old screen.
+- NOT verified, and deliberately not claimed: the third clause (the interactive
+  slot directory disappearing within a few seconds of a session closing, via
+  both the Stop button and natural exit) was not exercised — the redesign made
+  the first two clauses unperformable and the session was not driven to a close
+  during the check. That is slot-lifetime behaviour, not double-launch
+  behaviour; if it is worth pinning it belongs in a fresh, accurately-scoped
+  entry rather than inside this one.
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
   `powershell.exe` (unlike when this entry was opened). Added
   `-TestInteractiveLane` to guards-gui.ps1 — headlessly drives the exact

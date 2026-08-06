@@ -5,7 +5,7 @@ import path from "node:path";
 
 // One sandbox dir per run; the spec file reads the same env var to reset the
 // fixture between tests. The server re-reads policy.json on every request
-// (kernel/policy.mjs never caches), so no restarts are needed.
+// (core/policy.mjs never caches), so no restarts are needed.
 const dir = process.env.ACC_GUI_E2E_DIR || fs.mkdtempSync(path.join(os.tmpdir(), "acc-gui-e2e-"));
 process.env.ACC_GUI_E2E_DIR = dir;
 

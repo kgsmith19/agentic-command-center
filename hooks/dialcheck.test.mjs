@@ -1,4 +1,4 @@
-// node --test hooks/dialcheck.test.mjs   (run from C:\code\guards)
+// node --test hooks/dialcheck.test.mjs   (run from the repo root)
 //
 // Hermetic: every rule is checked against inline fixtures, and the two path
 // helpers + main() are driven through env vars pointing at a throwaway tree.
@@ -18,10 +18,10 @@ const m = await import("./dialcheck.mjs");
 // at 18:42 on 2026-08-04 and stripped hooks/route.mjs out of settings.json,
 // while policy.json advertised autoCd.enabled:true for hours afterwards.
 const withHook = {
-  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/guards/hooks/route.mjs"' }] }] },
+  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/example-project/hooks/route.mjs"' }] }] },
 };
 const withoutHook = {
-  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/guards/hooks/testplan.mjs"' }] }] },
+  hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "C:/code/example-project/hooks/testplan.mjs"' }] }] },
 };
 
 test("the real 2026-08-04 divergence: dial says enabled, hook is not registered", () => {
@@ -102,7 +102,7 @@ test("policyPath and settingsPath honour their env overrides, and fall back pred
 
 // main() is exercised in-process, not as a subprocess: a spawned process is
 // invisible to this file's own coverage instrumentation (the lesson OI-006 paid
-// for on goal.mjs, and the reason budget.mjs still measures 0%).
+// for on standing.mjs, and the reason budget.mjs still measures 0%).
 test("main() returns 1 and names the divergence, 0 when clean", () => {
   const savedPolicy = process.env.ACC_POLICY;
   const savedSettings = process.env.ACC_SETTINGS;

@@ -1,4 +1,4 @@
-// node --test gui/guards-gui.test.mjs  (run from C:\code\guards)
+// node --test gui/guards-gui.test.mjs  (run from the repo root)
 //
 // OI-015: guards-gui.ps1's interactive-lane wiring (Enter-InteractiveLane /
 // Complete-InteractiveLaneHandoff / Exit-InteractiveLane) had zero coverage

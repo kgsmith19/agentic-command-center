@@ -32,7 +32,7 @@ jobs:
       # `npm test` is the portable list (package.json). --test-concurrency=1 is
       # baked into that script as cheap insurance against a known timing-
       # sensitive flake in runner.test.mjs's "a hung run is killed PROMPTLY"
-      # case under loaded/nested sandboxes. hooks/clearbot.test.mjs is
+      # case under loaded/nested sandboxes. hooks/autopilot.test.mjs is
       # deliberately excluded from the portable list — it spawns real
       # cmd.exe/powershell consoles and throws uncaught async exceptions
       # after test-end on non-Windows, which can crash the whole
@@ -70,12 +70,12 @@ jobs:
             fi
           fi
       # Explicit list, not covgate's default auto-discovery — left to default
-      # it would also pick up hooks/clearbot.test.mjs (Windows-only) and fail
+      # it would also pick up hooks/autopilot.test.mjs (Windows-only) and fail
       # this job for the wrong reason (a red fast tier) instead of the real
       # one (a coverage floor miss).
       - name: node hooks/covgate.mjs
         env:
-          ACC_COVGATE_TESTS: "hooks/goal.test.mjs,hooks/usage.test.mjs,hooks/statusline.test.mjs,hooks/testplan.test.mjs,hooks/covgate.test.mjs,hooks/prompts.test.mjs,hooks/cmdline.test.mjs,hooks/lane.test.mjs,hooks/route.test.mjs,hooks/budget.test.mjs,runner/runner.test.mjs,kernel/adapter.test.mjs,kernel/adapters/claude-code.test.mjs,kernel/autonomy.test.mjs,kernel/contract.test.mjs,kernel/credentials.test.mjs,kernel/guard.test.mjs,kernel/guardhook.test.mjs,kernel/ledger.test.mjs,kernel/policy.test.mjs,kernel/run.test.mjs,kernel/settings.test.mjs,kernel/verifier.test.mjs,gui/server.test.mjs"
+          ACC_COVGATE_TESTS: "core/standing.test.mjs,hooks/usage.test.mjs,hooks/statusline.test.mjs,hooks/testplan.test.mjs,hooks/covgate.test.mjs,hooks/prompts.test.mjs,hooks/cmdline.test.mjs,hooks/lane.test.mjs,hooks/route.test.mjs,hooks/budget.test.mjs,runner/runner.test.mjs,core/adapter.test.mjs,core/adapters/claude-code.test.mjs,core/autonomy.test.mjs,core/contract.test.mjs,core/credentials.test.mjs,core/guard.test.mjs,core/guardhook.test.mjs,core/ledger.test.mjs,core/policy.test.mjs,core/run.test.mjs,core/settings.test.mjs,core/verifier.test.mjs,gui/server.test.mjs"
         run: node hooks/covgate.mjs
 
   windows-integration:

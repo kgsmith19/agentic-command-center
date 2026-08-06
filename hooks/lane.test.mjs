@@ -1,4 +1,4 @@
-// node --test hooks/lane.test.mjs  (run from C:\code\guards)
+// node --test hooks/lane.test.mjs  (run from the repo root)
 //
 // Hermetic: ACC_LANE_DIR and ACC_POLICY point at throwaway trees BEFORE the
 // import (lane.mjs reads both lazily per call, but the discipline matches

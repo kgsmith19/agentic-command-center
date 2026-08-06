@@ -2,7 +2,7 @@ vault.json
 runbox/
 runner/state/
 runner/logs/
-runner/goals/
+runner/standing/
 runner/clear-requests/
 runner/queued/
 runner/stop/
@@ -11,9 +11,9 @@ runner/jobs/
 runner/prompts/
 watcher/*.log
 watcher/*.png
-watcher/clearbot.stop
+watcher/autopilot.stop
 *.bak*
-watcher/clearbot.heartbeat
+watcher/autopilot.heartbeat
 watcher/claude-cap-watch.state.json
 node_modules/
 test-results/

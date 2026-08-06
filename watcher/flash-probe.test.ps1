@@ -19,7 +19,7 @@ $run = Get-Date '2026-08-04T19:04:00'
 
 Check 'a window owned by the cap-watch script is the flash, no timing needed' (
     Test-IsFlashWindow -WindowClass 'PseudoConsoleWindow' `
-        -CommandLine 'powershell.exe -NoProfile -File "C:\code\guards\watcher\claude-cap-watch.ps1"')
+        -CommandLine 'powershell.exe -NoProfile -File "C:\code\myrepo\watcher\claude-cap-watch.ps1"')
 
 # The exact window measured on 2026-08-04: owned by WindowsTerminal.exe, not by
 # anything we configured. Attribution is by lockstep timing with the firing.

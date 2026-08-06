@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // covgate.mjs — the changed-file coverage gate the test contract binds.
 //
-//   node hooks/covgate.mjs          (run from C:\code\guards)
+//   node hooks/covgate.mjs          (run from the repo root)
 //
 // WHAT IT PROVES: every lib file you TOUCHED this change is fully exercised by
 // the fast tier. Scope is deliberate — repo-wide 100% is a vanity number that
@@ -57,7 +57,7 @@ const POLICY = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.jso
 // their own test files deliberately clear NODE_V8_COVERAGE before every spawn
 // (see e.g. hooks/budget.test.mjs's own comment) to stop that nested process
 // writing into — and corrupting — this run's own coverage directory
-// (reproduced 2026-08-02, hooks/clearbot.test.mjs's matching fix). The tests
+// (reproduced 2026-08-02, hooks/autopilot.test.mjs's matching fix). The tests
 // are real and thorough; V8's coverage merge is structurally blind to them.
 // Floor 0 here means "unmeasurable", not "untested" — listing a file here is
 // not a way to duck a real gap, so a file only belongs on this list when its
@@ -81,16 +81,16 @@ export function floors(file) {
 // meet in the middle regardless of who emitted which slash.
 export const normPath = (p) => path.resolve(String(p)).replaceAll("\\", "/").toLowerCase();
 
-// Lib files only: .mjs directly under hooks/, runner/, kernel/, gui/, or
-// tools/ (kernel/ allows one level of nesting for kernel/adapters/<harness>.mjs,
+// Lib files only: .mjs directly under hooks/, runner/, core/, gui/, or
+// tools/ (core/ allows one level of nesting for core/adapters/<harness>.mjs,
 // gui/ for gui/e2e/<spec>.mjs), minus tests and harnesses — .test.mjs
-// (node:test), .e2e.mjs (kernel/loop proof runs), and .spec.mjs (Playwright,
+// (node:test), .e2e.mjs (core/loop proof runs), and .spec.mjs (Playwright,
 // gui/e2e/) are all the instrument, never the gated subject. The GATE'S OWN
 // SUBJECT, exported for its suite.
 export function changedLibFiles(names) {
   return [...new Set(names)]
     .map((n) => String(n).replaceAll("\\", "/"))
-    .filter((n) => /^(hooks|runner|kernel|gui|tools)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e|spec)\.mjs$/.test(n));
+    .filter((n) => /^(hooks|runner|kernel|gui|tools|core)\/(?:[^/]+\/)?[^/]+\.mjs$/.test(n) && !/\.(test|e2e|spec)\.mjs$/.test(n));
 }
 
 // lcov per file: DA:<line>,<hits> (lines), FNDA:<hits>,<name> (functions),
@@ -182,7 +182,7 @@ function main() {
   // the REAL guards/hooks tests while gating a throwaway fixture.
   const tests = process.env.ACC_COVGATE_TESTS
     ? process.env.ACC_COVGATE_TESTS.split(/[ ,]+/).filter(Boolean)
-    : ["hooks", "runner", "kernel", "kernel/adapters", "gui", "tools"].flatMap((d) => {
+    : ["hooks", "runner", "kernel", "core/adapters", "gui", "tools", "core"].flatMap((d) => {
         let files = [];
         try { files = fs.readdirSync(path.join(cwd, d)).filter((f) => f.endsWith(".test.mjs")); } catch {}
         return files.map((f) => path.join(d, f));

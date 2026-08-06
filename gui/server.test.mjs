@@ -1,4 +1,4 @@
-// node --test gui/server.test.mjs  (run from C:\code\guards)
+// node --test gui/server.test.mjs  (run from the repo root)
 import { test, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

@@ -111,7 +111,7 @@ export function runClaudeOnce(job) {
       // runTimeoutMin owns the clock; never let the 600s print-mode
       // background-wait ceiling kill a session mid-task (lost run 2).
       // ACC_PTY must not leak: a runner child that inherited it would
-      // masquerade as the embedded session and route clearbot's pipe writes
+      // masquerade as the embedded session and route autopilot's pipe writes
       // into the wrong terminal. NODE_V8_COVERAGE must not leak either: this
       // spawn is a hard `killTree` target on timeout (taskkill /t /f on
       // Windows, SIGTERM on the process group on POSIX), and a coverage-

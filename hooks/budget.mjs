@@ -14,11 +14,12 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, activeGoals } from "./goal.mjs";
+import { bindSession, appendCycle, logTail, standingForSession, recordTurnEnd, activeStanding } from "../core/standing.mjs";
 import { buildConsoleTable } from "./consoletable.mjs";
+import { resolve } from "../core/paths.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
+// ACC_ROOT redirects every runner/ path (state, logs, standing orders, clear-requests) at a
 // throwaway tree. It exists so the tests can exercise THIS file instead of a
 // copy: a test that reset the live runner/state would delete the .window files
 // running sessions depend on, which is precisely how auto-clear died once.
@@ -26,7 +27,7 @@ const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.re
 const STATE = path.join(ROOT, "runner", "state");
 const LOGS = path.join(ROOT, "runner", "logs");
 const CLEARREQ = path.join(ROOT, "runner", "clear-requests");
-const GOALSDIR = path.join(ROOT, "runner", "goals");
+const STANDINGDIR = path.join(ROOT, "runner", "standing");
 const QUEUEDIR = path.join(ROOT, "runner", "queued");
 const HEADLESS = process.env.CLAUDE_CODE_RUNNER === "1";
 
@@ -44,7 +45,7 @@ function ensureDirs() {
   for (const d of [STATE, LOGS, CLEARREQ]) fs.mkdirSync(d, { recursive: true });
 }
 
-// Record which terminal window this session lives in, so clearbot.ps1 can type
+// Record which terminal window this session lives in, so autopilot.ps1 can type
 // /clear into THAT window and nothing else. Runs once, at SessionStart. Failing
 // here only costs auto-clear; the session is unaffected (hooks fail open).
 function captureWindow(sid) {
@@ -70,13 +71,24 @@ function captureWindow(sid) {
 // fails SILENTLY (the request file just sits there). So every interactive session
 // start makes sure it is running. Fire-and-forget: detached, never waited on, so
 // it cannot slow the session down or wedge it if PowerShell is unhappy.
-function ensureClearbot() {
+//
+// ONE deliberate exception, and it is not fire-and-forget: killWedgedAutopilot()
+// below blocks, because the kill has to land BEFORE the start or the start just
+// declines again. Measured at ~500ms, capped at 5s, and only reachable when the
+// heartbeat is ALREADY stale — i.e. autonomy is already broken, which is worth
+// half a second at a turn boundary. Saying so here rather than leaving the
+// sentence above quietly false.
+// A deliberate stop must STICK. start-autopilot.cmd removes the stop file, so
+// without this check every new session would silently re-arm a watcher Kyle had
+// turned off on purpose. One definition, read by everything that acts on the
+// watcher — the restart AND the OI-050 wedge kill — so the two can never come
+// to different conclusions about whether the switch is engaged.
+const autopilotStopped = () => fs.existsSync(path.join(ROOT, "watcher", "autopilot.stop"));
+
+function ensureAutopilot() {
   try {
-    // A deliberate stop must STICK. start-clearbot.cmd removes the stop file, so
-    // without this check every new session would silently re-arm a watcher Kyle
-    // had turned off on purpose.
-    if (fs.existsSync(path.join(ROOT, "watcher", "clearbot.stop"))) return;
-    const cmd = path.join(ROOT, "watcher", "start-clearbot.cmd");
+    if (autopilotStopped()) return;
+    const cmd = path.join(ROOT, "watcher", "start-autopilot.cmd");
     if (!fs.existsSync(cmd)) return;
     const child = spawn("cmd.exe", ["/c", cmd], {
       detached: true,
@@ -88,23 +100,103 @@ function ensureClearbot() {
 }
 
 // SELF-HEALING (guards OI-007): the watcher is the only thing that can clear or
-// resume a session, and when it dies the goal loop dies silently with it. A
+// resume a session, and when it dies the standing order loop dies silently with it. A
 // turn boundary is exactly where that matters, so check there: one stat, and
-// ensureClearbot() is idempotent (start-clearbot.cmd no-ops when a watcher is
+// ensureAutopilot() is idempotent (start-autopilot.cmd no-ops when a watcher is
 // already up) and still honours the deliberate kill switch. A MISSING heartbeat
 // counts as dead here - unlike the status line, which stays quiet rather than
 // crying wolf, this path only costs a no-op start.
 const HEARTBEAT_STALE_MS = 30_000;
-function reviveClearbotIfDead(policy) {
+function reviveAutopilotIfDead(policy) {
   try {
     if (policy.autoClear?.enabled === false) return;
     let stale = true;
     try {
-      stale = Date.now() - fs.statSync(path.join(ROOT, "watcher", "clearbot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
+      stale = Date.now() - fs.statSync(path.join(ROOT, "watcher", "autopilot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
     } catch {
       stale = true;
     }
-    if (stale) ensureClearbot();
+    if (stale && !autopilotStopped()) {
+      killWedgedAutopilot();
+      ensureAutopilot();
+    }
+  } catch {}
+}
+
+// guards OI-050: "dead" has to mean the same thing here and in the starter.
+// This function calls it dead on a stale heartbeat; start-autopilot.cmd calls it
+// alive whenever a matching process exists. A HUNG watcher satisfies the second
+// forever, so the revive above fired at every turn boundary and the start
+// declined every time - found live, with a heartbeat frozen eleven hours
+// earlier and a watcher process sitting there the whole time. A stale heartbeat
+// means the instance is not doing its job whether it is hung or gone, so clear
+// it out and let ensureAutopilot() put a fresh one up. Only reached when the
+// heartbeat is already stale, so a HEALTHY watcher is never a candidate.
+//
+// Scoped to THIS root's own watcher script rather than a machine-wide name
+// match: a worktree must never kill the canonical checkout's watcher. The $PID
+// exclusion is load-bearing, not defensive - the script path is embedded in
+// this very command string, so the probe matches itself without it, which is
+// precisely the bug guards OI-001 was. Contains() rather than -like keeps a
+// bracket in a real path from being read as a wildcard.
+// Replacing a wedged watcher is silent by construction, so one that hangs every
+// few minutes is replaced every few minutes and nothing ever says so. Recorded
+// here and escalated at SessionStart (OI-050): restarting it is not the same as
+// fixing it, and only a COUNT distinguishes the two.
+const WEDGE_LOG = () => path.join(ROOT, "watcher", "autopilot-wedges.jsonl");
+const WEDGE_WINDOW_MS = 2 * 3600_000;
+
+function recordWedge(pids) {
+  try {
+    fs.mkdirSync(path.dirname(WEDGE_LOG()), { recursive: true });
+    // Bounded: this is a breadcrumb trail, not an audit log, and it is appended
+    // to from a turn boundary that must never get slower over time.
+    const kept = readWedges().slice(-19);
+    kept.push({ ts: Date.now(), pids });
+    fs.writeFileSync(WEDGE_LOG(), kept.map((w) => JSON.stringify(w)).join("\n") + "\n");
+  } catch {}
+}
+
+function readWedges() {
+  try {
+    return fs
+      .readFileSync(WEDGE_LOG(), "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function recentWedges(withinMs = WEDGE_WINDOW_MS) {
+  const cutoff = Date.now() - withinMs;
+  return readWedges().filter((w) => Number(w.ts) >= cutoff).length;
+}
+
+function killWedgedAutopilot() {
+  try {
+    const script = path.join(ROOT, "watcher", "autopilot.ps1");
+    const lit = `'${script.replace(/'/g, "''")}'`;
+    const out = execFileSync(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+        `$me=$PID; $t=${lit}; ` +
+        `Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | ` +
+        `Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -and ` +
+        `$_.CommandLine.Contains('-File') -and $_.CommandLine.Contains($t) } | ` +
+        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }`],
+      // 5s, not 15: this blocks a turn boundary, and a WMI query that has not
+      // answered in five seconds is not going to answer usefully. Giving up
+      // costs one more stale cycle; hanging costs the user fifteen seconds.
+      { encoding: "utf8", windowsHide: true, timeout: 5000 },
+    );
+    // Only a kill that actually happened is a wedge. A stale heartbeat with no
+    // process behind it is an ordinary dead watcher, which the existing warning
+    // already covers and which restarting genuinely does fix.
+    const pids = String(out || "").split(/\r?\n/).map((l) => l.trim()).filter((l) => /^\d+$/.test(l));
+    if (pids.length) recordWedge(pids.map(Number));
   } catch {}
 }
 
@@ -307,13 +399,13 @@ function lastUserText(transcript) {
   return String(last || "").trim();
 }
 
-// Exactly the constants clearbot types (watcher/clearbot.ps1 $KICK and
+// Exactly the constants autopilot types (watcher/autopilot.ps1 $KICK and
 // $QUEUEKICK). Anything else came from a human, so the kick backs off.
-const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt."];
+const KICK_CONSTANTS = ["Continue the active ACC standing order.", "Run the queued prompt."];
 
 // ------------------------------------------------------------- handlers
 
-// Bind this session to the goal that owns its console (or the one the Command
+// Bind this session to the standing order that owns its console (or the one the Command
 // Center launched it for) and hand the model everything it needs to carry on
 // without a human retyping anything.
 //
@@ -321,45 +413,45 @@ const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt.
 // the work is finished, so the two exit commands are stated as the last thing in
 // the block, in full, with the id already substituted - there is no id to look
 // up and no ambiguity about what "done" means.
-function goalContext(p, win, policy) {
-  const goal = bindSession({
+function standingContext(p, win, policy) {
+  const standing = bindSession({
     sessionId: p.session_id,
     consolePid: win && win.consolePid,
     cwd: p.cwd,
-    goalId: process.env.ACC_GOAL || "",
-    consoles: buildConsoleTable(win, { activeGoals, execFileSync, here: HERE }),
+    standingId: process.env.ACC_STANDING || "",
+    consoles: buildConsoleTable(win, { activeStanding, execFileSync, here: HERE }),
   });
-  if (!goal) return "";
+  if (!standing) return "";
 
-  const cycle = Number(goal.cycles || 0);
+  const cycle = Number(standing.cycles || 0);
   const head =
     cycle === 0
-      ? `[ACC GOAL ${goal.id}] The Command Center started this session to do the following. Begin work on it now.`
-      : `[ACC GOAL ${goal.id}] RESUMED - this is continuation ${cycle + 1}. The previous session hit the context budget and was cleared; you are the same work, not a new task. Pick up where the progress log stops.`;
+      ? `[ACC STANDING ${standing.id}] The Command Center started this session to do the following. Begin work on it now.`
+      : `[ACC STANDING ${standing.id}] RESUMED - this is continuation ${cycle + 1}. The previous session hit the context budget and was cleared; you are the same work, not a new task. Pick up where the progress log stops.`;
 
-  const parts = [head, "", goal.text, ""];
-  if (goal.cwd) parts.push(`Working folder: ${goal.cwd}`);
+  const parts = [head, "", standing.text, ""];
+  if (standing.cwd) parts.push(`Working folder: ${standing.cwd}`);
   if (cycle > 0) {
     parts.push(
       "",
-      `Progress so far (from ${path.join(GOALSDIR, goal.id + ".log.md")}, most recent last):`,
+      `Progress so far (from ${path.join(STANDINGDIR, standing.id + ".log.md")}, most recent last):`,
       "",
-      logTail(goal.id, 3000).trim()
+      logTail(standing.id, 3000).trim()
     );
   }
   parts.push(
     "",
-    `[ACC GOAL] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
-    `  - finished, everything verified:  node C:/code/guards/hooks/goal.mjs done ${goal.id}`,
-    `  - genuinely blocked on a human:   node C:/code/guards/hooks/goal.mjs blocked ${goal.id} --why "<one line>"`,
-    `Until one of those runs, ACC will keep resuming this goal after every clear.`
+    `[ACC STANDING] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
+    `  - finished, everything verified:  node ${resolve("core/standing.mjs")} done ${standing.id}`,
+    `  - genuinely blocked on a human:   node ${resolve("core/standing.mjs")} blocked ${standing.id} --why "<one line>"`,
+    `Until one of those runs, ACC will keep resuming this standing order after every clear.`
   );
   return parts.join("\n");
 }
 
 // A prompt that route.mjs could not hand back as keystrokes - multi-line, or
 // longer than the injector's limit. It travels as a FILE keyed by console pid
-// (the same thread of continuity goals use, because the session id dies with the
+// (the same thread of continuity standing orders use, because the session id dies with the
 // clear) and is injected here, into the session that comes up after the clear.
 //
 // Consumed once: the file is deleted as it is read, so a queued prompt can never
@@ -404,15 +496,15 @@ function onSessionStart(p, policy) {
   } catch {}
   // Interactive only: learn which terminal window to type /clear into later.
   let win = null;
-  // A capture that blips must not cost the session its goal or its queued
+  // A capture that blips must not cost the session its standing order or its queued
   // prompt: both are addressed by console pid, and a previously recorded one is
   // still the right console. Fall back to what was written last time.
   if (!HEADLESS) {
     // An ACC-hosted pty session has no HWND to find: the GUI is the terminal.
-    // The persistent process across /clear (what consolePid means to goal
+    // The persistent process across /clear (what consolePid means to standing order
     // binding) is the claude process - NOT this hook's raw parent, which is a
     // transient bash/cmd wrapper that dies with the turn (recording it gave
-    // clearbot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
+    // autopilot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
     if (process.env.ACC_PTY) {
       const chain = ancestorChain();
       win = { ok: true, hwnd: 0,
@@ -423,7 +515,7 @@ function onSessionStart(p, policy) {
     } else {
       win = captureWindow(p.session_id) || readJson(statePath(p.session_id, "window"), null);
     }
-    if (policy.autoClear?.enabled !== false) ensureClearbot();
+    if (policy.autoClear?.enabled !== false) ensureAutopilot();
   }
   // Record the status file's mtime so the Stop waiting-guard can tell whether
   // this run actually checkpointed.
@@ -443,13 +535,13 @@ function onSessionStart(p, policy) {
       `[ACC] Profile: ${policy.activeProfile} (launched from the Command Center). Its subagent rules apply to this session; the context budget comes from the Process-tab dials.`
     );
   }
-  // A goal is what makes this session a continuation rather than a fresh start.
+  // A standing order is what makes this session a continuation rather than a fresh start.
   // It is adopted by CONSOLE, so this fires identically on the launch and on
   // every session that comes up after a /clear. Failing here costs auto-resume
   // and nothing else - hooks fail open.
   try {
-    const goal = goalContext(p, win, policy);
-    if (goal) lines.push(goal);
+    const standing = standingContext(p, win, policy);
+    if (standing) lines.push(standing);
   } catch {}
   try {
     const queued = queuedPromptContext(win);
@@ -457,12 +549,19 @@ function onSessionStart(p, policy) {
   } catch {}
 
   // If the watcher is down, this session has no auto-clear and no auto-resume.
-  // Say it once, at the top, instead of letting the goal loop fail silently.
+  // Say it once, at the top, instead of letting the standing order loop fail silently.
   try {
-    const hb = path.join(ROOT, "watcher", "clearbot.heartbeat");
+    const hb = path.join(ROOT, "watcher", "autopilot.heartbeat");
     if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
-      lines.push(
-        `[ACC] WARNING: the clearbot watcher looks DEAD (stale heartbeat). Auto-clear and auto-resume will NOT fire, so this session will not be continued for you. Start it: guards\\watcher\\start-clearbot.cmd`
+      // A watcher being restarted over and over is a DIFFERENT problem from one
+      // that is simply down, and the restart hides it (OI-050). Say which.
+      const wedges = recentWedges();
+      if (wedges >= 2) {
+        lines.push(
+          `[ACC] WARNING: the autopilot watcher has wedged ${wedges} times in the last 2h and been restarted each time — restarting it is NOT fixing it. It is running but not beating, so auto-clear and auto-resume keep dying. Look at guards\\watcher\\autopilot.log and guards\\watcher\\autopilot-wedges.jsonl.`
+        );
+      } else lines.push(
+        `[ACC] WARNING: the autopilot watcher looks DEAD (stale heartbeat). Auto-clear and auto-resume will NOT fire, so this session will not be continued for you. Start it: guards\\watcher\\start-autopilot.cmd`
       );
     }
   } catch {}
@@ -544,7 +643,7 @@ const WAITING_RE =
 
 function onStop(p, policy) {
   ensureDirs();
-  reviveClearbotIfDead(policy);
+  reviveAutopilotIfDead(policy);
 
   // --- waiting guard (headless only: nothing re-invokes a -p session) ---
   // stop_hook_active means a Stop hook (this one or another) already blocked
@@ -579,13 +678,13 @@ function onStop(p, policy) {
   const ctx = contextOf(p.transcript_path);
   const { hardK } = policy.context;
   if (ctx < hardK * 1000) {
-    // LIVENESS (guards OI-002): a goal session that ends its turn UNDER the
+    // LIVENESS (guards OI-002): a standing order session that ends its turn UNDER the
     // ceiling gets no clear, and therefore no resume - the loop used to die
-    // right here, silently. Re-arm the kick and let goal.mjs decide when
+    // right here, silently. Re-arm the kick and let standing.mjs decide when
     // firing it is safe. Fails open: liveness must never cost a turn its
     // clean exit.
     try {
-      const g = goalForSession(p.session_id);
+      const g = standingForSession(p.session_id);
       if (g) recordTurnEnd(g.id, { human: !KICK_CONSTANTS.includes(lastUserText(p.transcript_path)) });
     } catch {}
     allow();
@@ -606,42 +705,42 @@ function onStop(p, policy) {
   }
 
   // Latched: the checkpoint turn is done. Budget WINS from here (OI-011): a
-  // /goal Stop hook may keep blocking the turn, so this path must fire on
+  // /standing order Stop hook may keep blocking the turn, so this path must fire on
   // every Stop until the clear actually lands - stop_hook_active no longer
   // short-circuits it. appendCycle is one-shot so blocked loops don't spam.
   if (HEADLESS) allow(); // the runner relaunch IS the clear
 
-  // If a goal owns this session, its closing summary IS the handoff to the next
+  // If a standing order owns this session, its closing summary IS the handoff to the next
   // continuation. Captured automatically from the checkpoint turn the block above
   // just forced, so the model carries no extra burden and cannot forget to do it.
-  let goal = null;
+  let standing = null;
   try {
-    goal = goalForSession(p.session_id);
+    standing = standingForSession(p.session_id);
     const cycled = statePath(p.session_id, "cycled");
-    if (goal && !fs.existsSync(cycled)) {
-      appendCycle(goal.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path) });
+    if (standing && !fs.existsSync(cycled)) {
+      appendCycle(standing.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path) });
       fs.writeFileSync(cycled, "1");
     }
   } catch {}
 
   // Interactive: hand off to the outside watcher, which types /clear as real
-  // keystrokes (hooks cannot clear context - see watcher/clearbot.ps1).
+  // keystrokes (hooks cannot clear context - see watcher/autopilot.ps1).
   const queued = policy.autoClear?.enabled !== false && requestClear(p, policy, ctx);
   process.stdout.write(
     JSON.stringify({
       systemMessage:
         `\n[ACC ctx ${K(ctx)}/${hardK}k] BUDGET REACHED - checkpoint written.\n` +
         (queued
-          ? `\n    >>> auto-clear requested - clearbot will type /clear <<<\n\n` +
+          ? `\n    >>> auto-clear requested - autopilot will type /clear <<<\n\n` +
             `  If nothing happens within ~5s the watcher is not running:\n` +
-            `    node C:/code/guards/hooks/budget.mjs clearbot-status\n`
+            `    node ${resolve("hooks/budget.mjs")} autopilot-status\n`
           : `\n    >>> TYPE /clear NOW <<<\n\n` +
             `  (auto-clear unavailable - no window captured for this session)\n`) +
-        (goal
-          ? `  Goal ${goal.id} is active - the next session adopts it automatically and\n` +
-            `  is resumed by the Command Center. Cycle ${goal.cycles} logged.\n`
+        (standing
+          ? `  Standing order ${standing.id} is active - the next session adopts it automatically and\n` +
+            `  is resumed by the Command Center. Cycle ${standing.cycles} logged.\n`
           : `  The next session re-primes itself from ${policy.runner.statusFile}.\n`) +
-        `  Verify the clear was real: node C:/code/guards/hooks/usage.mjs clears\n`,
+        `  Verify the clear was real: node ${resolve("hooks/usage.mjs")} clears\n`,
     })
   );
   process.exit(0);
@@ -658,7 +757,7 @@ function onPreToolUseAgent(p, policy) {
     deny(
       `[ACC KILL SWITCH] Rolling 7-day usage is at the RED line (${Math.round(weekTokens / 1e6)}M tokens). ` +
         `Subagent spawns are blocked and the runner is stopped. Main-thread work continues normally. ` +
-        `Clear it in the Command Center GUI (Process tab) or raise week.redTokens in C:/code/guards/policy.json.`
+        `Clear it in the Command Center GUI (Process tab) or raise week.redTokens in ${resolve("policy.json")}.`
     );
   }
 
@@ -672,7 +771,7 @@ function onPreToolUseAgent(p, policy) {
         `Do this work in the MAIN thread. Implementation of a slice task belongs in a runner session ` +
         `(fresh context by construction, far cheaper than an Opus subagent), not here.\n` +
         `If this genuinely needs fan-out: grant a window with ` +
-        `\`node C:/code/guards/hooks/budget.mjs fanout 30\` or the Command Center Process tab.`
+        `\`node ${resolve("hooks/budget.mjs")} fanout 30\` or the Command Center Process tab.`
     );
   }
 
@@ -743,28 +842,28 @@ function main() {
         transcript: "", ctx: 0, hardK: 0, ts: new Date().toISOString(),
       })
     );
-    console.log(`clear requested for ${sid} (consolePid ${w.consolePid}) - clearbot fires within ~2s`);
+    console.log(`clear requested for ${sid} (consolePid ${w.consolePid}) - autopilot fires within ~2s`);
     return;
   }
 
-  if (argv[0] === "clearbot-status") {
+  if (argv[0] === "autopilot-status") {
     ensureDirs();
-    const stop = path.join(ROOT, "watcher", "clearbot.stop");
+    const stop = path.join(ROOT, "watcher", "autopilot.stop");
     const running = execFileSync(
       "powershell",
       ["-NoProfile", "-Command",
        // must exclude the probe's own command line, which also contains the
        // pattern - otherwise this always reports "running".
        "$me=$PID; @(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | " +
-       "Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*clearbot.ps1*' }).Count"],
+       "Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*autopilot.ps1*' }).Count"],
       { encoding: "utf8", timeout: 15000, windowsHide: true }
     ).trim();
     const pending = fs.readdirSync(CLEARREQ).filter((f) => f.endsWith(".json"));
-    console.log(`clearbot processes : ${running}`);
-    console.log(`kill switch        : ${fs.existsSync(stop) ? "ENGAGED (clearbot.stop present)" : "off"}`);
+    console.log(`autopilot processes : ${running}`);
+    console.log(`kill switch        : ${fs.existsSync(stop) ? "ENGAGED (autopilot.stop present)" : "off"}`);
     console.log(`pending requests   : ${pending.length}${pending.length ? " -> " + pending.join(", ") : ""}`);
-    console.log(`log                : ${path.join(ROOT, "watcher", "clearbot.log")}`);
-    if (running === "0") console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-clearbot.cmd`);
+    console.log(`log                : ${path.join(ROOT, "watcher", "autopilot.log")}`);
+    if (running === "0") console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-autopilot.cmd`);
     return;
   }
 

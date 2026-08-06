@@ -90,7 +90,7 @@ try {
     [void][GW.Win]::EnumWindows($cb, [IntPtr]::Zero)
 
     # A missing WINDOW is not a missing CONSOLE. Injection is WriteConsoleInput
-    # addressed by pid (clearbot invariant 3) and never touches the hwnd, so a
+    # addressed by pid (autopilot invariant 3) and never touches the hwnd, so a
     # resolved consolePid is already everything the watcher needs. Requiring a
     # window here is what silently killed auto-clear for every session whose
     # terminal EnumWindows could not see - it failed exactly like "no session".

@@ -2,7 +2,7 @@
 // gui/server.mjs — rails of the web GUI (spec 2026-08-03-acc-oi-closure-design
 // §5-§6): the kernel-settings tab is the first migrated tab; later tabs mount
 // alongside. Loopback-only, ZERO business logic — reads and writes go through
-// kernel/policy.mjs, the same single owner the WinForms tab used.
+// core/policy.mjs, the same single owner the WinForms tab used.
 //
 // Ethos answer (OI-022's recorded tension): binds 127.0.0.1 only. A same-user
 // local process could already edit policy.json directly, so no new privilege
@@ -14,7 +14,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadKernelPolicy, saveKernelPolicy } from "../kernel/policy.mjs";
+import { loadKernelPolicy, saveKernelPolicy } from "../core/policy.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Exact-match route map — request input never touches a filesystem path, so

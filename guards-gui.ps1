@@ -443,10 +443,10 @@ $btnCBTest.Text = 'Clean up my newest session now'
 $chkAutoApprove = Add-Ctl $grpCB (New-Object System.Windows.Forms.CheckBox) 15 86 620 22
 $chkAutoApprove.Text = 'Also run Claude''s requested scripts automatically (no /approve needed)'
 # ---------- tab 5: Kernel (ACC-KERNEL-TAB) ----------
-# Edits the policy.json "kernel" block ONLY — kernel/policy.mjs re-reads that
+# Edits the policy.json "kernel" block ONLY — core/policy.mjs re-reads that
 # file on every guardhook fire, so a save here applies to the very next tool
 # call of a running kernel task, no restart (AC-U2). This is NOT a ledger
-# viewer; run history stays a `node kernel/ledger.mjs query` job (spec §15).
+# viewer; run history stays a `node core/ledger.mjs query` job (spec §15).
 $tabK = New-Tab 'Kernel'
 # The kernel settings UI is a WEB page now (gui/kernel.html served by
 # gui/server.mjs on 127.0.0.1) — the first tab migrated per spec
@@ -538,8 +538,8 @@ $lblS0b.ForeColor = [System.Drawing.Color]::FromArgb(90, 95, 100)
 $grpS1 = Add-Ctl $tabS (New-Object System.Windows.Forms.GroupBox) 15 74 650 176
 $grpS1.Text = ' Step 1 of 2   -   What are you working on, and where? '
 $grpS1.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-# Multi-line on purpose: this box is the GOAL, and a goal worth resuming rarely
-# fits on one line. It never becomes keystrokes (see hooks/goal.mjs), so newlines
+# Multi-line on purpose: this box is the standing order, and one worth resuming rarely
+# fits on one line. It never becomes keystrokes (see core/standing.mjs), so newlines
 # in here are safe.
 $txtTask = Add-Ctl $grpS1 (New-Object System.Windows.Forms.TextBox) 15 26 615 72
 $txtTask.Font = New-Object System.Drawing.Font('Segoe UI', 10)
@@ -585,17 +585,17 @@ $lblStartOut.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawi
 # The live half of the screen. Once Go is pressed this is the only thing Kyle
 # needs to look at: is it still going, how many restarts has it taken, and the
 # two ways to end it.
-$grpGoal = Add-Ctl $tabS (New-Object System.Windows.Forms.GroupBox) 15 504 650 96
-$grpGoal.Text = ' What Claude is working on now '
-$grpGoal.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-$lblGoal = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Label) 15 24 615 26
-$lblGoal.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-$btnGoalDone = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Button) 15 54 200 28
-$btnGoalDone.Text = 'Mark it finished'
-$btnGoalStop = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Button) 225 54 200 28
-$btnGoalStop.Text = 'Stop restarting it'
-$btnGoalLog = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Button) 435 54 195 28
-$btnGoalLog.Text = 'Open the progress log'
+$grpStanding = Add-Ctl $tabS (New-Object System.Windows.Forms.GroupBox) 15 504 650 96
+$grpStanding.Text = ' What Claude is working on now '
+$grpStanding.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$lblStanding = Add-Ctl $grpStanding (New-Object System.Windows.Forms.Label) 15 24 615 26
+$lblStanding.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$btnStandingDone = Add-Ctl $grpStanding (New-Object System.Windows.Forms.Button) 15 54 200 28
+$btnStandingDone.Text = 'Mark it finished'
+$btnStandingStop = Add-Ctl $grpStanding (New-Object System.Windows.Forms.Button) 225 54 200 28
+$btnStandingStop.Text = 'Stop restarting it'
+$btnStandingLog = Add-Ctl $grpStanding (New-Object System.Windows.Forms.Button) 435 54 195 28
+$btnStandingLog.Text = 'Open the progress log'
 
 $lblS3 = Add-Ctl $tabS (New-Object System.Windows.Forms.Label) 15 606 650 40
 $lblS3.Text = 'Sessions you start from a terminal still work exactly as before - they just use the standard limits instead of the profile you pick here.'
@@ -851,16 +851,16 @@ function Invoke-Node([string]$Script, [string[]]$NodeArgs) {
     return Invoke-Proc -FileName 'node' -Arguments ($quoted -join ' ')
 }
 
-function Refresh-Clearbot {
-    # The probe must exclude ITSELF: a naive '*clearbot.ps1*' match also matches
+function Refresh-Autopilot {
+    # The probe must exclude ITSELF: a naive '*autopilot.ps1*' match also matches
     # the checking process's own command line and always reports "running".
     $n = 0
     try {
         $me = $PID
         $n = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-               Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*clearbot.ps1*' }).Count
+               Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*autopilot.ps1*' }).Count
     } catch {}
-    $killed = Test-Path (Join-Path $PSScriptRoot 'watcher\clearbot.stop')
+    $killed = Test-Path (Join-Path $PSScriptRoot 'watcher\autopilot.stop')
     if ($killed) {
         $lblCB.Text = 'STOPPED - kill switch engaged; sessions will NOT auto-clear.'
         $lblCB.ForeColor = [System.Drawing.Color]::Firebrick
@@ -949,7 +949,7 @@ function Refresh-Process {
         $txtProcOut.Text = "cannot read policy.json: $_`r`n`r`n" + $txtProcOut.Text
     }
 
-    Refresh-Clearbot
+    Refresh-Autopilot
 
     if (Test-Path $script:StopFile) {
         $lblKill.Text = 'STOPPED - the runner will not start a new run until you clear this.'
@@ -1013,14 +1013,14 @@ $btnFanout.Add_Click({
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
 })
 $btnCBStart.Add_Click({
-    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\start-clearbot.cmd') + '"')
+    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\start-autopilot.cmd') + '"')
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
-    Refresh-Clearbot
+    Refresh-Autopilot
 })
 $btnCBStop.Add_Click({
-    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\stop-clearbot.cmd') + '"')
+    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\stop-autopilot.cmd') + '"')
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
-    Refresh-Clearbot
+    Refresh-Autopilot
 })
 $btnCBTest.Add_Click({
     # Types /clear into the most recently started session for real - confirm first.
@@ -1031,7 +1031,7 @@ $btnCBTest.Add_Click({
     if ($ans -ne 'Yes') { return }
     $r = Invoke-Node $script:Budget @('clear-now')
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
-    Refresh-Clearbot
+    Refresh-Autopilot
 })
 
 # ---------- Start work handlers ----------
@@ -1084,63 +1084,63 @@ function Invoke-RouteSuggest {
 
 $txtTask.Add_Leave({ Invoke-RouteSuggest })
 
-$script:GoalJs = Join-Path $PSScriptRoot 'hooks\goal.mjs'
-$script:GoalId = ''
+$script:StandingJs = Join-Path $PSScriptRoot 'core\standing.mjs'
+$script:StandingId = ''
 
-# Every Go creates a goal, so every session ACC starts is one it can resume.
+# Every Go creates a standing, so every session ACC starts is one it can resume.
 # The text goes through a FILE: Invoke-Node strips double quotes and a command
 # line cannot carry a newline, and this box is deliberately multi-line.
-function New-GoalFromBox([string]$Text, [string]$Dir, [string]$Profile) {
-    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("acc-goal-" + [Guid]::NewGuid().ToString('N') + '.txt')
+function New-StandingFromBox([string]$Text, [string]$Dir, [string]$Profile) {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("acc-standing-" + [Guid]::NewGuid().ToString('N') + '.txt')
     try {
         [System.IO.File]::WriteAllText($tmp, $Text, (New-Object System.Text.UTF8Encoding($false)))
-        $r = Invoke-Node $script:GoalJs @('new', '--text-file', $tmp, '--cwd', $Dir, '--profile', $Profile)
+        $r = Invoke-Node $script:StandingJs @('new', '--text-file', $tmp, '--cwd', $Dir, '--profile', $Profile)
         if ($r.ExitCode -ne 0) { return $null }
         return ($r.Out.Trim() | ConvertFrom-Json)
     } catch { return $null } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
 }
 
-function Refresh-Goals {
-    $goals = @()
+function Refresh-Standing {
+    $standingList = @()
     try {
-        $r = Invoke-Node $script:GoalJs @('list')
-        if ($r.ExitCode -eq 0) { $goals = @(ConvertFrom-JsonArray ($r.Out.Trim())) }
+        $r = Invoke-Node $script:StandingJs @('list')
+        if ($r.ExitCode -eq 0) { $standingList = @(ConvertFrom-JsonArray ($r.Out.Trim())) }
     } catch { }
     $g = $null
-    if ($script:GoalId) { $g = $goals | Where-Object { $_.id -eq $script:GoalId } | Select-Object -First 1 }
-    if (-not $g) { $g = $goals | Select-Object -Last 1 }
+    if ($script:StandingId) { $g = $standingList | Where-Object { $_.id -eq $script:StandingId } | Select-Object -First 1 }
+    if (-not $g) { $g = $standingList | Select-Object -Last 1 }
     if (-not $g) {
-        $script:GoalId = ''
-        $lblGoal.ForeColor = [System.Drawing.Color]::FromArgb(90, 95, 100)
-        $lblGoal.Text = 'Nothing running. Type the job above and press Go.'
-        $btnGoalDone.Enabled = $false; $btnGoalStop.Enabled = $false; $btnGoalLog.Enabled = $false
+        $script:StandingId = ''
+        $lblStanding.ForeColor = [System.Drawing.Color]::FromArgb(90, 95, 100)
+        $lblStanding.Text = 'Nothing running. Type the job above and press Go.'
+        $btnStandingDone.Enabled = $false; $btnStandingStop.Enabled = $false; $btnStandingLog.Enabled = $false
         return
     }
-    $script:GoalId = $g.id
+    $script:StandingId = $g.id
     $first = ([string]$g.text -split "`n")[0].Trim()
     if ($first.Length -gt 60) { $first = $first.Substring(0, 57) + '...' }
     $restarts = [int]$g.cycles
     $when = if ($restarts -eq 0) { 'no restarts yet' } elseif ($restarts -eq 1) { '1 restart so far' } else { "$restarts restarts so far" }
-    $lblGoal.ForeColor = [System.Drawing.Color]::FromArgb(20, 90, 40)
-    $lblGoal.Text = ("Working: {0}  ({1})" -f $first, $when)
-    $btnGoalDone.Enabled = $true; $btnGoalStop.Enabled = $true; $btnGoalLog.Enabled = $true
+    $lblStanding.ForeColor = [System.Drawing.Color]::FromArgb(20, 90, 40)
+    $lblStanding.Text = ("Working: {0}  ({1})" -f $first, $when)
+    $btnStandingDone.Enabled = $true; $btnStandingStop.Enabled = $true; $btnStandingLog.Enabled = $true
 }
 
-$btnGoalDone.Add_Click({
-    if (-not $script:GoalId) { return }
-    [void](Invoke-Node $script:GoalJs @('done', $script:GoalId, '--why', 'marked finished from the Command Center'))
-    $script:GoalId = ''
-    Refresh-Goals
+$btnStandingDone.Add_Click({
+    if (-not $script:StandingId) { return }
+    [void](Invoke-Node $script:StandingJs @('done', $script:StandingId, '--why', 'marked finished from the Command Center'))
+    $script:StandingId = ''
+    Refresh-Standing
 })
-$btnGoalStop.Add_Click({
-    if (-not $script:GoalId) { return }
-    [void](Invoke-Node $script:GoalJs @('paused', $script:GoalId))
-    $script:GoalId = ''
-    Refresh-Goals
+$btnStandingStop.Add_Click({
+    if (-not $script:StandingId) { return }
+    [void](Invoke-Node $script:StandingJs @('paused', $script:StandingId))
+    $script:StandingId = ''
+    Refresh-Standing
 })
-$btnGoalLog.Add_Click({
-    if (-not $script:GoalId) { return }
-    $p = Join-Path $PSScriptRoot ("runner\goals\{0}.log.md" -f $script:GoalId)
+$btnStandingLog.Add_Click({
+    if (-not $script:StandingId) { return }
+    $p = Join-Path $PSScriptRoot ("runner\standing\{0}.log.md" -f $script:StandingId)
     if (Test-Path $p) { Start-Process notepad.exe $p }
 })
 
@@ -1164,18 +1164,18 @@ $btnStartWork.Add_Click({
         return
     }
     $name = Get-SelectedProfile
-    $goal = New-GoalFromBox $task $dir $name
-    if (-not $goal) {
+    $standing = New-StandingFromBox $task $dir $name
+    if (-not $standing) {
         $lblStartOut.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblStartOut.Text = 'Could not save the goal - not starting. (Is node on PATH?)'
+        $lblStartOut.Text = 'Could not save the standing - not starting. (Is node on PATH?)'
         return
     }
     try {
         if ($script:TermOk -and $script:wv -and $script:wv.CoreWebView2) {
             # Embedded launch: ACC owns the terminal (ConPTY + xterm.js), so
-            # clearbot drives the session over the pty pipe - guaranteed Enter,
+            # autopilot drives the session over the pty pipe - guaranteed Enter,
             # no keystroke injection.
-            if (-not (Start-PtySession -GoalId $goal.id -ProfileName $name -Dir $dir)) { return }
+            if (-not (Start-PtySession -StandingId $standing.id -ProfileName $name -Dir $dir)) { return }
         } else {
             # Legacy launch (no WebView2 runtime / embedded terminal unavailable).
             # UseShellExecute=$false is REQUIRED to pass ACC_PROFILE to the child.
@@ -1201,9 +1201,9 @@ $btnStartWork.Add_Click({
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow = $false
             $psi.EnvironmentVariables['ACC_PROFILE'] = $name
-            # SessionStart reads this, binds the goal to that console, and injects the
+            # SessionStart reads this, binds the standing to that console, and injects the
             # text. It is the reason the work survives every later /clear.
-            $psi.EnvironmentVariables['ACC_GOAL'] = $goal.id
+            $psi.EnvironmentVariables['ACC_STANDING'] = $standing.id
             try {
                 $p = [System.Diagnostics.Process]::Start($psi)
                 Complete-InteractiveLaneHandoff -Slot $script:LegacyLaneSlot -ChildPid $p.Id
@@ -1216,10 +1216,10 @@ $btnStartWork.Add_Click({
                 throw
             }
         }
-        $script:GoalId = $goal.id
+        $script:StandingId = $standing.id
         $lblStartOut.ForeColor = [System.Drawing.Color]::FromArgb(20, 90, 40)
         $lblStartOut.Text = ("Started in {0} ({1}). It will keep restarting itself until the job is done." -f (Split-Path -Leaf $dir), $name)
-        Refresh-Goals
+        Refresh-Standing
     } catch {
         $lblStartOut.ForeColor = [System.Drawing.Color]::Firebrick
         $lblStartOut.Text = 'Could not start: ' + $_.Exception.Message
@@ -1228,7 +1228,7 @@ $btnStartWork.Add_Click({
 
 # ---------- embedded terminal tab (spec 2026-07-31) ----------
 # ACC hosts claude on a ConPTY (Acc.PtyHost) and renders it in xterm.js inside
-# a WebView2 tab. clearbot then drives the session over the pty's named pipe
+# a WebView2 tab. autopilot then drives the session over the pty's named pipe
 # instead of keystroke injection.
 $tabTerm = New-Object System.Windows.Forms.TabPage
 $tabTerm.Text = 'Terminal'
@@ -1294,7 +1294,7 @@ if ($script:TermOk) {
     $btnTermCpct  = New-DeckButton '/compact' { Send-TermSlash '/compact' }
     $btnTermStart = New-DeckButton 'Start'    {
         if ($script:lastStart) {
-            [void](Start-PtySession -GoalId $script:lastStart.goal -ProfileName $script:lastStart.profile -Dir $script:lastStart.dir)
+            [void](Start-PtySession -StandingId $script:lastStart.standing -ProfileName $script:lastStart.profile -Dir $script:lastStart.dir)
         }
     }
     $btnTermStop  = New-DeckButton 'Stop'     {
@@ -1423,7 +1423,7 @@ $script:bindTimer.Add_Tick({
             Write-Host ("pty binding OK: consolePid {0} descends from child {1}" -f $hit.consolePid, $anchor)
         } else {
             $script:bindState = 'MISMATCH'
-            Write-Host ("WARN pty binding MISMATCH: record consolePid {0} does not descend from pty child {1} - clearbot writes may target the wrong session" -f $hit.consolePid, $anchor)
+            Write-Host ("WARN pty binding MISMATCH: record consolePid {0} does not descend from pty child {1} - autopilot writes may target the wrong session" -f $hit.consolePid, $anchor)
         }
     } elseif ([DateTime]::UtcNow -gt $script:bindDeadline) {
         $script:bindTimer.Stop()
@@ -1433,7 +1433,7 @@ $script:bindTimer.Add_Tick({
 })
 
 # One spawn path for the Go button and the deck's Start button.
-function Start-PtySession([string]$GoalId, [string]$ProfileName, [string]$Dir) {
+function Start-PtySession([string]$StandingId, [string]$ProfileName, [string]$Dir) {
     if ($script:pty) {
         $a = [System.Windows.Forms.MessageBox]::Show(
             'A session is already running in the Terminal tab. Stop it and start the new one?',
@@ -1455,9 +1455,9 @@ function Start-PtySession([string]$GoalId, [string]$ProfileName, [string]$Dir) {
     $claude = (Get-Command claude -ErrorAction Stop).Source
     $cmdline = if ($claude -match '\.(cmd|bat)$') { 'cmd.exe /c "' + $claude + '"' } else { '"' + $claude + '"' }
     # Acc.PtyHost spawns via CreateProcessW, which inherits OUR env: set, spawn,
-    # restore. SessionStart reads ACC_GOAL to bind the goal and ACC_PTY to
+    # restore. SessionStart reads ACC_STANDING to bind the standing and ACC_PTY to
     # record transport:"pty" + the pipe name.
-    $env:ACC_GOAL = $GoalId; $env:ACC_PROFILE = $ProfileName; $env:ACC_PTY = $pipeName
+    $env:ACC_STANDING = $StandingId; $env:ACC_PROFILE = $ProfileName; $env:ACC_PTY = $pipeName
     try {
         $script:pty = New-Object Acc.PtyHost
         $script:pty.Start($cmdline, $Dir, [int16]$script:termCols, [int16]$script:termRows, $form,
@@ -1500,9 +1500,9 @@ function Start-PtySession([string]$GoalId, [string]$ProfileName, [string]$Dir) {
         if ($null -ne $script:LaneSlot) { Exit-InteractiveLane $script:LaneSlot; $script:LaneSlot = $null }
         throw
     } finally {
-        Remove-Item Env:ACC_GOAL, Env:ACC_PROFILE, Env:ACC_PTY -ErrorAction SilentlyContinue
+        Remove-Item Env:ACC_STANDING, Env:ACC_PROFILE, Env:ACC_PTY -ErrorAction SilentlyContinue
     }
-    $script:lastStart = @{ goal = $GoalId; profile = $ProfileName; dir = $Dir }
+    $script:lastStart = @{ standing = $StandingId; profile = $ProfileName; dir = $Dir }
     if (Get-Command Update-Deck -ErrorAction SilentlyContinue) { Update-Deck }
     return $true
 }
@@ -1517,7 +1517,7 @@ function Stop-PtySession {
     if (Get-Command Update-Deck -ErrorAction SilentlyContinue) { Update-Deck }
 }
 
-# Status strip refresh: goal id, transport/pipe/binding state, child pid,
+# Status strip refresh: standing id, transport/pipe/binding state, child pid,
 # running/exited, context band - read-only, no new writers.
 $script:deckTimer = New-Object System.Windows.Forms.Timer
 $script:deckTimer.Interval = 2000
@@ -1525,7 +1525,7 @@ $script:deckTimer.Add_Tick({
     if (-not (Get-Variable -Name lblTermStatus -Scope Script -ErrorAction SilentlyContinue)) { return }
     if ($tabControl.SelectedTab -ne $tabTerm) { return }
     $parts = @()
-    if ($script:GoalId) { $parts += ('goal ' + $script:GoalId) }
+    if ($script:StandingId) { $parts += ('standing ' + $script:StandingId) }
     if ($script:pty) {
         $parts += ('pty ' + $script:bindPipe + ' (' + $script:bindState + ')')
         $parts += ('pid ' + $script:pty.ChildPid)
@@ -1572,7 +1572,7 @@ if ($btnKill) { $btnKill.Font = New-Object System.Drawing.Font('Segoe UI', 9, [S
 # drift from the tab within a week.
 $pnlWork = New-Object System.Windows.Forms.Panel
 $pnlWork.Dock = 'Fill'
-foreach ($c in @($lblS0, $lblS0b, $grpS1, $grpS2, $btnStartWork, $lblStartOut, $grpGoal, $lblS3)) {
+foreach ($c in @($lblS0, $lblS0b, $grpS1, $grpS2, $btnStartWork, $lblStartOut, $grpStanding, $lblS3)) {
     $at = $c.Location
     $tabS.Controls.Remove($c)
     $pnlWork.Controls.Add($c)
@@ -1597,14 +1597,14 @@ $chkAdv.Add_CheckedChanged({
     if ($chkAdv.Checked) { $tabControl.BringToFront() } else { $pnlWork.BringToFront() }
 })
 
-# The goal line has to move on its own: the thing that advances it is a session
+# The standing line has to move on its own: the thing that advances it is a session
 # in another window, and Kyle is not going to press Refresh to find that out.
-$goalTimer = New-Object System.Windows.Forms.Timer
-$goalTimer.Interval = 5000
-$goalTimer.Add_Tick({ if ($pnlWork.Visible) { Refresh-Goals } })
-$form.Add_Shown({ $goalTimer.Start() })
+$standingTimer = New-Object System.Windows.Forms.Timer
+$standingTimer.Interval = 5000
+$standingTimer.Add_Tick({ if ($pnlWork.Visible) { Refresh-Standing } })
+$form.Add_Shown({ $standingTimer.Start() })
 $form.Add_FormClosed({
-    $goalTimer.Stop(); $goalTimer.Dispose()
+    $standingTimer.Stop(); $standingTimer.Dispose()
     if ($script:kernelSrv -and -not $script:kernelSrv.HasExited) { try { $script:kernelSrv.Kill() } catch {} }
 })
 
@@ -1623,14 +1623,14 @@ $form.Add_FormClosing({
 
 Refresh-Process
 Refresh-ProfileNote
-Refresh-Goals
+Refresh-Standing
 if ($ShowTab) {
     $chkAdv.Checked = $true
     $match = $tabControl.TabPages | Where-Object { $_.Text -eq $ShowTab } | Select-Object -First 1
     if ($match) { $tabControl.SelectedTab = $match }
 }
 if ($SmokeTest) {
-    Write-Output "SMOKE OK status=$($lblStatus.Text) secrets=$($lstSecrets.Items.Count) protected=$($lstProt.Items.Count) projects=$($lstProj.Items.Count) vault=$($lstVault.Items.Count) runbox=$($lstRunbox.Items.Count) folders=$($cboFolder.Items.Count) tabs=$($tabControl.TabPages.Count) tab1=$($tabControl.TabPages[0].Text) workdirs=$($cboWorkDir.Items.Count) profile=$(Get-SelectedProfile) profnote=$($lblS2b.Text) tier=$($lblPTier.Text) summary=$($lblPSummary.Text) act=$($lblStatusAct.Text) clearbot=$($lblCB.Text) work=$($pnlWork.Controls.Count) adv=$($tabControl.Visible) goal=$($lblGoal.Text) autoapprove=$($chkAutoApprove.Checked)"
+    Write-Output "SMOKE OK status=$($lblStatus.Text) secrets=$($lstSecrets.Items.Count) protected=$($lstProt.Items.Count) projects=$($lstProj.Items.Count) vault=$($lstVault.Items.Count) runbox=$($lstRunbox.Items.Count) folders=$($cboFolder.Items.Count) tabs=$($tabControl.TabPages.Count) tab1=$($tabControl.TabPages[0].Text) workdirs=$($cboWorkDir.Items.Count) profile=$(Get-SelectedProfile) profnote=$($lblS2b.Text) tier=$($lblPTier.Text) summary=$($lblPSummary.Text) act=$($lblStatusAct.Text) autopilot=$($lblCB.Text) work=$($pnlWork.Controls.Count) adv=$($tabControl.Visible) standing=$($lblStanding.Text) autoapprove=$($chkAutoApprove.Checked)"
 } else {
     [void]$form.ShowDialog()
 }

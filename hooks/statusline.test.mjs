@@ -19,6 +19,16 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STATUSLINE = path.join(HERE, "statusline.mjs");
 
+// The watcher WRITES the heartbeat, statusline.mjs READS it, and they are
+// separate files in separate languages with no shared constant. So the name is
+// derived from the writer here rather than typed a second time: sub-project J's
+// watcher rename renamed the writer and left the reader on the retired name,
+// and botDead()'s "absent = never started here, do not cry wolf" catch turned
+// that into an indicator that could never fire again.
+const WATCHER = path.join(HERE, "..", "watcher", "autopilot.ps1");
+const HEARTBEAT_NAME = /\$HeartbeatFile\s*=\s*Join-Path \$PSScriptRoot '([^']+)'/
+  .exec(fs.readFileSync(WATCHER, "utf8"))?.[1];
+
 // See budget.test.mjs's matching comment: this file spawns statusline.mjs as
 // a child process per test with an env spread that would otherwise carry a
 // live NODE_V8_COVERAGE straight through, and statusline.mjs is not itself
@@ -100,17 +110,26 @@ test("profile without a context block: base dials show through (live policy shap
 });
 
 // --- watcher liveness ------------------------------------------------------
-// A dead clearbot means no auto-clear and no goal resume. That was invisible
+// A dead autopilot means no auto-clear and no standing order resume. That was invisible
 // until it was noticed by hand; the status line is where it is cheapest to see.
 function heartbeat(sb, ageMs) {
   const dir = path.join(sb.root, "watcher");
   fs.mkdirSync(dir, { recursive: true });
-  const f = path.join(dir, "clearbot.heartbeat");
+  const f = path.join(dir, HEARTBEAT_NAME);
   fs.writeFileSync(f, "alive");
   const when = new Date(Date.now() - ageMs);
   fs.utimesSync(f, when, when);
   return f;
 }
+
+test("statusline reads the heartbeat filename the watcher actually writes", () => {
+  assert.ok(HEARTBEAT_NAME, "watcher/autopilot.ps1 must set $HeartbeatFile from a literal");
+  assert.match(
+    fs.readFileSync(STATUSLINE, "utf8"),
+    new RegExp(`["']${HEARTBEAT_NAME.replace(/\./g, "\\.")}["']`),
+    `statusline.mjs must stat ${HEARTBEAT_NAME} — the file watcher/autopilot.ps1 writes`,
+  );
+});
 
 test("a fresh heartbeat shows no warning", () => {
   const sb = sandbox(BASE_POLICY);

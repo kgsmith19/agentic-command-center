@@ -10,12 +10,23 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolve } from "../core/paths.mjs";
 
-const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-const PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
-const POLICY_PATH = process.env.ACC_POLICY || "C:/code/guards/policy.json";
+// Every path this module reads resolves from the environment on CALL, never at
+// import. Same root fix OI-006 applied to the standing-order store, for the
+// same reason: read once at
+// import, a test can only point this module at its own sandbox by re-importing
+// under a cache-busting URL, and node's lcov merge is last-write-wins per file
+// path — so those duplicate instances silently discard this file's real
+// coverage. That is why usage.mjs measured ~65% with a suite that genuinely
+// exercised it (guards OI-049).
+const projectsDir = () =>
+  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects");
+// Derived from core/paths.mjs rather than written down, so the Task 12 folder
+// rename cannot strand it (guards OI-049).
+const policyPath = () => process.env.ACC_POLICY || resolve("policy.json");
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CACHE_PATH =
+const cachePath = () =>
   process.env.ACC_SCAN_CACHE || path.join(HERE, "..", "runner", "state", "scan-cache.json");
 
 // ---------------------------------------------------------------- policy
@@ -44,7 +55,7 @@ const DEFAULT_POLICY = {
 
 export function loadPolicy() {
   try {
-    const raw = fs.readFileSync(POLICY_PATH, "utf8").replace(/^\uFEFF/, "");
+    const raw = fs.readFileSync(policyPath(), "utf8").replace(/^\uFEFF/, "");
     const p = JSON.parse(raw);
     return {
       ...DEFAULT_POLICY,
@@ -192,9 +203,9 @@ export function startContextOf(transcriptPath) {
 function listProjects() {
   try {
     return fs
-      .readdirSync(PROJECTS_DIR, { withFileTypes: true })
+      .readdirSync(projectsDir(), { withFileTypes: true })
       .filter((d) => d.isDirectory())
-      .map((d) => path.join(PROJECTS_DIR, d.name));
+      .map((d) => path.join(projectsDir(), d.name));
   } catch {
     return [];
   }
@@ -251,12 +262,16 @@ const CACHE_VERSION = 1;
 
 let CACHE = null;
 let CACHE_DIRTY = false;
+// Which file the in-memory copy came from. Not a test affordance: serving a
+// cache loaded from one path to a caller now pointed at another would report
+// one sandbox's numbers for another's transcripts.
+let CACHE_FROM = null;
 
 function loadCache(ratesKey) {
-  if (CACHE) return CACHE;
+  if (CACHE && CACHE_FROM === cachePath()) return CACHE;
   let c = null;
   try {
-    c = JSON.parse(fs.readFileSync(CACHE_PATH, "utf8"));
+    c = JSON.parse(fs.readFileSync(cachePath(), "utf8"));
   } catch {
     /* absent or corrupt - rebuilt below */
   }
@@ -264,6 +279,7 @@ function loadCache(ratesKey) {
   if (!c || c.v !== CACHE_VERSION || c.rates !== ratesKey)
     c = { v: CACHE_VERSION, rates: ratesKey, files: {} };
   CACHE = c;
+  CACHE_FROM = cachePath();
   return CACHE;
 }
 
@@ -273,10 +289,10 @@ function loadCache(ratesKey) {
 function saveCache() {
   if (!CACHE_DIRTY || !CACHE) return;
   try {
-    fs.mkdirSync(path.dirname(CACHE_PATH), { recursive: true });
-    const tmp = `${CACHE_PATH}.${process.pid}.tmp`;
+    fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
+    const tmp = `${cachePath()}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(CACHE));
-    fs.renameSync(tmp, CACHE_PATH);
+    fs.renameSync(tmp, cachePath());
     CACHE_DIRTY = false;
   } catch {
     /* recomputed next fire */
@@ -457,17 +473,20 @@ function tierFor(weekTokens) {
 }
 
 function cmdCheck(project) {
-  const { main, sub } = weekTotals(project);
-  const total = totalTokens(main) + totalTokens(sub);
+  // Deliberately does NOT call weekTotals(): it used to, and threw the result
+  // away unused. That is a full scan of every transcript in the rolling window,
+  // paid on a command budget.mjs runs on a 10-minute cache. tierWindowTotal()
+  // does its own, correctly-bounded scan and is the only number reported here.
   console.log(JSON.stringify(tierFor(tierWindowTotal(project))));
 }
 
 function cmdContext(file) {
   if (!file) {
     console.error("usage: usage.mjs context <transcript_path>");
-    process.exit(1);
+    return 1;
   }
   console.log(JSON.stringify({ context: contextOf(file), startContext: startContextOf(file) }));
+  return 0;
 }
 
 // Verifies clears are real: lists sessions by start context.
@@ -490,7 +509,7 @@ function cmdClears(project) {
 // The pty window record (budget.mjs, ACC_PTY path) must name the process that
 // PERSISTS across /clear. The hook's immediate parent on Windows is a
 // transient shell (node -> bash -> bash -> claude.exe) that dies with the
-// turn; recording it handed clearbot a dead pid (observed live 2026-07-31:
+// turn; recording it handed autopilot a dead pid (observed live 2026-07-31:
 // consolePid 80480 GONE while claude.exe 70152 hosted the session). The
 // anchor is the first ancestor that is not a shell wrapper. Lives here, not
 // in budget.mjs, because budget.mjs runs main() on import and tests cannot
@@ -540,8 +559,12 @@ export function ancestorChain() {
 const isMain =
   !!process.argv[1] &&
   path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
-if (isMain) {
-  const argv = process.argv.slice(2);
+// Exported and returning an exit code rather than calling process.exit inline,
+// for the reason OI-006 recorded: a CLI only ever exercised by
+// spawning a subprocess is invisible to this file's own coverage
+// instrumentation, so the dispatch and every command under it read as untested
+// however thoroughly they are actually driven.
+export function main(argv = process.argv.slice(2)) {
   const cmd = argv[0];
   const getFlag = (name, dflt) => {
     const i = argv.indexOf(name);
@@ -551,21 +574,22 @@ if (isMain) {
   switch (cmd) {
     case "week":
       cmdWeek(project);
-      break;
+      return 0;
     case "sessions":
       cmdSessions(project, Number(getFlag("--top", 10)));
-      break;
+      return 0;
     case "context":
-      cmdContext(argv[1]);
-      break;
+      return cmdContext(argv[1]);
     case "check":
       cmdCheck(project);
-      break;
+      return 0;
     case "clears":
       cmdClears(project);
-      break;
+      return 0;
     default:
       console.log("usage.mjs week|sessions [--top N]|context <file>|check|clears  [--project <substr>]");
-      process.exit(cmd ? 1 : 0);
+      return cmd ? 1 : 0;
   }
 }
+
+if (isMain) process.exit(main());

@@ -27,7 +27,8 @@ public class W {
 }
 "@
 [void][W]::SetProcessDPIAware()
-$p = Start-Process powershell -ArgumentList '-NoProfile','-File','C:\code\guards\guards-gui.ps1' -PassThru
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$p = Start-Process powershell -ArgumentList '-NoProfile','-File',(Join-Path $repoRoot 'guards-gui.ps1') -PassThru
 for ($i=0; $i -lt 40 -and $p.MainWindowHandle -eq 0; $i++) { Start-Sleep -Milliseconds 500; $p.Refresh() }
 Start-Sleep -Seconds 2
 $h = $p.MainWindowHandle

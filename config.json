@@ -16,9 +16,9 @@
                   "C:/code/lifeos-ecosystem/lifeos":  {
                                                           "cells":  {
                                                                         "kernel":  [
-                                                                                       "src/kernel/",
+                                                                                       "src/core/",
                                                                                        "supabase/migrations/",
-                                                                                       "tests/kernel/"
+                                                                                       "tests/core/"
                                                                                    ],
                                                                         "interface":  [
                                                                                           "src/api/",

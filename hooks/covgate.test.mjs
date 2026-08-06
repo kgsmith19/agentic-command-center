@@ -1,4 +1,4 @@
-// node --test hooks/covgate.test.mjs  (run from C:\code\guards)
+// node --test hooks/covgate.test.mjs  (run from the repo root)
 //
 // Hermetic. The end-to-end tests gate a FIXTURE git repo (temp dir, own
 // history), never this one — so the suite passes identically whether the real
@@ -18,7 +18,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const COVGATE = path.join(HERE, "covgate.mjs");
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-covgate-test-"));
 
-// Unlike clearbot.test.mjs's/runner.test.mjs's spawns, this file's `gate()`
+// Unlike autopilot.test.mjs's/runner.test.mjs's spawns, this file's `gate()`
 // subprocess IS covgate.mjs itself (a gated file) — its main() only ever
 // runs via this exact subprocess call, so it must keep inheriting a live
 // NODE_V8_COVERAGE (when one exists) rather than have it stripped: that is
@@ -139,7 +139,7 @@ test("changedLibFiles keeps lib .mjs under hooks/ and runner/, drops tests, harn
 
 // Kernel modules must be gated exactly like hooks/ and runner/ — the gate is
 // what makes the kernel's 100/100/90 floors real. One level of nesting is
-// allowed so kernel/adapters/<harness>.mjs is gated too.
+// allowed so core/adapters/<harness>.mjs is gated too.
 test("changedLibFiles drops Playwright specs — a .spec.mjs is the harness, not a gated lib file", () => {
   assert.deepEqual(
     changedLibFiles(["gui/server.mjs", "gui/e2e/kernel-settings.spec.mjs"]),
@@ -150,14 +150,14 @@ test("changedLibFiles drops Playwright specs — a .spec.mjs is the harness, not
 test("changedLibFiles gates kernel modules, including one level of nesting", () => {
   assert.deepEqual(
     changedLibFiles([
-      "kernel/run.mjs",
-      "kernel/adapters/claude-code.mjs",
+      "core/run.mjs",
+      "core/adapters/claude-code.mjs",
       "hooks/guard.mjs",
-      "kernel/run.test.mjs",
-      "kernel/adapters/claude-code.test.mjs",
+      "core/run.test.mjs",
+      "core/adapters/claude-code.test.mjs",
       "docs/superpowers/plans/x.md",
     ]),
-    ["kernel/run.mjs", "kernel/adapters/claude-code.mjs", "hooks/guard.mjs"]
+    ["core/run.mjs", "core/adapters/claude-code.mjs", "hooks/guard.mjs"]
   );
 });
 
@@ -165,6 +165,13 @@ test("changedLibFiles gates tools/ the same way, dropping its own tests", () => 
   assert.deepEqual(
     changedLibFiles(["tools/inventory.mjs", "tools/inventory.test.mjs"]),
     ["tools/inventory.mjs"]
+  );
+});
+
+test("changedLibFiles gates core/ too - sub-project J's new modules must not skip coverage", () => {
+  assert.deepEqual(
+    changedLibFiles(["core/paths.mjs", "core/paths.test.mjs"]),
+    ["core/paths.mjs"]
   );
 });
 
@@ -387,6 +394,46 @@ test("end-to-end: default discovery covers BOTH hooks/ and runner/ (regression, 
   }
   assert.ok(/hooks\/h\.mjs/.test(out) && / ok /.test(out.match(/.*hooks\/h\.mjs.*/)[0]), out);
   assert.ok(/runner\/r\.mjs/.test(out) && / ok /.test(out.match(/.*runner\/r\.mjs.*/)[0]), out);
+  assert.ok(/PASS/.test(out), out);
+});
+
+test("end-to-end: default discovery covers core/ (regression, guards#OI-026/sub-project J, 2026-08-05)", () => {
+  // changedLibFiles already gated core/ (added for core/paths.mjs, Task 1),
+  // but default discovery's directory list was never updated to match - the
+  // exact 2026-08-01 hooks/runner bug recurring for a newer lib dir. A file
+  // under core/ with a real, passing test suite still read as 0% covered
+  // because covgate never ran that suite at all. A SECOND scanned dir
+  // (hooks/) is deliberately present alongside core/: with only one dir in
+  // the fixture, node's own `--test` with an EMPTY explicit file list falls
+  // back to its own auto-discovery and the bug would go unnoticed - proven
+  // by reproducing that false pass while writing this test.
+  const repo = path.join(BASE, "core-dir");
+  fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
+  fs.mkdirSync(path.join(repo, "core"), { recursive: true });
+  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
+  g("init", "-q");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  fs.writeFileSync(path.join(repo, "hooks", "h.mjs"), "export const h = () => 1;\n");
+  fs.writeFileSync(
+    path.join(repo, "hooks", "h.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { h } from "./h.mjs";\ntest("h", () => assert.equal(h(), 1));\n'
+  );
+  fs.writeFileSync(path.join(repo, "core", "c.mjs"), "export const c = () => 1;\n");
+  fs.writeFileSync(
+    path.join(repo, "core", "c.test.mjs"),
+    'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { c } from "./c.mjs";\ntest("c", () => assert.equal(c(), 1));\n'
+  );
+  let out;
+  try {
+    out = execFileSync("node", [COVGATE], {
+      cwd: repo, encoding: "utf8",
+      env: { ...process.env, ACC_COVGATE_TESTS: undefined, ACC_POLICY: path.join(BASE, "nope.json") },
+    });
+  } catch (e) {
+    out = String(e.stdout || "") + String(e.stderr || "");
+    assert.fail(`expected PASS, got:\n${out}`);
+  }
+  assert.ok(/core\/c\.mjs/.test(out) && / ok /.test(out.match(/.*core\/c\.mjs.*/)[0]), out);
   assert.ok(/PASS/.test(out), out);
 });
 
