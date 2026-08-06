@@ -124,7 +124,7 @@ export function decide(payload, ctx) {
       : verdict(false, "networkHosts", "contract grants no network access", tool);
   }
 
-  if (tool === "Agent") {
+  if (tool === "Task") {
     const type = String(input.subagent_type || "");
     return (a.subagents || []).includes(type)
       ? verdict(true, "subagents", "subagent type is granted by the contract", tool, type)

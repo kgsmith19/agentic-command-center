@@ -582,3 +582,81 @@ test("Phase: concurrent reserveAgentSlot calls against the SAME session, from se
   const persisted = JSON.parse(fs.readFileSync(statePath(sb, sid, "agents"), "utf8")).n;
   assert.equal(persisted, allowedCount, "the persisted counter must match how many were actually allowed, not undercount from a lost update");
 });
+
+// Full-repo review finding (2026-08-06): the PreToolUse dispatch checked
+// p.tool_name against the literal string "Agent" to decide whether to route
+// into onPreToolUseAgent (the subagent allowlist, per-session cap, and
+// RED-tier kill switch). Claude Code's real subagent-launching tool is named
+// "Task" (confirmed against Anthropic's own hooks documentation), not
+// "Agent" -- so for every real subagent spawn, onPreToolUseAgent never ran
+// at all: the dispatcher's own `if (tool_name !== "Agent") allow();` exits
+// the process before onPreToolUseAgent is ever called. This is a silent
+// fail-open on the ONE mechanism meant to stop unbounded subagent spend
+// during a red week, exactly the "safety check that looks enforced but
+// isn't" class of bug OI-026's policy.json fix already found once tonight.
+// No prior test caught it because every existing subagent test called
+// reserveAgentSlot() directly (see the race test above) rather than going
+// through the real stdin/CLI dispatch path with a realistic tool_name.
+// deny() (PreToolUse's block mechanism) exits 2 and writes its message to
+// STDERR -- Claude Code's own hook protocol, not the Stop hook's separate
+// stdout-JSON "decision":"block" shape used elsewhere in this file. Returns
+// a consistent {blocked, message} regardless of which path fires, so the
+// tests below assert on behavior, not on which of Node's two exit shapes
+// (clean return vs. thrown ERR_TEST_FAILURE-wrapped exec error) happened.
+function runPreToolUse(sb, { sessionId, toolName, subagentType }) {
+  try {
+    execFileSync("node", [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        session_id: sessionId,
+        tool_name: toolName,
+        tool_input: { subagent_type: subagentType },
+        cwd: sb.root,
+      }),
+      env: {
+        ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_MISSIONS_DIR: "",
+        ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+        CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"), CLAUDE_CODE_RUNNER: "1",
+      },
+      encoding: "utf8",
+    });
+    return { blocked: false, message: "" };
+  } catch (e) {
+    return { blocked: e.status === 2, message: String(e.stderr || "") };
+  }
+}
+
+test("PreToolUse for a real Task (subagent) call is routed to subagent enforcement, not silently allowed", () => {
+  const sb = sandbox({ subagents: { mode: "allowlist", allow: ["Explore"], maxPerSession: 6, exploreMaxReportLines: 80 } });
+  const r = runPreToolUse(sb, { sessionId: "s-task-1", toolName: "Task", subagentType: "general-purpose" });
+  // "general-purpose" is NOT on the allowlist ["Explore"] -- a real
+  // dispatch into onPreToolUseAgent must deny it. An unpatched dispatcher
+  // (tool_name !== "Task" -> allow()) exits 0 with no output at all.
+  assert.equal(r.blocked, true, "a disallowed subagent type must be blocked when routed through the real dispatch");
+  assert.match(r.message, /not on the allowlist/);
+});
+
+test("PreToolUse for a real Task call honors the per-session cap", () => {
+  const sb = sandbox({ subagents: { mode: "allowlist", allow: ["Explore"], maxPerSession: 1, exploreMaxReportLines: 80 } });
+  const first = runPreToolUse(sb, { sessionId: "s-task-cap", toolName: "Task", subagentType: "Explore" });
+  assert.equal(first.blocked, false, "the first call is within cap");
+  const second = runPreToolUse(sb, { sessionId: "s-task-cap", toolName: "Task", subagentType: "Explore" });
+  assert.equal(second.blocked, true, "the second call exceeds maxPerSession:1 and must be blocked");
+  assert.match(second.message, /cap reached/);
+});
+
+test("PreToolUse for a real Task call is blocked outright during a RED week", () => {
+  const sb = sandbox({ week: { amberTokens: 100, redTokens: 200, effectiveFrom: "" }, subagents: { mode: "allowlist", allow: ["Explore"], maxPerSession: 6, exploreMaxReportLines: 80 } });
+  const proj = path.join(sb.root, "cfg", "projects", "p");
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, "s-red.jsonl"), turn(250, "burn") + "\n"); // 250 >= redTokens:200
+  const r = runPreToolUse(sb, { sessionId: "s-task-red", toolName: "Task", subagentType: "Explore" });
+  assert.equal(r.blocked, true, "a red week must block a real Task/subagent spawn");
+  assert.match(r.message, /KILL SWITCH/);
+});
+
+test("PreToolUse for a non-subagent tool (e.g. Bash) is allowed through without subagent checks", () => {
+  const sb = sandbox({ subagents: { mode: "allowlist", allow: [], maxPerSession: 0, exploreMaxReportLines: 80 } });
+  const r = runPreToolUse(sb, { sessionId: "s-bash", toolName: "Bash", subagentType: "" });
+  assert.equal(r.blocked, false, "a non-subagent tool must never be blocked by subagent-only logic");
+});

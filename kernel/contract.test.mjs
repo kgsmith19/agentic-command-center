@@ -150,13 +150,17 @@ test("toolsFor tolerates a contract with no allowedActions block at all", () => 
   assert.deepEqual(C.toolsFor({}), ["TodoWrite"]);
 });
 
-test("the tool allowlist includes WebFetch/WebSearch and Agent when granted", () => {
+test("the tool allowlist includes WebFetch/WebSearch and Task (the real subagent tool name) when granted", () => {
   const c = good();
   c.allowedActions = {
     readRoots: [], writeRoots: [], bashPatterns: [],
     networkHosts: ["registry.npmjs.org"], vaultKeys: [], subagents: ["Explore"],
   };
-  assert.deepEqual(C.toolsFor(c).sort(), ["Agent", "TodoWrite", "WebFetch", "WebSearch"].sort());
+  // Full-repo review (2026-08-06): "Agent" is not a real Claude Code tool
+  // name (Anthropic's own hooks docs: the subagent-launching tool's
+  // tool_name is "Task") -- granting "Agent" here meant a contract's own
+  // subagents grant never actually unlocked a real Task call at all.
+  assert.deepEqual(C.toolsFor(c).sort(), ["Task", "TodoWrite", "WebFetch", "WebSearch"].sort());
 });
 
 test("an unreadable contract file fails closed", () => {

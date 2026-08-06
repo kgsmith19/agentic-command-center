@@ -935,7 +935,13 @@ function main() {
   if (event === "PostToolUse") return onPostToolUse(p, policy);
   if (event === "Stop") return onStop(p, policy);
   if (event === "PreToolUse") {
-    if ((p.tool_name || "") !== "Agent") allow();
+    // Full-repo review (2026-08-06): Claude Code's real subagent-launching
+    // tool is named "Task" (confirmed against Anthropic's own hooks
+    // documentation), not "Agent" -- the stale name here meant this branch
+    // exited via allow() before onPreToolUseAgent ever ran, for every real
+    // subagent spawn. The RED-tier kill switch, the allowlist, and the
+    // per-session cap were all silently dead code in production.
+    if ((p.tool_name || "") !== "Task") allow();
     return onPreToolUseAgent(p, policy);
   }
   allow();

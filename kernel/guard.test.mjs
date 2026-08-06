@@ -102,8 +102,33 @@ test("network and subagent grants come from the contract", () => {
   assert.equal(decide(ev("WebFetch", { url: "https://registry.npmjs.org/x" }), ctx()).allow, true);
   assert.equal(decide(ev("WebFetch", { url: "https://evil.example/x" }), ctx()).allow, false);
   assert.equal(decide(ev("WebFetch", { url: "not a url" }), ctx()).allow, false);
-  assert.equal(decide(ev("Agent", { subagent_type: "Explore" }), ctx()).allow, true);
-  assert.equal(decide(ev("Agent", { subagent_type: "general-purpose" }), ctx()).allow, false);
+  // Full-repo review (2026-08-06): Claude Code's real subagent-launching
+  // tool is named "Task" (Anthropic's own hooks docs), not "Agent" -- this
+  // fixture was silently testing a tool name that never occurs in a real
+  // payload. See the dedicated regression test below for the same fix
+  // applied to hooks/budget.mjs's dispatcher.
+  assert.equal(decide(ev("Task", { subagent_type: "Explore" }), ctx()).allow, true);
+  assert.equal(decide(ev("Task", { subagent_type: "general-purpose" }), ctx()).allow, false);
+});
+
+test("OI-review regression: the subagent tool is matched by its REAL name, Task, not Agent", () => {
+  // "Agent" is not a real Claude Code tool name -- confirmed against
+  // Anthropic's own hooks documentation, the subagent-launching tool's
+  // tool_name is "Task". Before this fix, a contract's `subagents` grant
+  // was completely inert for real sessions: every real Task call fell
+  // through to the "default" deny rule below, and kernel/contract.mjs's
+  // own tools.add("Agent") never matched anything a real harness invoked
+  // either. This pins the fix at the tool-name boundary directly, not just
+  // via the (still-correct) "Task" fixtures above.
+  const c = ctx();
+  assert.equal(decide(ev("Task", { subagent_type: "Explore" }), c).allow, true);
+  assert.equal(decide(ev("Task", { subagent_type: "Explore" }), c).rule, "subagents");
+  // The stale name must no longer be treated as the subagent tool at all --
+  // it now falls through to the ordinary default-deny path, same as any
+  // other unrecognized tool.
+  const stale = decide(ev("Agent", { subagent_type: "Explore" }), c);
+  assert.equal(stale.allow, false);
+  assert.equal(stale.rule, "default");
 });
 
 test("an unknown tool is denied by default (AC-G1)", () => {
@@ -142,7 +167,9 @@ test("every allowedActions category defaults to empty when the field is entirely
   assert.equal(decide(ev("Read", { file_path: "C:/work/a.js" }), minimal).allow, false);
   assert.equal(decide(ev("WebFetch", { url: "https://x.example/a" }), minimal).allow, false);
   assert.equal(decide(ev("WebSearch", {}), minimal).allow, false);
-  assert.equal(decide(ev("Agent", { subagent_type: "Explore" }), minimal).allow, false);
+  const emptySubagents = decide(ev("Task", { subagent_type: "Explore" }), minimal);
+  assert.equal(emptySubagents.allow, false);
+  assert.equal(emptySubagents.rule, "subagents", "must be denied BY the empty subagents category, not by falling through to default");
   const smuggleCheck = decide(ev("Bash", { command: 'node C:/code/guards/hooks/engine.mjs apply .env X' }), minimal);
   assert.equal(smuggleCheck.rule, "vaultKeys");
 });

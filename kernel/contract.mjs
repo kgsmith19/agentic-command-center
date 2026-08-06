@@ -108,6 +108,6 @@ export function toolsFor(contract) {
   if ((a.writeRoots || []).length) ["Edit", "Write"].forEach((t) => tools.add(t));
   if ((a.bashPatterns || []).length) tools.add("Bash");
   if ((a.networkHosts || []).length) ["WebFetch", "WebSearch"].forEach((t) => tools.add(t));
-  if ((a.subagents || []).length) tools.add("Agent");
+  if ((a.subagents || []).length) tools.add("Task");
   return [...tools];
 }
