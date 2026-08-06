@@ -773,6 +773,43 @@ test("reapCeilings does nothing when every dial is disabled (today's default, un
   }
 });
 
+test("Full-repo review (2026-08-06) regression: resuming a cycles-ceiling-paused mission gives it a FRESH window, not an instant re-pause", async () => {
+  // Corroborated independently by two review agents: reapCeilings() re-checks
+  // the mission's raw, never-reset cycles/createdAt/totalCostUsd against the
+  // SAME dials on every `pending` poll. resumeMission() only flipped status
+  // back to "active" -- it never gave the mission a new baseline to measure
+  // from, so the very next poll's reapCeilings (which runs before every
+  // pendingKicks(), see the `pending` CLI verb) saw the identical over-ceiling
+  // numbers and paused it right back. A human hitting "resume" got a mission
+  // that looked active for one poll interval and then silently re-paused
+  // itself, with no new alert or explanation distinguishing it from the first
+  // pause.
+  const { m, dir } = await loadMission();
+  const alerts = path.join(dir, "alerts");
+  process.env.ACC_ALERTS_DIR = alerts;
+  try {
+    const g = m.createMission({ text: "runaway" });
+    m.bindSession({ sessionId: SID(90), consolePid: LIVE, missionId: g.id });
+    for (let i = 0; i < 5; i++) m.appendCycle(g.id, { sessionId: SID(90), ctx: 1, text: "x" });
+
+    const dials = { maxCycles: 5 };
+    assert.deepEqual(m.reapCeilings(Date.now(), dials), [g.id], "sanity: the mission actually gets paused");
+    assert.equal(m.readMission(g.id).status, "paused");
+
+    const resumed = m.resumeMission(g.id);
+    assert.equal(resumed.status, "active", "sanity: resume itself reports success");
+
+    // The bug: calling reapCeilings again, with the SAME dials and without
+    // any new cycles/cost/time having accrued, must NOT immediately re-pause
+    // a mission that was just deliberately resumed.
+    const reapedAgain = m.reapCeilings(Date.now(), dials);
+    assert.deepEqual(reapedAgain, [], "a just-resumed mission must get a fresh ceiling window, not an instant re-pause");
+    assert.equal(m.readMission(g.id).status, "active", "the mission must still be active after the second reap");
+  } finally {
+    delete process.env.ACC_ALERTS_DIR;
+  }
+});
+
 test("resumeMission: paused -> active, re-arms needsKick, clears the alert file; refuses a non-paused mission", async () => {
   const { m, dir } = await loadMission();
   const alerts = path.join(dir, "alerts");

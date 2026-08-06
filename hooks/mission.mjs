@@ -496,21 +496,36 @@ export function pendingKicks(now = Date.now(), opts = {}) {
 // dimension, which is what makes today's unbounded default reproduce exactly
 // when every dial is left at 0 -- pure opt-in tightening, no behavior change
 // until Kyle sets a real number.
+// Full-repo review (2026-08-06): resumeMission() used to flip status back to
+// "active" without resetting anything else, so a mission resumed after
+// hitting a ceiling still carried the exact same cycles/createdAt/
+// totalCostUsd that tripped it -- the next `pending` poll's reapCeilings()
+// (which runs before every pendingKicks(), see the CLI verb below) saw the
+// identical over-ceiling numbers and paused it right back, silently, with no
+// new alert. A resume must give the mission a FRESH window: cycles and cost
+// are measured relative to a baseline resumeMission() stamps, and wall-clock
+// is measured from the resume time instead of mission creation. A mission
+// that has never been resumed has no baseline fields (undefined -> 0 / falls
+// back to createdAt), so this is a pure no-op for the never-paused case --
+// the numbers are identical to today's.
 export function ceilingReached(mission, now = Date.now(), dials = {}) {
   const maxCycles = Number(dials.maxCycles || 0);
-  if (maxCycles > 0 && Number(mission.cycles || 0) >= maxCycles) {
-    return { reached: true, dimension: "cycles", detail: `${mission.cycles}/${maxCycles} cycles` };
+  const cyclesSinceResume = Number(mission.cycles || 0) - Number(mission.ceilingBaselineCycles || 0);
+  if (maxCycles > 0 && cyclesSinceResume >= maxCycles) {
+    return { reached: true, dimension: "cycles", detail: `${cyclesSinceResume}/${maxCycles} cycles` };
   }
   const maxWallClockMinutes = Number(dials.maxWallClockMinutes || 0);
   if (maxWallClockMinutes > 0) {
-    const elapsedMin = (now - Date.parse(mission.createdAt)) / 60000;
+    const since = mission.ceilingResumedAt || mission.createdAt;
+    const elapsedMin = (now - Date.parse(since)) / 60000;
     if (elapsedMin >= maxWallClockMinutes) {
       return { reached: true, dimension: "wallClock", detail: `${Math.round(elapsedMin)}/${maxWallClockMinutes} min` };
     }
   }
   const maxCostUsd = Number(dials.maxCostUsd || 0);
-  if (maxCostUsd > 0 && Number(mission.totalCostUsd || 0) >= maxCostUsd) {
-    return { reached: true, dimension: "cost", detail: `$${Number(mission.totalCostUsd).toFixed(2)}/$${maxCostUsd}` };
+  const costSinceResume = Number(mission.totalCostUsd || 0) - Number(mission.ceilingBaselineCostUsd || 0);
+  if (maxCostUsd > 0 && costSinceResume >= maxCostUsd) {
+    return { reached: true, dimension: "cost", detail: `$${costSinceResume.toFixed(2)}/$${maxCostUsd}` };
   }
   return { reached: false, dimension: null, detail: "" };
 }
@@ -578,6 +593,13 @@ export function resumeMission(id) {
     mission.status = "active";
     mission.needsKick = true;
     mission.why = "";
+    // Fresh ceiling window (see ceilingReached's comment) -- without this a
+    // mission paused for hitting a ceiling would carry the exact numbers
+    // that tripped it into the resumed state and get re-paused on the very
+    // next poll.
+    mission.ceilingBaselineCycles = mission.cycles;
+    mission.ceilingBaselineCostUsd = mission.totalCostUsd || 0;
+    mission.ceilingResumedAt = nowIso();
     write(mission);
     try {
       fs.rmSync(path.join(alertsDir(), `${safeId(id)}.ceiling.json`), { force: true });
