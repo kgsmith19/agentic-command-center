@@ -481,7 +481,7 @@ live session hosting.
 ## Phase 6 — Residue, in case Phase 5 stalls or ships partially
 
 **Status: DONE (4/5 items fixed, 1 documented as an accepted gap) — commit
-(see next commit in this branch)**
+df497c3**
 
 All applicable, since Phase 5 shipped step 1 (wiring) only — the keystroke
 channel these items target still exists, untouched, as specified.
