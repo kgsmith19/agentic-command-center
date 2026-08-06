@@ -376,8 +376,8 @@ get to them — don't fix code that's about to be deleted.
 
 ## Phase 5 — Wire the runner as the goal loop; retire the keystroke channel
 
-**Status: STEP 1 ONLY — commit (see next commit in this branch). Step 2
-(retiring the keystroke channel) deliberately NOT done.**
+**Status: STEP 1 ONLY — commit 14c7757. Step 2 (retiring the keystroke
+channel) deliberately NOT done.**
 
 Step 1 shipped 2026-08-06, as specified: `runner.mjs` now integrates with
 the real goal store. New `ensureJobGoal(job)` creates (or reuses, keyed by
