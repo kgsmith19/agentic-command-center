@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LEDGER = path.join(HERE, "ledger.mjs");
@@ -131,20 +131,31 @@ test("a lock held by a live, recent holder is NOT reaped as stale — acquisitio
 });
 
 test("OI-019 end-to-end: real concurrent OS processes calling withDecisionLock each get a distinct, gap-free attempts count", async () => {
+  // Windows drive-letter paths ("D:\\a\\...") are not valid bare ESM import
+  // specifiers — Node's resolver only special-cases absolute POSIX-style
+  // paths. Using pathToFileURL().href is the cross-platform-safe way to
+  // reference LEDGER from generated script text (found via a real Windows CI
+  // failure: every one of the 15 children below silently crashed on import
+  // before writing anything, and coercing the empty stdout with Number("")
+  // masked it as a plausible-looking "attempts: 0" instead of a real error).
   const script = path.join(BASE, "lock-caller.mjs");
   fs.writeFileSync(script, `
-    import { withDecisionLock, appendDecision } from ${JSON.stringify(LEDGER)};
+    import { withDecisionLock, appendDecision } from ${JSON.stringify(pathToFileURL(LEDGER).href)};
     withDecisionLock(process.argv[2], (attempts) => {
       appendDecision(process.argv[2], { tool: "Read", allow: true, rule: "readRoots", target: String(attempts) });
       process.stdout.write(String(attempts));
     });
   `);
   const { spawn } = await import("node:child_process");
-  const run = () => new Promise((resolve) => {
+  const run = () => new Promise((resolve, reject) => {
     const child = spawn("node", [script, "r13"], { env: process.env });
-    let out = "";
+    let out = "", err = "";
     child.stdout.on("data", (d) => { out += d; });
-    child.on("close", () => resolve(Number(out)));
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("close", (code) => {
+      if (code !== 0) reject(new Error(`lock-caller exited ${code}: ${err}`));
+      else resolve(Number(out));
+    });
   });
   const N = 15;
   const attemptsSeen = await Promise.all(Array.from({ length: N }, run));
