@@ -199,8 +199,8 @@ line under `## Resolved`.
   closing the session either way (Stop button and natural exit both).
   Screenshot or narrate what actually happened, don't just eyeball the diff.
 
-## OI-019 Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
-- opened: 2026-08-03
+## OI-019 [RESOLVED 2026-08-06] Kernel test suite meets coverage floors but not the scenario breadth Kyle wants before trusting it
+- opened: 2026-08-03, resolved: 2026-08-06 (all 12 kernel modules passed)
 - where: kernel/*.test.mjs (all suites through Task 16; applies to every
   remaining kernel task, T17-T22)
 - what: covgate's 100/100/90 floors prove every line/branch of a CHANGED file
