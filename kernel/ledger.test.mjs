@@ -218,3 +218,30 @@ test("OI-019: withDecisionLock releases the lock even when the callback throws",
   assert.throws(() => L.withDecisionLock("r-throw", () => { throw new Error("boom"); }), /boom/);
   assert.equal(fs.existsSync(lockPath), false, "a throwing callback must not leak the lock file");
 });
+
+// Full-repo review (2026-08-06): the stale-reclaim path (previous test) has
+// its own latent race. A holder that is merely SLOW -- not crashed -- can
+// have its lock look "stale" to an observer purely from wall-clock elapsed
+// time. A second process then legitimately reclaims it (rmSync + its own
+// fresh create) and enters its OWN critical section. When the ORIGINAL
+// (still-running, not-crashed) holder finally finishes and hits its own
+// `finally { fs.rmSync(lockPath) }`, it deletes whatever file is AT THAT
+// PATH NOW -- which is the SECOND holder's lock, not its own. A third
+// process can then acquire while the second is still inside its critical
+// section: a genuine double-acquisition, defeating the whole point of the
+// lock, even though the atomic "wx" create itself was never bypassed.
+test("a lock's release never deletes it if another holder has since reclaimed and rewritten it (fencing token, not just an atomic create)", () => {
+  const runId = "fencing-test";
+  const lockPath = L.decisionsFile(runId) + ".lock";
+  L.withDecisionLock(runId, () => {
+    // Simulate a second process having reclaimed this lock as stale WHILE
+    // this holder was legitimately (not crashed) still inside its own
+    // critical section, and written its own token in place of ours.
+    fs.writeFileSync(lockPath, "someone-elses-token");
+  });
+  assert.equal(
+    fs.readFileSync(lockPath, "utf8"),
+    "someone-elses-token",
+    "the original holder's release must not delete a lock another holder has since reclaimed and is still using"
+  );
+});

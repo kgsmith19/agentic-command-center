@@ -104,13 +104,27 @@ function sleepSync(ms) {
 const LOCK_TIMEOUT_MS = Number(process.env.ACC_AUTONOMY_LOCK_TIMEOUT_MS) || 3000;
 const LOCK_STALE_MS = Number(process.env.ACC_AUTONOMY_LOCK_STALE_MS) || 5000;
 
-function withAutonomyLock(fn) {
+export function withAutonomyLock(fn) {
   const lockPath = autonomyFile() + ".lock";
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Full-repo review (2026-08-06): a holder that is merely SLOW -- not
+  // crashed -- can have its lock look "stale" to an observer purely from
+  // wall-clock elapsed time. A second process then legitimately reclaims it
+  // (rmSync + its own fresh create) and enters its own critical section.
+  // Without a fencing token, the ORIGINAL holder's own release
+  // (`finally { fs.rmSync(lockPath) }`) deletes whatever file is at that
+  // PATH NOW -- the second holder's lock, not its own -- letting a third
+  // process acquire while the second is still inside its critical section.
+  // A unique token per acquisition, checked before release, closes this:
+  // release only deletes the lock if it still contains OUR token. Same fix
+  // as kernel/ledger.mjs's withDecisionLock, which shares this primitive.
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const start = Date.now();
   for (;;) {
     try {
-      fs.closeSync(fs.openSync(lockPath, "wx"));
+      const fd = fs.openSync(lockPath, "wx");
+      fs.writeSync(fd, token);
+      fs.closeSync(fd);
       break;
     } catch (e) {
       // Full-repo review (2026-08-06), real Windows CI failure: EPERM is a
@@ -137,7 +151,9 @@ function withAutonomyLock(fn) {
   try {
     return fn();
   } finally {
-    fs.rmSync(lockPath, { force: true });
+    try {
+      if (fs.readFileSync(lockPath, "utf8") === token) fs.rmSync(lockPath, { force: true });
+    } catch { /* already gone or replaced by a reclaiming holder -- nothing of ours to clean up */ }
   }
 }
 

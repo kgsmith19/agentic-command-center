@@ -916,6 +916,29 @@ test("a mission persists correctly after its directory is moved to a new locatio
   }
 });
 
+test("a lock's release never deletes it if another holder has since reclaimed and rewritten it (fencing token, not just an atomic create)", async () => {
+  // Full-repo review (2026-08-06): a holder that is merely SLOW -- not
+  // crashed -- can have its lock look "stale" to an observer purely from
+  // wall-clock elapsed time. A second process then legitimately reclaims it
+  // and enters its own critical section. Without a fencing token, the
+  // original holder's own release deletes whatever file is at that path
+  // NOW -- the second holder's lock, not its own -- letting a third
+  // process acquire while the second is still inside its critical section.
+  // Same fix as kernel/ledger.mjs's withDecisionLock, which shares this
+  // exact duplicated primitive.
+  const { m, dir } = await loadMission();
+  const g = m.createMission({ text: "fencing test" });
+  const lockPath = path.join(dir, `${g.id}.json.lock`);
+  m.withMissionLock(g.id, () => {
+    fs.writeFileSync(lockPath, "someone-elses-token");
+  });
+  assert.equal(
+    fs.readFileSync(lockPath, "utf8"),
+    "someone-elses-token",
+    "the original holder's release must not delete a lock another holder has since reclaimed and is still using"
+  );
+});
+
 test("Phase 4 D2: concurrent appendCycle calls against the SAME mission from separate PROCESSES never lose an update", async () => {
   // Reproduced directly before this lock existed: 30 truly-concurrent
   // appendCycle calls (each its own process, since in-process concurrency

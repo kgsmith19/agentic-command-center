@@ -36,7 +36,7 @@ fs.mkdirSync(process.env.ACC_MISSIONS_DIR, { recursive: true });
 const {
   statePath, readJson, atomicWrite, weekTier, scanWeek, stopRunner,
   lastAssistantText, lastUserText, pausedMissionWarning, missionContext, queuedPromptContext,
-  clearbotStatus,
+  clearbotStatus, withStateLock,
 } = await import("./budget.mjs");
 const { createMission, setStatus } = await import("./mission.mjs");
 
@@ -69,6 +69,27 @@ test("Full-repo review (2026-08-06) regression: statePath sanitizes session_id, 
     `statePath must stay confined to runner/state, got: ${traversal}`
   );
   assert.ok(!traversal.includes(".."), `the sanitized path must not carry a literal ".." segment: ${traversal}`);
+});
+
+test("a lock's release never deletes it if another holder has since reclaimed and rewritten it (fencing token, not just an atomic create)", () => {
+  // Full-repo review (2026-08-06): a holder that is merely SLOW -- not
+  // crashed -- can have its lock look "stale" to an observer purely from
+  // wall-clock elapsed time. A second process then legitimately reclaims it
+  // and enters its own critical section. Without a fencing token, the
+  // original holder's own release deletes whatever file is at that path
+  // NOW -- the second holder's lock, not its own -- letting a third
+  // process acquire while the second is still inside its critical section.
+  // Same fix as kernel/ledger.mjs's withDecisionLock, which shares this
+  // exact duplicated primitive.
+  const lockPath = path.join(BASE, "runner", "state", "fencing-test.lock");
+  withStateLock(lockPath, () => {
+    fs.writeFileSync(lockPath, "someone-elses-token");
+  });
+  assert.equal(
+    fs.readFileSync(lockPath, "utf8"),
+    "someone-elses-token",
+    "the original holder's release must not delete a lock another holder has since reclaimed and is still using"
+  );
 });
 
 test("readJson returns the parsed file, or the default on missing/corrupt", () => {

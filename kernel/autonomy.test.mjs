@@ -225,6 +225,27 @@ test("withAutonomyLock retries past a transient EPERM instead of aborting the wh
   }
 });
 
+// Full-repo review (2026-08-06): the stale-reclaim path has its own latent
+// race. A holder that is merely SLOW -- not crashed -- can have its lock
+// look "stale" to an observer purely from wall-clock elapsed time. A second
+// process then legitimately reclaims it and enters its own critical
+// section. Without a fencing token, the original holder's own release
+// deletes whatever file is at that path NOW -- the second holder's lock,
+// not its own -- letting a third process acquire while the second is still
+// inside its critical section. Same fix as kernel/ledger.mjs's
+// withDecisionLock, which shares this exact duplicated primitive.
+test("a lock's release never deletes it if another holder has since reclaimed and rewritten it (fencing token, not just an atomic create)", () => {
+  const lockPath = L.autonomyFile() + ".lock";
+  A.withAutonomyLock(() => {
+    fs.writeFileSync(lockPath, "someone-elses-token");
+  });
+  assert.equal(
+    fs.readFileSync(lockPath, "utf8"),
+    "someone-elses-token",
+    "the original holder's release must not delete a lock another holder has since reclaimed and is still using"
+  );
+});
+
 // Lean-review finding (2026-08-06): updateAfterRun's read-modify-write was
 // unserialized across PROCESSES -- the lane slot a harness run holds is
 // released on the child's `close`, which fires BEFORE run.mjs's own

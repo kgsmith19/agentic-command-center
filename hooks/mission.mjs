@@ -145,7 +145,7 @@ function sleepSync(ms) {
 const LOCK_TIMEOUT_MS = Number(process.env.ACC_MISSION_LOCK_TIMEOUT_MS) || 3000;
 const LOCK_STALE_MS = Number(process.env.ACC_MISSION_LOCK_STALE_MS) || 5000;
 
-function withMissionLock(id, fn, { timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_STALE_MS } = {}) {
+export function withMissionLock(id, fn, { timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_STALE_MS } = {}) {
   // Only the missions dir, not ensureDirs()'s full pair -- the lock file lives
   // alongside mission-<id>.json, and setStatus's own archive step (which DOES
   // need doneDir) already has its own try/catch for exactly a blocked/
@@ -153,10 +153,24 @@ function withMissionLock(id, fn, { timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_S
   // BEFORE that established handling ever runs.
   fs.mkdirSync(missionsDir(), { recursive: true });
   const lockPath = missionPath(id) + ".lock";
+  // Full-repo review (2026-08-06): a holder that is merely SLOW -- not
+  // crashed -- can have its lock look "stale" to an observer purely from
+  // wall-clock elapsed time. A second process then legitimately reclaims it
+  // (rmSync + its own fresh create) and enters its own critical section.
+  // Without a fencing token, the ORIGINAL holder's own release
+  // (`finally { fs.rmSync(lockPath) }`) deletes whatever file is at that
+  // PATH NOW -- the second holder's lock, not its own -- letting a third
+  // process acquire while the second is still inside its critical section.
+  // A unique token per acquisition, checked before release, closes this.
+  // Same fix as kernel/ledger.mjs's withDecisionLock, which shares this
+  // exact duplicated primitive.
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const start = Date.now();
   for (;;) {
     try {
-      fs.closeSync(fs.openSync(lockPath, "wx"));
+      const fd = fs.openSync(lockPath, "wx");
+      fs.writeSync(fd, token);
+      fs.closeSync(fd);
       break;
     } catch (e) {
       // Full-repo review (2026-08-06), real Windows CI failure: EPERM is a
@@ -183,7 +197,9 @@ function withMissionLock(id, fn, { timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_S
   try {
     return fn();
   } finally {
-    fs.rmSync(lockPath, { force: true });
+    try {
+      if (fs.readFileSync(lockPath, "utf8") === token) fs.rmSync(lockPath, { force: true });
+    } catch { /* already gone or replaced by a reclaiming holder -- nothing of ours to clean up */ }
   }
 }
 
