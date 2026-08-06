@@ -247,6 +247,35 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-043 [RESOLVED 2026-08-06] ensureJobMission silently reset a paused mission's ceiling on the runner's next scheduled invocation
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (MEDIUM).
+- where: `runner/runner.mjs`'s `ensureJobMission()`.
+- what: the reuse check was `existing.status === "active"`. A mission
+  paused at a ceiling (OI-039) is still LIVE — `readMission` finds it;
+  only `done`/`blocked` missions get archived out of the live directory
+  by `setStatus` — but a paused mission failed this narrow check and fell
+  through to a fresh `createMission()`, silently abandoning the paused
+  mission's accumulated cycles/cost for a brand-new one starting at zero.
+  `runLoop` calls `ensureJobMission` exactly once per PROCESS, so a
+  scheduled task re-invoking `node runner.mjs <job>` after an earlier run
+  exited `7` ("paused at a ceiling") would silently reset the very
+  ceiling that just tripped, on every subsequent scheduled invocation —
+  defeating the whole point of pausing for a human to look at it.
+- fix: `"paused"` is now reused the same as `"active"`. `missionSignal()`
+  then correctly keeps reporting exit `7` until a human actually runs
+  `mission.mjs resume`, instead of silently starting over.
+  `"blocked"`/`"done"` missions are unaffected — they were already
+  archived by `setStatus` the instant they're set, so `readMission(id)`
+  already returns null for them and a fresh mission is created
+  regardless, which was already correct behavior.
+- verified: new test in `runner/runner.test.mjs` RED against the unfixed
+  code (a paused mission's id was silently replaced with a fresh one),
+  GREEN after the fix (53/53 in the file's own suite). Full `npm test`:
+  538 pass, 1 pre-existing unrelated failure
+  (`hooks/lane.test.mjs`'s chmod-based test, root-sandbox limitation).
+
 ## OI-042 [RESOLVED 2026-08-06] the persisted autonomy factor was never clamped, only the policy dial was
 
 - opened and resolved 2026-08-06, found by one of the three parallel
