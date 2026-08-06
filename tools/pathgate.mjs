@@ -55,19 +55,20 @@ export function realIo() {
 // blanket allowlist. Keyed by file + the finding's own exact (trimmed) text,
 // so a deferral silently stops applying the moment that line moves or
 // changes, and the finding reappears instead of drifting unnoticed.
-const DEFERRED = new Map([
-  [
-    "hooks/usage.mjs|const POLICY_PATH = process.env.ACC_POLICY || \"C:/code/guards/policy.json\";", // pathgate-ok: mirrors usage.mjs's own deferred line verbatim, see DEFERRED below
-    "guards#OI-045 - fixing this line requires touching usage.mjs, which drags " +
-      "its whole-file coverage (~30%, almost entirely pre-existing and unrelated " +
-      "to this line) into covgate's 100/100/90 floor. Deferred to whoever brings " +
-      "usage.mjs's test depth up first (sub-project G / OI-019).",
-  ],
-]);
+// Empty, and worth keeping that way. Its only entry was hooks/usage.mjs's
+// hardcoded POLICY_PATH, deferred because fixing that one line dragged the
+// file's pre-existing ~35% coverage gap under covgate's floor. That gap was
+// closed on 2026-08-05 (guards OI-045), the line now derives from
+// core/paths.mjs, and the deferral came out with it.
+const DEFERRED = new Map([]);
 
-export function run(io) {
+// `deferred` is injectable so the deferral MECHANISM can be tested against a
+// fixture rather than against whatever happens to be deferred today — the tests
+// used to assert on the live map's one real entry, which meant closing that
+// entry broke a test of unrelated machinery.
+export function run(io, deferred = DEFERRED) {
   const all = findHardcoded(io.files, io.readFile);
-  const findings = all.filter((f) => !DEFERRED.has(`${f.file}|${f.text}`));
+  const findings = all.filter((f) => !deferred.has(`${f.file}|${f.text}`));
   if (findings.length === 0) return { code: 0, stdout: "pathgate: no hardcoded repo roots\n" };
   const list = findings.map((f) => `  ${f.file}:${f.line}: ${f.text}`).join("\n");
   return { code: 1, stdout: `pathgate: ${findings.length} hardcoded repo root(s):\n${list}\n` };

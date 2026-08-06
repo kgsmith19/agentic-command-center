@@ -29,20 +29,33 @@ test("a bare pathgate-ok with no reason is still a finding", () => {
   assert.equal(f.length, 1);
 });
 
+// Against a FIXTURE deferral, not the live map. These used to assert on the one
+// real entry the live map happened to carry, so closing that entry (guards
+// OI-045, once hooks/usage.mjs stopped hardcoding its policy path) broke a test
+// of machinery that had not changed at all.
+const DEFERRAL = new Map([
+  ['a.mjs|const P = "C:/code/guards/policy.json";', "fixture reason"],
+]);
+
 test("a deferred finding (exact file+text match) is excluded from the count", () => {
-  const r = m.run({
-    files: ["hooks/usage.mjs"],
-    readFile: () => 'const POLICY_PATH = process.env.ACC_POLICY || "C:/code/guards/policy.json";\n',
-  });
+  const r = m.run(
+    { files: ["a.mjs"], readFile: () => 'const P = "C:/code/guards/policy.json";\n' }, // pathgate-ok: fixture text this deferral is keyed to
+    DEFERRAL,
+  );
   assert.equal(r.code, 0, r.stdout);
 });
 
 test("a deferred entry stops matching (and the finding reappears) if the line's text changes", () => {
-  const r = m.run({
-    files: ["hooks/usage.mjs"],
-    readFile: () => 'const POLICY_PATH = "C:/code/guards/policy.json"; // rewritten differently\n',
-  });
+  const r = m.run(
+    { files: ["a.mjs"], readFile: () => 'const P = "C:/code/guards/policy.json"; // moved\n' }, // pathgate-ok: same fixture, deliberately altered so the key no longer matches
+    DEFERRAL,
+  );
   assert.equal(r.code, 1, "a deferral must not survive a change to the deferred line's own text");
+});
+
+test("with no deferrals at all, a real finding is reported", () => {
+  const r = m.run({ files: ["a.mjs"], readFile: () => 'const P = "C:/code/guards/policy.json";\n' }); // pathgate-ok: fixture proving the live (empty) map defers nothing
+  assert.equal(r.code, 1, "the live map is empty today — nothing may be silently excluded");
 });
 
 test("run() passes with no findings", () => {

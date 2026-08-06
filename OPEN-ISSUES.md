@@ -122,6 +122,39 @@ line under `## Resolved`.
   tracked rather than silently skipped.
 - why open: out of scope for sub-project J; real fix is test depth, which is
   sub-project G's job (`OI-019`, test-depth program).
+- UPDATE 2026-08-05 (second pass, same day): **three of the four done-when
+  clauses are now met.** `POLICY_PATH` is gone — the policy path derives from
+  `core/paths.mjs` — and `tools/pathgate.mjs`'s `DEFERRED` map is empty again.
+  Coverage went **65.5/52.5/55.3 -> 99.3/88.5/82.6** on 21 new tests.
+  The root cause was not simply "no tests": `hooks/usage.test.mjs` re-imported
+  the module under `./usage.mjs?t=${n}` per test, and node's lcov merge is
+  last-write-wins per file path, so every instance discarded the previous one's
+  coverage — the same trap `OI-006` found. Fixed the same way: every path
+  (`CLAUDE_CONFIG_DIR`, `ACC_SCAN_CACHE`, `ACC_POLICY`) resolves on CALL, the
+  bucket cache reloads when its path changes, and the whole suite now shares one
+  instance with no cache-busting anywhere.
+  Two real defects were found while doing it, both fixed: `cmdCheck` ran
+  `weekTotals()` — a full scan of every transcript in the rolling window — and
+  threw the result away unused, on the command `budget.mjs` polls behind a
+  10-minute cache; and the CLI was an inline `if (isMain)` block, invisible to
+  its own coverage, now an exported `main(argv)` returning an exit code.
+- STILL OPEN, and this is the whole remainder: covgate is **not** satisfied,
+  because two `catch` blocks are unreachable from a test on this platform —
+  `listSessions`'s `readdirSync(proj)` failure (a directory that lists but will
+  not read) and `bucketsOf`'s `statSync` failure (a file that lists but will not
+  stat). Both need OS-level fault injection: POSIX `chmod 000` would do it, but
+  this repo's own ledger already records that these suites run as root/admin on
+  Windows, where `chmod` does not block anything (see `OI-031`). They are real
+  runtime paths — a transcript tree being written concurrently genuinely loses
+  files mid-scan — so deleting them would be wrong, and a `branchFloorOverrides`
+  entry would not help since the miss is on LINES, which has no per-file
+  override.
+- done when: either those two paths get a genuine fault-injection seam (the
+  honest options are an injectable `fs` for `listSessions`/`bucketsOf`, or a
+  POSIX-only test that CI's Linux job runs and Windows skips — the latter is
+  cheaper and this repo already skips Windows-only tests the other way round),
+  or covgate grows a documented per-file LINE override with the same
+  proof-required discipline `branchFloorOverrides` has.
 - UPDATE 2026-08-05 (`23f6a4d`, Task 6's close): hit for the second time and
   in the way this entry predicted. Finishing the watcher rename required
   changing exactly one COMMENT in `hooks/usage.mjs` (line 493 named
