@@ -27,18 +27,18 @@ import path from "node:path";
 
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-budget-unit-"));
 process.env.ACC_ROOT = BASE;
-process.env.ACC_GOALS_DIR = path.join(BASE, "runner", "goals");
+process.env.ACC_MISSIONS_DIR = path.join(BASE, "runner", "missions");
 process.env.CLAUDE_CONFIG_DIR = path.join(BASE, "claudecfg");
 fs.mkdirSync(path.join(BASE, "runner", "state"), { recursive: true });
 fs.mkdirSync(path.join(BASE, "runner", "queued"), { recursive: true });
-fs.mkdirSync(process.env.ACC_GOALS_DIR, { recursive: true });
+fs.mkdirSync(process.env.ACC_MISSIONS_DIR, { recursive: true });
 
 const {
   statePath, readJson, atomicWrite, weekTier, scanWeek, stopRunner,
-  lastAssistantText, lastUserText, pausedGoalWarning, goalContext, queuedPromptContext,
+  lastAssistantText, lastUserText, pausedMissionWarning, missionContext, queuedPromptContext,
   clearbotStatus,
 } = await import("./budget.mjs");
-const { createGoal, setStatus } = await import("./goal.mjs");
+const { createMission, setStatus } = await import("./mission.mjs");
 
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
@@ -170,46 +170,46 @@ test("lastUserText returns '' for a missing file or a transcript with no user tu
   assert.equal(lastUserText(path.join(BASE, "nope.jsonl")), "");
 });
 
-// ------------------------------------------------------------- goal / queue context
+// ------------------------------------------------------------- mission / queue context
 
-test("pausedGoalWarning is '' with no paused goal, and names the goal when one matches ACC_GOAL", () => {
-  assert.equal(pausedGoalWarning({}, {}), "");
-  const g = createGoal({ text: "do the thing", cwd: BASE });
+test("pausedMissionWarning is '' with no paused mission, and names the mission when one matches ACC_MISSION", () => {
+  assert.equal(pausedMissionWarning({}, {}), "");
+  const g = createMission({ text: "do the thing", cwd: BASE });
   setStatus(g.id, "paused", { why: "ceiling" });
-  const saved = process.env.ACC_GOAL;
-  process.env.ACC_GOAL = g.id;
+  const saved = process.env.ACC_MISSION;
+  process.env.ACC_MISSION = g.id;
   try {
-    const warn = pausedGoalWarning({}, {});
+    const warn = pausedMissionWarning({}, {});
     assert.match(warn, new RegExp(g.id));
     assert.match(warn, /ceiling/);
   } finally {
-    process.env.ACC_GOAL = saved;
+    process.env.ACC_MISSION = saved;
   }
 });
 
-test("goalContext returns '' when bindSession finds no goal to bind (no ACC_GOAL, no matching consolePid)", () => {
-  const saved = process.env.ACC_GOAL;
-  delete process.env.ACC_GOAL;
+test("missionContext returns '' when bindSession finds no mission to bind (no ACC_MISSION, no matching consolePid)", () => {
+  const saved = process.env.ACC_MISSION;
+  delete process.env.ACC_MISSION;
   try {
-    const out = goalContext({ session_id: "11111111-0000-4000-8000-000000000001", cwd: BASE }, {}, { });
+    const out = missionContext({ session_id: "11111111-0000-4000-8000-000000000001", cwd: BASE }, {}, { });
     assert.equal(out, "");
   } finally {
-    if (saved !== undefined) process.env.ACC_GOAL = saved;
+    if (saved !== undefined) process.env.ACC_MISSION = saved;
   }
 });
 
-test("goalContext binds a fresh goal and includes its text, cwd, and the exact done/blocked commands", () => {
-  const g = createGoal({ text: "ship the feature", cwd: "/some/dir" });
-  const saved = process.env.ACC_GOAL;
-  process.env.ACC_GOAL = g.id;
+test("missionContext binds a fresh mission and includes its text, cwd, and the exact done/blocked commands", () => {
+  const g = createMission({ text: "ship the feature", cwd: "/some/dir" });
+  const saved = process.env.ACC_MISSION;
+  process.env.ACC_MISSION = g.id;
   try {
-    const out = goalContext({ session_id: "11111111-0000-4000-8000-000000000002", cwd: "/some/dir" }, {}, {});
+    const out = missionContext({ session_id: "11111111-0000-4000-8000-000000000002", cwd: "/some/dir" }, {}, {});
     assert.match(out, /ship the feature/);
     assert.match(out, /Working folder: \/some\/dir/);
-    assert.match(out, new RegExp(`goal\\.mjs done ${g.id}`));
-    assert.match(out, new RegExp(`goal\\.mjs blocked ${g.id}`));
+    assert.match(out, new RegExp(`mission\\.mjs done ${g.id}`));
+    assert.match(out, new RegExp(`mission\\.mjs blocked ${g.id}`));
   } finally {
-    if (saved !== undefined) process.env.ACC_GOAL = saved; else delete process.env.ACC_GOAL;
+    if (saved !== undefined) process.env.ACC_MISSION = saved; else delete process.env.ACC_MISSION;
   }
 });
 

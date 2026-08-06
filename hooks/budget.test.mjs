@@ -1,9 +1,9 @@
 // Tests for the Stop-gate precedence in hooks/budget.mjs (OI-011).
 //
 // The bug being pinned: onStop early-allowed whenever stop_hook_active was set,
-// so after the forced checkpoint turn the latched path (clear request + goal
+// so after the forced checkpoint turn the latched path (clear request + mission
 // cycle) never ran - auto-clear deadlocked even with no other Stop hook, and a
-// /goal Stop hook that kept blocking pinned the session over the ceiling
+// /mission Stop hook that kept blocking pinned the session over the ceiling
 // forever. Once the budget latch exists, budget must win on EVERY stop.
 //
 // The hook process.exit()s on every path, so each case runs it as a child
@@ -20,14 +20,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ptyAnchorPid } from "./usage.mjs";
-// goal.mjs resolves its store from ACC_ROOT/ACC_GOALS_DIR on every call, not
-// at import time (see hooks/goal.mjs), specifically so a single shared import
+// mission.mjs resolves its store from ACC_ROOT/ACC_MISSIONS_DIR on every call, not
+// at import time (see hooks/mission.mjs), specifically so a single shared import
 // works across many tests each pointed at their own sandbox -- important here
 // beyond just tidiness: when covgate.mjs runs this file in the same node
-// process as goal.test.mjs, a second, differently-parameterized import of
-// goal.mjs would collide with goal.test.mjs's own coverage instance (node's
+// process as mission.test.mjs, a second, differently-parameterized import of
+// mission.mjs would collide with mission.test.mjs's own coverage instance (node's
 // lcov merge is last-write-wins per file path, not a union -- see OI-006).
-import * as gm from "./goal.mjs";
+import * as gm from "./mission.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, "budget.mjs");
@@ -63,11 +63,11 @@ const POLICY = {
   review: { fullLeanReview: "manual-only", localFullSuiteInReview: false, maxFinders: 3 },
   runner: { stopOnRed: true, statusFile: "SLICE-RUNNER.md", waitingGuard: true },
   autoClear: { enabled: true },
-  goals: { autoResume: true, maxCycles: 0 },
+  missions: { autoResume: true, maxCycles: 0 },
 };
 
 // Real Claude Code session ids are UUIDs, and OI-006's bindSession guard now
-// rejects anything else as a rebind source, so tests that seed a goal via
+// rejects anything else as a rebind source, so tests that seed a mission via
 // bindSession (and later look it up by that exact sessionId) need one.
 const SID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -126,7 +126,7 @@ function runStop(sb, { sid, transcript, active, profile }) {
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
-      ACC_GOALS_DIR: "",
+      ACC_MISSIONS_DIR: "",
       ACC_PROFILE: profile || "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
@@ -161,18 +161,18 @@ test("latched + stop_hook_active: clear request still fires (the OI-011 deadlock
   assert.ok(fs.existsSync(clearReq(sb, sid)), "clear request written despite stop_hook_active");
 });
 
-test("further over-budget stops re-request the clear; the goal cycle is one-shot", async () => {
+test("further over-budget stops re-request the clear; the mission cycle is one-shot", async () => {
   const sb = sandbox();
   const sid = SID(1);
   seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
 
-  // Seed a goal in the sandbox tree and bind this session to it, the same way
-  // SessionStart would. goal.mjs resolves its store from ACC_ROOT on every call.
+  // Seed a mission in the sandbox tree and bind this session to it, the same way
+  // SessionStart would. mission.mjs resolves its store from ACC_ROOT on every call.
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "finish the thing", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  process.env.ACC_MISSIONS_DIR = "";
+  const g = gm.createMission({ text: "finish the thing", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, missionId: g.id });
 
   runStop(sb, { sid, transcript: t, active: false }); // block + latch
   runStop(sb, { sid, transcript: t, active: true }); // latched stop 1
@@ -181,19 +181,19 @@ test("further over-budget stops re-request the clear; the goal cycle is one-shot
   const out = runStop(sb, { sid, transcript: t, active: true }); // latched stop 2
   assert.match(out, /systemMessage/);
   assert.ok(fs.existsSync(clearReq(sb, sid)), "request re-written for the stuck turn");
-  assert.equal(gm.readGoal(g.id).cycles, 1, "cycle logged exactly once across latched stops");
+  assert.equal(gm.readMission(g.id).cycles, 1, "cycle logged exactly once across latched stops");
 });
 
-test("Phase 1: the checkpoint stop accumulates the transcript's REAL cost onto the goal, not an estimate", async () => {
+test("Phase 1: the checkpoint stop accumulates the transcript's REAL cost onto the mission, not an estimate", async () => {
   const sb = sandbox();
   const sid = SID(90);
   seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000); // turn() writes input:60000, output:10, model claude-opus-5
 
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "cost tracked", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  process.env.ACC_MISSIONS_DIR = "";
+  const g = gm.createMission({ text: "cost tracked", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, missionId: g.id });
 
   runStop(sb, { sid, transcript: t, active: false }); // block + latch
   runStop(sb, { sid, transcript: t, active: true }); // latched stop: appendCycle fires here
@@ -202,25 +202,25 @@ test("Phase 1: the checkpoint stop accumulates the transcript's REAL cost onto t
   // carries no rates block, so usage.mjs's defaults apply): (60000*15 +
   // 10*75) / 1e6 = 0.90075.
   assert.ok(
-    Math.abs(gm.readGoal(g.id).totalCostUsd - 0.90075) < 1e-9,
-    `expected ~0.90075, got ${gm.readGoal(g.id).totalCostUsd}`
+    Math.abs(gm.readMission(g.id).totalCostUsd - 0.90075) < 1e-9,
+    `expected ~0.90075, got ${gm.readMission(g.id).totalCostUsd}`
   );
 });
 
-test("Phase 1: SessionStart warns instead of saying nothing when the adopted goal is paused at a ceiling", () => {
+test("Phase 1: SessionStart warns instead of saying nothing when the adopted mission is paused at a ceiling", () => {
   const sb = sandbox();
   const sid = SID(91);
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "will hit a ceiling", cwd: sb.root });
-  gm.bindSession({ sessionId: SID(92), consolePid: process.pid, goalId: g.id }); // any prior console
+  process.env.ACC_MISSIONS_DIR = "";
+  const g = gm.createMission({ text: "will hit a ceiling", cwd: sb.root });
+  gm.bindSession({ sessionId: SID(92), consolePid: process.pid, missionId: g.id }); // any prior console
   gm.setStatus(g.id, "paused", "CEILING REACHED: cycles (5/5 cycles)");
 
   const out = execFileSync("node", [HOOK], {
     input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
     env: {
-      ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "",
-      ACC_GOAL: g.id, ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+      ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_MISSIONS_DIR: "",
+      ACC_MISSION: g.id, ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"), CLAUDE_CODE_RUNNER: "1",
     },
     encoding: "utf8",
@@ -231,30 +231,30 @@ test("Phase 1: SessionStart warns instead of saying nothing when the adopted goa
 });
 
 // OI-034: unlike the paused-at-ceiling warning above (scoped to a specific
-// goal via ACC_GOAL/consolePid), a dead-goal alert isn't scoped to THIS
+// mission via ACC_MISSION/consolePid), a dead-mission alert isn't scoped to THIS
 // session at all -- its own console is gone, so any next SessionStart is
 // the one that shows it, once, then it's gone (consumed, not merely read).
-test("OI-034: SessionStart surfaces a reboot-orphaned goal's alert once, then clears it", () => {
+test("OI-034: SessionStart surfaces a reboot-orphaned mission's alert once, then clears it", () => {
   const sb = sandbox();
   const sid = SID(93);
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "interrupted overnight", cwd: sb.root });
-  gm.bindSession({ sessionId: SID(94), consolePid: 999999, goalId: g.id }); // a pid that is NOT alive
-  gm.reapDeadGoals(); // writes the .dead.json alert as a side effect
+  process.env.ACC_MISSIONS_DIR = "";
+  const g = gm.createMission({ text: "interrupted overnight", cwd: sb.root });
+  gm.bindSession({ sessionId: SID(94), consolePid: 999999, missionId: g.id }); // a pid that is NOT alive
+  gm.reapDeadMissions(); // writes the .dead.json alert as a side effect
 
   const env = {
-    ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "",
+    ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_MISSIONS_DIR: "",
     ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
     CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"), CLAUDE_CODE_RUNNER: "1",
   };
-  delete env.ACC_GOAL;
+  delete env.ACC_MISSION;
 
   const first = execFileSync("node", [HOOK], {
     input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
     env, encoding: "utf8",
   });
-  assert.match(first, new RegExp(`\\[ACC GOAL ${g.id}\\] DIED`));
+  assert.match(first, new RegExp(`\\[ACC MISSION ${g.id}\\] DIED`));
   assert.match(first, /most likely a reboot or crash/);
 
   const second = execFileSync("node", [HOOK], {
@@ -302,11 +302,11 @@ test("Phase 3: with NO ACC-active env var, an over-budget stop produces no block
   seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000); // over hardK 50 -- would normally block
   const env = {
-    ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_GOALS_DIR: "",
+    ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath, ACC_MISSIONS_DIR: "",
     ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
     CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"), CLAUDE_CODE_RUNNER: "",
   };
-  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  for (const k of ["ACC_SESSION", "ACC_MISSION", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
   const out = execFileSync("node", [HOOK], {
     input: JSON.stringify({ hook_event_name: "Stop", session_id: sid, transcript_path: t, stop_hook_active: false, cwd: sb.root }),
     env, encoding: "utf8",
@@ -318,7 +318,7 @@ test("Phase 3: with NO ACC-active env var, an over-budget stop produces no block
 test("Phase 3: CLI helpers (fanout/unstop/clear-now/clearbot-status) run unconditionally, with no ACC env set at all", () => {
   const sb = sandbox();
   const env = { ...process.env, ACC_ROOT: sb.root, ACC_POLICY: sb.policyPath };
-  for (const k of ["ACC_SESSION", "ACC_GOAL", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
+  for (const k of ["ACC_SESSION", "ACC_MISSION", "ACC_PROFILE", "ACC_PTY"]) delete env[k];
   const out = execFileSync("node", [HOOK, "fanout", "10"], { env, encoding: "utf8" });
   assert.match(out, /fan-out granted for 10 min/, "the CLI helper path must not be gated by accActive()");
 });
@@ -347,9 +347,9 @@ test("profile context (when present) still overrides for that session", () => {
 });
 
 // --- liveness: an under-budget turn end must re-arm the kick ---------------
-// The 2026-07-31 stall, pinned. A goal session that simply finishes its turn
+// The 2026-07-31 stall, pinned. A mission session that simply finishes its turn
 // well under the ceiling used to get nothing: no clear, no resume, dead air
-// until a human typed. The Stop hook must report that turn end to the goal
+// until a human typed. The Stop hook must report that turn end to the mission
 // store - silently, without changing its own output.
 
 // The classifier reads the LAST USER message, so these transcripts need one.
@@ -364,26 +364,26 @@ function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
   return f;
 }
 
-// Seed a goal in the sandbox and bind this session to it, as SessionStart does.
+// Seed a mission in the sandbox and bind this session to it, as SessionStart does.
 function seedGoal(sb, sid) {
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "keep going", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  process.env.ACC_MISSIONS_DIR = "";
+  const g = gm.createMission({ text: "keep going", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, missionId: g.id });
   gm.markKicked(g.id); // a kick already fired; needsKick is false
   return { gm, g };
 }
 
-test("under budget with an active goal: the turn end re-arms the kick", async () => {
+test("under budget with an active mission: the turn end re-arms the kick", async () => {
   const sb = sandbox();
   const sid = SID(2);
   const { gm, g } = await seedGoal(sb, sid);
-  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC goal.");
+  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC mission.");
 
   const out = runStop(sb, { sid, transcript: t, active: false });
   assert.equal(out.trim(), "", "still silent - liveness must not add output");
 
-  const after = gm.readGoal(g.id);
+  const after = gm.readMission(g.id);
   assert.equal(after.needsKick, true, "kick re-armed");
   assert.ok(after.turnEndedAt, "turn end stamped");
   assert.ok(!after.humanPromptAt, "the kick constant is a MACHINE turn");
@@ -396,11 +396,11 @@ test("a human-prompted turn end is classified as human", async () => {
   const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
 
   runStop(sb, { sid, transcript: t, active: false });
-  assert.ok(gm.readGoal(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
+  assert.ok(gm.readMission(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
 });
 
 // --- self-healing watcher --------------------------------------------------
-// A dead clearbot means no clear and no resume, and a goal session cannot
+// A dead clearbot means no clear and no resume, and a mission session cannot
 // notice on its own. The Stop hook is the right place to check: it IS the turn
 // boundary where a clear or a kick is about to be needed. The sandbox gets a
 // FAKE start-clearbot.cmd, so these prove the decision without starting a real
@@ -468,7 +468,7 @@ test("a deliberate stop is never overridden by the revive", () => {
   assert.equal(appears(marker, 2500), false, "the kill switch wins");
 });
 
-test("no goal: an under-budget stop still does nothing at all", () => {
+test("no mission: an under-budget stop still does nothing at all", () => {
   const sb = sandbox();
   const sid = "s-live-nogoal";
   const t = writeTranscriptWithUser(sb, sid, 10000, "hello");
@@ -488,7 +488,7 @@ test("SessionStart with ACC_PTY records a pty window bound to the parent pid", (
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
-      ACC_GOALS_DIR: "",
+      ACC_MISSIONS_DIR: "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
       CLAUDE_CODE_RUNNER: "",
@@ -536,7 +536,7 @@ test("ptyAnchorPid falls back to the first ancestor when all are shells", () => 
 // Lean-review finding (2026-08-06): the per-session subagent spawn cap
 // (onPreToolUseAgent's reserveAgentSlot) was a plain read-modify-write on the
 // ".agents" state file with nothing serializing it across PROCESSES -- the
-// exact class of bug goal.mjs's withGoalLock already exists to close for
+// exact class of bug mission.mjs's withMissionLock already exists to close for
 // appendCycle (see "concurrent appendCycle calls... never lose an update"
 // above, same technique used here: separate node PROCESSES, since
 // synchronous JS in one process cannot race itself). Two Agent tool calls

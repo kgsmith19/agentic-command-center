@@ -24,9 +24,9 @@
 #           session's own prompt (captured by budget.mjs and passed in the
 #           request), but the code allows any printable text matching those
 #           constraints.
-#        d. "$KICK" - a constant. It restarts an active goal after a clear. The
-#           GOAL TEXT IS NEVER TYPED: it reaches the model through SessionStart
-#           context, so a multi-line goal is safe by construction (OI-004).
+#        d. "$KICK" - a constant. It restarts an active mission after a clear. The
+#           MISSION TEXT IS NEVER TYPED: it reaches the model through SessionStart
+#           context, so a multi-line mission is safe by construction (OI-004).
 #        e. Esc - a single constant key event, sent ONLY in the escalation path
 #           when a typed /clear did not land (the over-budget turn refuses to
 #           end, OI-011); at most once per session per 10 minutes. It interrupts
@@ -71,7 +71,7 @@ $SendConsole = Join-Path $PSScriptRoot 'sendconsole.ps1'
 $StateDir = Join-Path $Root 'runner\state'
 $MaxAgeSec = 900
 $KEYS = '/clear'          # invariant 1a.
-$KICK = 'Continue the active ACC goal.'   # invariant 1d.
+$KICK = 'Continue the active ACC mission.'   # invariant 1d.
 $QUEUEKICK = 'Run the queued prompt.'     # invariant 1d: never the prompt itself.
 # ACC_ROUTING_MD mirrors route.mjs's own override (hooks/route.mjs) -- same
 # reason: a sandboxed test's $Root has no real repo-tree parent to find a real
@@ -125,7 +125,7 @@ function Get-HardK {
 
 # guards OI-003: how long a just-started (or just-turned) session's TUI needs
 # before injected input actually lands. Single source of truth shared with
-# hooks/goal.mjs's kick delay (policy.json tui.readySettleMs) -- see that
+# hooks/mission.mjs's kick delay (policy.json tui.readySettleMs) -- see that
 # dial's _note for why clearbot no longer guesses its own number here.
 function Get-TuiReadyMs {
     try {
@@ -305,9 +305,9 @@ function Invoke-Cd($req) {
     # 1200ms and that ALSO failed a real-token repro (2026-08-04): typed and
     # replayed exactly as logged, cwd never moved. 1200ms was a guess unrelated
     # to the one number in this codebase already proven for "is this session's
-    # TUI ready for injected input" -- hooks/goal.mjs's kick delay, empirically
+    # TUI ready for injected input" -- hooks/mission.mjs's kick delay, empirically
     # tuned to 4000ms and proven via OI-002. Get-TuiReadyMs now reads the same
-    # policy.json dial (tui.readySettleMs) goal.mjs falls back to, so there is
+    # policy.json dial (tui.readySettleMs) mission.mjs falls back to, so there is
     # exactly one number instead of two independently-guessed ones. NOT yet
     # re-verified against a real session -- that still needs a real-token
     # `node e2e/loop.e2e.mjs --only 4` run (Kyle's call on timing, same as
@@ -395,18 +395,18 @@ function Invoke-Clear($req) {
     return $true
 }
 
-# --- goal resume ---------------------------------------------------------
+# --- mission resume ---------------------------------------------------------
 # A clear with no follow-up leaves a fresh session sitting at an empty prompt,
 # which is where the old chain ended and a human had to retype the task. This is
-# the other half: if a goal owns that console and is still active, type one
+# the other half: if a mission owns that console and is still active, type one
 # constant to restart it.
 #
-# EVERY condition that makes a kick unsafe is decided in goal.mjs (active? console
+# EVERY condition that makes a kick unsafe is decided in mission.mjs (active? console
 # alive? binding settled? cooldown expired?) so there is exactly one place to
 # audit. This function stays a dumb executor on purpose.
 function Invoke-Kicks {
     $raw = ''
-    try { $raw = & node (Join-Path $Root 'hooks\goal.mjs') 'pending' 2>$null | Out-String } catch { return }
+    try { $raw = & node (Join-Path $Root 'hooks\mission.mjs') 'pending' 2>$null | Out-String } catch { return }
     $pend = $null
     try { $pend = $raw | ConvertFrom-Json } catch { return }
     if (-not $pend) { return }
@@ -423,25 +423,25 @@ function Invoke-Kicks {
         $cpid = [int]$g.consolePid
         if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) { continue }
         # Phase 4 D4 (full-remediation-prompt.md): consoleAlive()'s EPERM-means-
-        # alive assumption (hooks/goal.mjs) is the weakest link in kick delivery
+        # alive assumption (hooks/mission.mjs) is the weakest link in kick delivery
         # -- a dead console's pid can be reused by an unrelated Windows process,
         # and Get-Process alone (above) only proves SOME process with this pid
         # exists, not that it is still the session's own console. cd/clear
         # requests already cross-check via Test-Binding; kicks had none at all.
-        # goal.mjs's `pending` output already carries the same sessionId +
+        # mission.mjs's `pending` output already carries the same sessionId +
         # consolePid shape Test-Binding expects (pendingKicks()'s own map), so
         # this reuses the identical, already-proven check rather than a
         # parallel implementation.
         if (-not (Test-Binding $g)) {
-            Log "WARN kick refused for goal $($g.id): consolePid=$cpid does not match its own recorded window (stale/reused pid)"
+            Log "WARN kick refused for mission $($g.id): consolePid=$cpid does not match its own recorded window (stale/reused pid)"
             continue
         }
         $r = Send-Keys $cpid $KICK -ClearLineFirst
         if ($r.ok) {
-            & node (Join-Path $Root 'hooks\goal.mjs') 'kicked' $g.id 2>$null | Out-Null
+            & node (Join-Path $Root 'hooks\mission.mjs') 'kicked' $g.id 2>$null | Out-Null
             # $r.out names the transport ("pty OK" vs sendconsole output) - the
             # e2e proof tier greps this line for it.
-            Log "RESUMED goal $($g.id) cycle $($g.cycles) consolePid=$cpid via $($r.out)"
+            Log "RESUMED mission $($g.id) cycle $($g.cycles) consolePid=$cpid via $($r.out)"
         } else {
             Log "WARN resume $($g.id) failed -> $($r.out)"
         }

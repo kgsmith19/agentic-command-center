@@ -14,10 +14,10 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain, costOfTranscript, accActive } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, goalForSession, recordTurnEnd, readGoal, listGoals, consumeDeadGoalAlerts } from "./goal.mjs";
+import { bindSession, appendCycle, logTail, missionForSession, recordTurnEnd, readMission, listMissions, consumeDeadMissionAlerts } from "./mission.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// ACC_ROOT redirects every runner/ path (state, logs, goals, clear-requests) at a
+// ACC_ROOT redirects every runner/ path (state, logs, missions, clear-requests) at a
 // throwaway tree. It exists so the tests can exercise THIS file instead of a
 // copy: a test that reset the live runner/state would delete the .window files
 // running sessions depend on, which is precisely how auto-clear died once.
@@ -25,7 +25,7 @@ const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.re
 const STATE = path.join(ROOT, "runner", "state");
 const LOGS = path.join(ROOT, "runner", "logs");
 const CLEARREQ = path.join(ROOT, "runner", "clear-requests");
-const GOALSDIR = path.join(ROOT, "runner", "goals");
+const MISSIONSDIR = path.join(ROOT, "runner", "missions");
 const QUEUEDIR = path.join(ROOT, "runner", "queued");
 const HEADLESS = process.env.CLAUDE_CODE_RUNNER === "1";
 
@@ -87,7 +87,7 @@ function ensureClearbot() {
 }
 
 // SELF-HEALING (guards OI-007): the watcher is the only thing that can clear or
-// resume a session, and when it dies the goal loop dies silently with it. A
+// resume a session, and when it dies the mission loop dies silently with it. A
 // turn boundary is exactly where that matters, so check there: one stat, and
 // ensureClearbot() is idempotent (start-clearbot.cmd no-ops when a watcher is
 // already up) and still honours the deliberate kill switch. A MISSING heartbeat
@@ -147,7 +147,7 @@ export function readJson(p, dflt) {
 // Phase 4 D2 (full-remediation-prompt.md): tmp+rename instead of a bare
 // writeFileSync -- a reader must never observe a half-written tier.json or
 // clear-request file (a crash mid-write, or a concurrent read) and silently
-// treat it as corrupt/missing. Same pattern hooks/goal.mjs's write() and
+// treat it as corrupt/missing. Same pattern hooks/mission.mjs's write() and
 // usage.mjs's scan cache already use.
 export function atomicWrite(file, text) {
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
@@ -160,11 +160,11 @@ export function atomicWrite(file, text) {
 // same turn's parallel Agent tool calls could both read the same stale n and
 // both pass a cap check that should only pass once, silently over-granting
 // the subagent cap and under-reporting the persisted counter afterward. Same
-// cross-process exclusive-file-create mutex hooks/goal.mjs's withGoalLock
+// cross-process exclusive-file-create mutex hooks/mission.mjs's withMissionLock
 // uses (itself closing the identical class of bug for appendCycle) --
 // duplicated locally rather than imported, matching this file's existing
 // convention of its own statePath/readJson/atomicWrite rather than reaching
-// into goal.mjs for file-IO primitives goal.mjs happens to also have.
+// into mission.mjs for file-IO primitives mission.mjs happens to also have.
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -200,7 +200,7 @@ function withStateLock(lockPath, fn) {
 
 // The per-session subagent spawn cap's whole critical section: read the
 // current count, decide against cap, persist if granted. Exported so it can
-// be exercised directly (goal.test.mjs's own technique for proving a lock
+// be exercised directly (mission.test.mjs's own technique for proving a lock
 // closes a race: many separate node PROCESSES, not in-process concurrency,
 // since synchronous JS in one process cannot race itself).
 export function reserveAgentSlot(sessionId, cap) {
@@ -415,11 +415,11 @@ export function lastUserText(transcript) {
 
 // Exactly the constants clearbot types (watcher/clearbot.ps1 $KICK and
 // $QUEUEKICK). Anything else came from a human, so the kick backs off.
-const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt."];
+const KICK_CONSTANTS = ["Continue the active ACC mission.", "Run the queued prompt."];
 
 // ------------------------------------------------------------- handlers
 
-// Bind this session to the goal that owns its console (or the one the Command
+// Bind this session to the mission that owns its console (or the one the Command
 // Center launched it for) and hand the model everything it needs to carry on
 // without a human retyping anything.
 //
@@ -427,35 +427,35 @@ const KICK_CONSTANTS = ["Continue the active ACC goal.", "Run the queued prompt.
 // the work is finished, so the two exit commands are stated as the last thing in
 // the block, in full, with the id already substituted - there is no id to look
 // up and no ambiguity about what "done" means.
-// Phase 1: bindSession only finds ACTIVE goals, so a goal paused at a
-// ceiling produces no goal context at all -- silently, from this session's
+// Phase 1: bindSession only finds ACTIVE missions, so a mission paused at a
+// ceiling produces no mission context at all -- silently, from this session's
 // point of view, since it never got as far as being told why. This is the
 // definition-of-done's explicit ask: warn instead of saying nothing.
-// Checked by ACC_GOAL first (a fresh launch aimed straight at a specific
-// goal), then by consolePid (the resume-after-clear path, since a paused
-// goal keeps the consolePid it had when it paused).
-export function pausedGoalWarning(p, win) {
-  const wanted = process.env.ACC_GOAL || "";
+// Checked by ACC_MISSION first (a fresh launch aimed straight at a specific
+// mission), then by consolePid (the resume-after-clear path, since a paused
+// mission keeps the consolePid it had when it paused).
+export function pausedMissionWarning(p, win) {
+  const wanted = process.env.ACC_MISSION || "";
   const pid = win && win.consolePid;
-  const paused = listGoals().find(
+  const paused = listMissions().find(
     (g) => g.status === "paused" && (wanted ? g.id === wanted : pid && Number(g.consolePid) === Number(pid))
   );
   if (!paused) return "";
-  return `[ACC GOAL ${paused.id}] PAUSED at a ceiling (${paused.why || "reason not recorded"}). This session was NOT resumed for it. Review the goal (\`node C:/code/guards/hooks/goal.mjs show ${paused.id}\`) and, if the work should continue, run \`node C:/code/guards/hooks/goal.mjs resume ${paused.id}\`.`;
+  return `[ACC MISSION ${paused.id}] PAUSED at a ceiling (${paused.why || "reason not recorded"}). This session was NOT resumed for it. Review the mission (\`node C:/code/guards/hooks/mission.mjs show ${paused.id}\`) and, if the work should continue, run \`node C:/code/guards/hooks/mission.mjs resume ${paused.id}\`.`;
 }
 
-// OI-034: a goal reaped as dead (its bound console gone — a reboot, a
+// OI-034: a mission reaped as dead (its bound console gone — a reboot, a
 // crash, power loss) does NOT auto-resume (see that entry for why not);
-// it just stopped silently until now. Unlike pausedGoalWarning, this is
-// NOT scoped to the current session's own consolePid — the dead goal's
+// it just stopped silently until now. Unlike pausedMissionWarning, this is
+// NOT scoped to the current session's own consolePid — the dead mission's
 // pid is, definitionally, gone, so there is no "this session" it could
 // still match. Shown to whichever session starts next, then consumed
 // (deleted) so it never repeats — there is no "resume" command whose
-// success would clear it the way a paused goal's alert clears itself.
-export function deadGoalWarning() {
+// success would clear it the way a paused mission's alert clears itself.
+export function deadMissionWarning() {
   let alerts;
   try {
-    alerts = consumeDeadGoalAlerts();
+    alerts = consumeDeadMissionAlerts();
   } catch {
     return "";
   }
@@ -463,49 +463,49 @@ export function deadGoalWarning() {
   return alerts
     .map(
       (a) =>
-        `[ACC GOAL ${a.id}] DIED — its console went away (${a.why || "reason not recorded"}), most likely a reboot or crash. Work was interrupted and NOT auto-resumed. Review it (\`node C:/code/guards/hooks/goal.mjs show ${a.id}\`) and start a fresh goal if it should continue: the old one is archived, not resumable.`
+        `[ACC MISSION ${a.id}] DIED — its console went away (${a.why || "reason not recorded"}), most likely a reboot or crash. Work was interrupted and NOT auto-resumed. Review it (\`node C:/code/guards/hooks/mission.mjs show ${a.id}\`) and start a fresh mission if it should continue: the old one is archived, not resumable.`
     )
     .join("\n");
 }
 
-export function goalContext(p, win, policy) {
-  const goal = bindSession({
+export function missionContext(p, win, policy) {
+  const mission = bindSession({
     sessionId: p.session_id,
     consolePid: win && win.consolePid,
     cwd: p.cwd,
-    goalId: process.env.ACC_GOAL || "",
+    missionId: process.env.ACC_MISSION || "",
   });
-  if (!goal) return "";
+  if (!mission) return "";
 
-  const cycle = Number(goal.cycles || 0);
+  const cycle = Number(mission.cycles || 0);
   const head =
     cycle === 0
-      ? `[ACC GOAL ${goal.id}] The Command Center started this session to do the following. Begin work on it now.`
-      : `[ACC GOAL ${goal.id}] RESUMED - this is continuation ${cycle + 1}. The previous session hit the context budget and was cleared; you are the same work, not a new task. Pick up where the progress log stops.`;
+      ? `[ACC MISSION ${mission.id}] The Command Center started this session to do the following. Begin work on it now.`
+      : `[ACC MISSION ${mission.id}] RESUMED - this is continuation ${cycle + 1}. The previous session hit the context budget and was cleared; you are the same work, not a new task. Pick up where the progress log stops.`;
 
-  const parts = [head, "", goal.text, ""];
-  if (goal.cwd) parts.push(`Working folder: ${goal.cwd}`);
+  const parts = [head, "", mission.text, ""];
+  if (mission.cwd) parts.push(`Working folder: ${mission.cwd}`);
   if (cycle > 0) {
     parts.push(
       "",
-      `Progress so far (from ${path.join(GOALSDIR, goal.id + ".log.md")}, most recent last):`,
+      `Progress so far (from ${path.join(MISSIONSDIR, mission.id + ".log.md")}, most recent last):`,
       "",
-      logTail(goal.id, 3000).trim()
+      logTail(mission.id, 3000).trim()
     );
   }
   parts.push(
     "",
-    `[ACC GOAL] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
-    `  - finished, everything verified:  node C:/code/guards/hooks/goal.mjs done ${goal.id}`,
-    `  - genuinely blocked on a human:   node C:/code/guards/hooks/goal.mjs blocked ${goal.id} --why "<one line>"`,
-    `Until one of those runs, ACC will keep resuming this goal after every clear.`
+    `[ACC MISSION] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
+    `  - finished, everything verified:  node C:/code/guards/hooks/mission.mjs done ${mission.id}`,
+    `  - genuinely blocked on a human:   node C:/code/guards/hooks/mission.mjs blocked ${mission.id} --why "<one line>"`,
+    `Until one of those runs, ACC will keep resuming this mission after every clear.`
   );
   return parts.join("\n");
 }
 
 // A prompt that route.mjs could not hand back as keystrokes - multi-line, or
 // longer than the injector's limit. It travels as a FILE keyed by console pid
-// (the same thread of continuity goals use, because the session id dies with the
+// (the same thread of continuity missions use, because the session id dies with the
 // clear) and is injected here, into the session that comes up after the clear.
 //
 // Consumed once: the file is deleted as it is read, so a queued prompt can never
@@ -550,12 +550,12 @@ function onSessionStart(p, policy) {
   } catch {}
   // Interactive only: learn which terminal window to type /clear into later.
   let win = null;
-  // A capture that blips must not cost the session its goal or its queued
+  // A capture that blips must not cost the session its mission or its queued
   // prompt: both are addressed by console pid, and a previously recorded one is
   // still the right console. Fall back to what was written last time.
   if (!HEADLESS) {
     // An ACC-hosted pty session has no HWND to find: the GUI is the terminal.
-    // The persistent process across /clear (what consolePid means to goal
+    // The persistent process across /clear (what consolePid means to mission
     // binding) is the claude process - NOT this hook's raw parent, which is a
     // transient bash/cmd wrapper that dies with the turn (recording it gave
     // clearbot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
@@ -589,23 +589,23 @@ function onSessionStart(p, policy) {
       `[ACC] Profile: ${policy.activeProfile} (launched from the Command Center). Its subagent rules apply to this session; the context budget comes from the Process-tab dials.`
     );
   }
-  // A goal is what makes this session a continuation rather than a fresh start.
+  // A mission is what makes this session a continuation rather than a fresh start.
   // It is adopted by CONSOLE, so this fires identically on the launch and on
   // every session that comes up after a /clear. Failing here costs auto-resume
   // and nothing else - hooks fail open.
   try {
-    const goal = goalContext(p, win, policy);
-    if (goal) lines.push(goal);
+    const mission = missionContext(p, win, policy);
+    if (mission) lines.push(mission);
     else {
-      const paused = pausedGoalWarning(p, win);
+      const paused = pausedMissionWarning(p, win);
       if (paused) lines.push(paused);
     }
   } catch {}
-  // OI-034: independent of the goal/paused check above — a dead goal has
+  // OI-034: independent of the mission/paused check above — a dead mission has
   // no consolePid left to match against THIS session, so it can't be
   // folded into that if/else the way paused is.
   try {
-    const died = deadGoalWarning();
+    const died = deadMissionWarning();
     if (died) lines.push(died);
   } catch {}
   try {
@@ -614,7 +614,7 @@ function onSessionStart(p, policy) {
   } catch {}
 
   // If the watcher is down, this session has no auto-clear and no auto-resume.
-  // Say it once, at the top, instead of letting the goal loop fail silently.
+  // Say it once, at the top, instead of letting the mission loop fail silently.
   try {
     const hb = path.join(ROOT, "watcher", "clearbot.heartbeat");
     if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
@@ -736,13 +736,13 @@ function onStop(p, policy) {
   const ctx = contextOf(p.transcript_path);
   const { hardK } = policy.context;
   if (ctx < hardK * 1000) {
-    // LIVENESS (guards OI-002): a goal session that ends its turn UNDER the
+    // LIVENESS (guards OI-002): a mission session that ends its turn UNDER the
     // ceiling gets no clear, and therefore no resume - the loop used to die
-    // right here, silently. Re-arm the kick and let goal.mjs decide when
+    // right here, silently. Re-arm the kick and let mission.mjs decide when
     // firing it is safe. Fails open: liveness must never cost a turn its
     // clean exit.
     try {
-      const g = goalForSession(p.session_id);
+      const g = missionForSession(p.session_id);
       if (g) recordTurnEnd(g.id, { human: !KICK_CONSTANTS.includes(lastUserText(p.transcript_path)) });
     } catch {}
     allow();
@@ -763,24 +763,24 @@ function onStop(p, policy) {
   }
 
   // Latched: the checkpoint turn is done. Budget WINS from here (OI-011): a
-  // /goal Stop hook may keep blocking the turn, so this path must fire on
+  // /mission Stop hook may keep blocking the turn, so this path must fire on
   // every Stop until the clear actually lands - stop_hook_active no longer
   // short-circuits it. appendCycle is one-shot so blocked loops don't spam.
   if (HEADLESS) allow(); // the runner relaunch IS the clear
 
-  // If a goal owns this session, its closing summary IS the handoff to the next
+  // If a mission owns this session, its closing summary IS the handoff to the next
   // continuation. Captured automatically from the checkpoint turn the block above
   // just forced, so the model carries no extra burden and cannot forget to do it.
-  let goal = null;
+  let mission = null;
   try {
-    goal = goalForSession(p.session_id);
+    mission = missionForSession(p.session_id);
     const cycled = statePath(p.session_id, "cycled");
-    if (goal && !fs.existsSync(cycled)) {
-      // Phase 1: real cost for THIS session's transcript, for the goal's
+    if (mission && !fs.existsSync(cycled)) {
+      // Phase 1: real cost for THIS session's transcript, for the mission's
       // dollar ceiling. costOfTranscript never throws (empty/unreadable file
       // -> {costUsd:0}), so this can't cost the checkpoint its clean exit.
       const { costUsd } = p.transcript_path ? costOfTranscript(p.transcript_path, policy.rates) : { costUsd: 0 };
-      appendCycle(goal.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path), costUsd });
+      appendCycle(mission.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path), costUsd });
       fs.writeFileSync(cycled, "1");
     }
   } catch {}
@@ -798,9 +798,9 @@ function onStop(p, policy) {
             `    node C:/code/guards/hooks/budget.mjs clearbot-status\n`
           : `\n    >>> TYPE /clear NOW <<<\n\n` +
             `  (auto-clear unavailable - no window captured for this session)\n`) +
-        (goal
-          ? `  Goal ${goal.id} is active - the next session adopts it automatically and\n` +
-            `  is resumed by the Command Center. Cycle ${goal.cycles} logged.\n`
+        (mission
+          ? `  Mission ${mission.id} is active - the next session adopts it automatically and\n` +
+            `  is resumed by the Command Center. Cycle ${mission.cycles} logged.\n`
           : `  The next session re-primes itself from ${policy.runner.statusFile}.\n`) +
         `  Verify the clear was real: node C:/code/guards/hooks/usage.mjs clears\n`,
     })
