@@ -50,6 +50,37 @@ test("guard machinery and the user settings tree are never writable, whatever th
   }
 });
 
+// Full-repo review (2026-08-06): the READ branch had no denyRoots check at
+// all -- only WRITE_TOOLS did. An ordinary, plausible contract for a task
+// like "fix a flaky test" (readRoots: the whole repo, writeRoots: just the
+// hooks/ subdirectory it's touching) would refuse a write to vault.json
+// (good, writeRoots doesn't cover it) but ALLOW reading it outright, since
+// readRoots being the whole repo textually covers everything underneath,
+// denyRoots or not. The guard's own header says "Deny by default... the
+// FIRST matching rule wins" -- denyRoots is meant to be exactly that first,
+// unconditional rule, and it silently wasn't for reads.
+test("guard machinery and the user settings tree are never READABLE either, whatever the contract says", () => {
+  const wideOpen = ctx({ contract: { allowedActions: { readRoots: ["C:/"], writeRoots: [], bashPatterns: [], networkHosts: [], vaultKeys: [], subagents: [] } } });
+  for (const target of [
+    "C:/code/guards/vault.json",
+    "C:/code/guards/policy.json",
+    "C:/code/guards/kernel/guard.mjs",
+    "C:/Users/x/.claude/settings.json",
+  ]) {
+    const d = decide(ev("Read", { file_path: target }), wideOpen);
+    assert.equal(d.allow, false, `${target} must never be readable, even under a readRoots grant that textually covers it`);
+    assert.equal(d.rule, "alwaysDeny");
+  }
+  // A narrower, entirely realistic contract for ordinary work must still be
+  // blocked from reading the vault even though its readRoots grant covers
+  // the whole repo and its writeRoots is scoped elsewhere -- the exact
+  // "ordinary task, no vaultKeys gymnastics needed" scenario the review found.
+  const ordinary = ctx({ contract: { allowedActions: { readRoots: ["C:/code/guards"], writeRoots: ["C:/code/guards/hooks"], bashPatterns: [], networkHosts: [], vaultKeys: [], subagents: [] } } });
+  const d2 = decide(ev("Read", { file_path: "C:/code/guards/vault.json" }), ordinary);
+  assert.equal(d2.allow, false, "an ordinary contract's broad readRoots must not incidentally expose the vault");
+  assert.equal(d2.rule, "alwaysDeny");
+});
+
 test("pinned acceptance-test files are write-denied for the whole run (AC-G10)", () => {
   const d = decide(ev("Edit", { file_path: "C:/work/src/acceptance.test.mjs" }), ctx());
   assert.equal(d.allow, false);

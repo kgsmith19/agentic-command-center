@@ -102,6 +102,15 @@ export function decide(payload, ctx) {
     const raw = input.file_path ?? input.notebook_path ?? input.path;
     if (!raw) return verdict(false, "read", "read tool with no path — failing closed", tool);
     const target = norm(raw);
+    // Full-repo review (2026-08-06): only WRITE_TOOLS checked denyRoots --
+    // an ordinary contract with a broad readRoots grant (the whole repo,
+    // say, to fix a test elsewhere in it) could read vault.json outright
+    // even though writing it was correctly refused. denyRoots is the
+    // guard's own "deny by default, first rule wins" boundary; it must
+    // apply to reads exactly as it does to writes.
+    if (underAny(target, denyRoots)) {
+      return verdict(false, "alwaysDeny", "guard machinery and settings are never readable, whatever the contract says", tool, target);
+    }
     return underAny(target, [...(a.readRoots || []), ...(a.writeRoots || [])])
       ? verdict(true, "readRoots", "inside an allowed read root", tool, target)
       : verdict(false, "readRoots", "path is not granted by the contract", tool, target);
