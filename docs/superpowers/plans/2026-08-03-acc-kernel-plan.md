@@ -12,6 +12,8 @@
 
 ---
 
+**Checkbox-state notice (added 2026-08-06, Phase 8 of `docs/2026-08-03-full-remediation-prompt.md`):** every checkbox below is unchecked, but substantial-to-complete matching work already exists in the repo for most tasks in this plan (confirmed by cross-referencing `OPEN-ISSUES.md` and `git log`) — this plan predates the convention of checking boxes off as work lands, and was never gone back through to update them. Do not read an unchecked box here as "not done." `OPEN-ISSUES.md` and the current code are the source of truth for what actually shipped; this file records the ORIGINAL task breakdown, not live status.
+
 ## Global Constraints
 
 Every task's requirements implicitly include this section.

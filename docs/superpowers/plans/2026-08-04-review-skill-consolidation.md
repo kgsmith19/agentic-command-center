@@ -8,6 +8,8 @@
 
 **Tech Stack:** Markdown skill files with YAML frontmatter (`name`, `description`), no code. `~/.claude/skills`, `C:\code\.claude\skills`, and `C:\code\lifeos-ecosystem\.claude\skills` are plain directories, not git repos — no commit step applies to edits there. `C:\code\guards` is a git repo — its one edit (`hooks/budget.mjs`) does get committed.
 
+**Checkbox-state notice (added 2026-08-06, Phase 8 of `docs/2026-08-03-full-remediation-prompt.md`):** every checkbox below is unchecked, but substantial-to-complete matching work already exists in the repo for most tasks in this plan (confirmed by cross-referencing `OPEN-ISSUES.md` and `git log`) — this plan predates the convention of checking boxes off as work lands, and was never gone back through to update them. Do not read an unchecked box here as "not done." `OPEN-ISSUES.md` and the current code are the source of truth for what actually shipped; this file records the ORIGINAL task breakdown, not live status.
+
 ## Global Constraints
 
 - Every skill that refers to itself by slash-command name in its own body must use its **new** `-kgs` name; every skill that refers to a *sibling* skill it recommends running (e.g. resolve-issues telling you to also run `/sec-diff`) must be updated to that sibling's new `-kgs` name too. Generic mentions of "a repo's own security-review or sec-diff skill" (describing a naming *convention* that some *other*, unrelated repo might follow) are not self-references and must NOT be renamed — verbatim copied from `security-review-kgs`'s existing text.

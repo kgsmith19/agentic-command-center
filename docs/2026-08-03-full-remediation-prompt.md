@@ -674,7 +674,61 @@ entries survive without a comment proving they're still needed post-parser-fix.
 
 ## Phase 8 — Whatever Track A deliberately deferred
 
-**Status: not started**
+**Status: DONE (all 3 items) — commit (see next commit in this branch)**
+
+1. Phase 5 didn't fully land (step 1, wiring, only — the keystroke
+   mechanism itself is untouched, confirmed by a dedicated research pass:
+   `watcher/sendconsole.ps1`, `hooks/winfind.ps1`, `gui/PtyHost.cs`,
+   `gui/term.html` all still present and live), so per this item's own
+   branch: dedupe, don't archive. Found the invariant restated in full
+   independently in two places beyond its canonical home
+   (`watcher/clearbot.ps1`'s own `SAFETY INVARIANTS` header comment):
+   `notes/ACC-HANDOFF.md`'s "The two invariants everything rests on" and
+   `AGENTS.md`'s "Goals" section. Rather than delete either restatement
+   (both are genuinely useful as fast, self-contained reads for a session
+   picking up cold — the actual drift risk isn't the restatement existing,
+   it's nobody knowing there are three copies to keep in sync), added an
+   explicit "canonical source: clearbot.ps1, update together" pointer to
+   both, cross-referencing each other and the code. Every doc still says
+   what it always said; a future edit to the invariant now can't miss
+   that there are two other copies.
+2. Ran a dedicated research pass across all 7 `docs/superpowers/plans/*.md`
+   files (not 3 — the doc's original estimate was written before 4 more
+   shipped) against `git log` and the current code. Finding: 6 of the 7
+   have literally every checkbox unchecked (~360 items, zero `[x]`) despite
+   the matching work existing in the repo and closed in `OPEN-ISSUES.md` —
+   these plans predate the convention of checking boxes off as work lands
+   and were never revisited. Hand-flipping ~360 individual checkboxes
+   against git history is not a good use of tonight; instead added one
+   explicit notice near the top of each of the 6 files stating plainly
+   that the checkbox state is not reliable and pointing to
+   `OPEN-ISSUES.md`/git history as the source of truth — the honest fix
+   for "this doc's checkboxes can't be trusted" is saying so, not
+   fabricating 360 individual judgment calls under time pressure. The
+   7th file, `2026-07-31-acc-embedded-terminal.md`, genuinely uses
+   checkboxes correctly (33 checked, 19 unchecked, each verified against
+   real code and `OPEN-ISSUES.md` — including its unchecked
+   "run e2e scenario 5 deliberately" steps, correctly left unchecked since
+   `OI-025` documents that exact run coming back 1/5 PASS) — left
+   untouched.
+3. `OPEN-ISSUES.md` end-to-end audit: a dedicated research pass read all
+   919 lines / 34 entries and cross-checked every resolved entry's claimed
+   code against the actual current code, and every open entry against
+   whether its fix has secretly shipped. Result: the ledger is genuinely
+   well-maintained — no wrongly-resolved entries, no stale-open entries,
+   nothing contradicting this doc's own Phase status blocks. Two small,
+   low-priority internal inconsistencies found and fixed (folded into the
+   `kernel/verifier.mjs` OI-019 commit rather than a separate one): OI-019's
+   module count didn't add up (3 done + 8 remaining = 11, not 12 —
+   `kernel/ledger.mjs` had a real fix land during the guardhook.mjs pass
+   but was never added to either list); OI-025's "the currently-open
+   OI-011" phrasing went stale when OI-011 was retired 2026-08-05.
+
+**Definition of done, re-checked:** no doc describes a mechanism as current
+that Phase 5 deleted (Phase 5 didn't delete it, so this doesn't apply —
+deduped instead, per the item's own fallback instruction). No OI entry
+sits open after its fix has shipped — confirmed true by the audit, not
+merely asserted.
 
 Track A (the 2026-08-03 CI/docs session) intentionally left some duplication
 alone because Phase 5 was expected to make it moot — check that assumption

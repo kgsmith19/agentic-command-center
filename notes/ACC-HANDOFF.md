@@ -26,6 +26,10 @@ advanced**; auto-approve runbox scripts.
 
 ## The two invariants everything rests on
 
+Canonical source: `watcher/clearbot.ps1`'s own header comment (its
+`SAFETY INVARIANTS` block). Restated here for a fast handoff read — if the
+two ever disagree, the code comment wins; update both together.
+
 1. **Continuity is the CONSOLE PID, never the session id.** A `/clear` ends the
    session id; the terminal process is the same throughout. Goals and queued
    prompts are both keyed by console pid, which is the only reason either

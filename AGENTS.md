@@ -269,7 +269,9 @@ button creates one (`hooks/goal.mjs new --text-file`) and launches Claude with
 cycle's handoff → clearbot types `/clear` → the new session's SessionStart adopts
 the goal and injects it → clearbot types `Continue the active ACC goal.`
 
-Two decisions carry the whole design:
+Two decisions carry the whole design (same invariants `notes/ACC-HANDOFF.md`
+restates and `watcher/clearbot.ps1`'s own header comment states canonically —
+update all three together if either ever changes):
 
 1. **A goal binds to the CONSOLE PID, not the session id.** A `/clear` ends the
    session id; the terminal process is the same throughout. Every session that

@@ -11,6 +11,8 @@
 **Spec:** `docs/superpowers/specs/2026-07-31-acc-terminal-control-deck-design.md`
 **Predecessor plan (Tasks 7–8 + gates still open there):** `docs/superpowers/plans/2026-07-31-acc-embedded-terminal.md`
 
+**Checkbox-state notice (added 2026-08-06, Phase 8 of `docs/2026-08-03-full-remediation-prompt.md`):** every checkbox below is unchecked, but substantial-to-complete matching work already exists in the repo for most tasks in this plan (confirmed by cross-referencing `OPEN-ISSUES.md` and `git log`) — this plan predates the convention of checking boxes off as work lands, and was never gone back through to update them. Do not read an unchecked box here as "not done." `OPEN-ISSUES.md` and the current code are the source of truth for what actually shipped; this file records the ORIGINAL task breakdown, not live status.
+
 ## Global Constraints
 
 - Fast tier must stay green and hooks must never run by hand against live state — see `AGENTS.md` § "The regression, exactly" for the current command (`npm run test:windows` on Windows / `npm test` portable) and the `ACC_ROOT`/`ACC_POLICY` sandboxing rule (guards OI-006).
