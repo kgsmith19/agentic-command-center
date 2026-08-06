@@ -248,6 +248,28 @@ line under `## Resolved`.
   cleared its own floor in the same CI run (100/100/90.8) since its route
   logic is thinner and less branch-heavy than engineClient.mjs's op-dispatch
   functions.
+- UPDATE 2026-08-06 (tier-2 GUI migration, Spending tab): `hooks/status.mjs`
+  (new) joins this entry with a DIFFERENT trigger than the batch-size one
+  above, worth naming precisely rather than lumping in: lines 100%, funcs
+  100%, branches stuck at ~50-54% in isolated `node hooks/covgate.mjs` runs
+  no matter how many additional validation-path tests were added (18 tests,
+  every conditional in `validateOpsBlock` manually traced and confirmed
+  exercised, including every optional-chain nullish path — the number did
+  not move with real added coverage, which is itself the tell). Root cause
+  isolated to `hooks/status.test.mjs`'s own per-test dynamic reimport
+  pattern (`import(`./status.mjs?t=${++loadSeq}`)`, 18 separate module
+  instantiations of the same source in one process) — the SAME technique
+  `hooks/usage.test.mjs` already uses, and `usage.mjs` shows the identical
+  suspiciously-low branch number in the raw (unmerged) node coverage table
+  despite dozens of tests. `covgate.mjs`'s own parseLcov fix (OI-017,
+  earlier tonight) merges multiple SF: blocks for the same file by code-
+  point identity, but assumes V8's branch numbering is stable/comparable
+  across separately-instantiated compilations of the same source -- for a
+  file reimported via a fresh query string per test, that assumption may
+  not hold, undercounting real coverage rather than measuring a real gap.
+  Not fixed tonight: confirming this precisely (vs. just pattern-matching
+  it to OI-033/OI-017) needs reading node's own lcov emission for a multi-
+  reimport case directly, out of scope for a GUI migration pass.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real

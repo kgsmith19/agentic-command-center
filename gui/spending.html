@@ -1,0 +1,178 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Spending / Process</title>
+<style>
+  body { font: 14px 'Segoe UI', sans-serif; margin: 16px; max-width: 820px; }
+  fieldset { margin: 0 0 14px; border: 1px solid #ccc; }
+  legend { font-weight: bold; }
+  .row { margin: 6px 0; }
+  label { display: inline-block; min-width: 150px; }
+  input[type=text], input[type=number] { width: 120px; }
+  #status, #policyStatus, #clearbotStatus, #actionStatus { margin-left: 8px; }
+  .ok { color: #1a7a1a; }
+  .err { color: #b22222; }
+  .danger { color: #b22222; }
+  #tierBadge { font-weight: bold; padding: 2px 8px; border-radius: 3px; }
+  .tier-green { background: #d6f5d6; color: #1a7a1a; }
+  .tier-amber { background: #fff2cc; color: #8a6d00; }
+  .tier-red { background: #f8d7da; color: #a71d2a; }
+</style>
+</head>
+<body>
+<h3>Spending</h3>
+<fieldset><legend>This week</legend>
+  <div class="row">tier: <span id="tierBadge">-</span>
+    &nbsp; tokens: <span id="weekTier">-</span>
+    &nbsp; cost: $<span id="weekCost">-</span></div>
+  <button id="spendingRefresh">Refresh</button><span id="status"></span>
+</fieldset>
+
+<fieldset><legend>Budget dials</legend>
+  <div class="row"><label for="softK">Context soft ceiling (k)</label><input type="number" id="softK"></div>
+  <div class="row"><label for="hardK">Context hard ceiling (k)</label><input type="number" id="hardK"></div>
+  <div class="row"><label for="amberTokens">Week amber (tokens)</label><input type="number" id="amberTokens"></div>
+  <div class="row"><label for="redTokens">Week red (tokens)</label><input type="number" id="redTokens"></div>
+  <div class="row"><label for="subMode">Subagents mode</label>
+    <select id="subMode"><option value="allowlist">allowlist</option><option value="off">off</option></select></div>
+  <div class="row"><label for="subAllow">Subagents allow (comma-separated)</label><input type="text" id="subAllow"></div>
+  <div class="row"><label for="maxPerSession">Subagents max/session</label><input type="number" id="maxPerSession"></div>
+  <div class="row"><label for="maxFinders">Fan-out max finders</label><input type="number" id="maxFinders"></div>
+  <button id="policySave">Save dials</button><span id="policyStatus"></span>
+</fieldset>
+
+<fieldset><legend>Clearbot</legend>
+  <div class="row">processes: <span id="cbRunning">-</span>
+    &nbsp; kill switch: <span id="cbKillSwitch">-</span>
+    &nbsp; pending: <span id="cbPending">-</span></div>
+  <button id="cbRefresh">Refresh</button>
+  <button id="cbStart">Start</button>
+  <button id="cbStop">Stop</button>
+  <button id="cbClearNow">Clear now</button>
+  <span id="clearbotStatus"></span>
+</fieldset>
+
+<fieldset><legend>Process control</legend>
+  <div class="row">
+    <button id="btnKill" class="danger">STOP all automated work</button>
+    <button id="btnUnstop">Resume</button>
+  </div>
+  <div class="row">
+    <input type="number" id="fanoutMins" value="30" style="width:60px">
+    <button id="btnFanout">Grant fan-out window (min)</button>
+  </div>
+  <span id="actionStatus"></span>
+</fieldset>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const post = (url, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json", "X-ACC": "1" }, body: JSON.stringify(body ?? {}) });
+
+async function loadSpending() {
+  const s = await (await fetch("/api/status/spending")).json();
+  $("weekTier").textContent = s.weekTokens.toLocaleString();
+  $("weekCost").textContent = s.costUsd.toFixed(2);
+  const badge = $("tierBadge");
+  badge.textContent = s.tier;
+  badge.className = "tier-" + s.tier;
+}
+
+async function loadPolicy() {
+  const p = await (await fetch("/api/status/policy")).json();
+  $("softK").value = p.context.softK;
+  $("hardK").value = p.context.hardK;
+  $("amberTokens").value = p.week.amberTokens;
+  $("redTokens").value = p.week.redTokens;
+  $("subMode").value = p.subagents.mode;
+  $("subAllow").value = p.subagents.allow.join(", ");
+  $("maxPerSession").value = p.subagents.maxPerSession;
+  $("maxFinders").value = p.review.maxFinders;
+}
+
+async function loadClearbot() {
+  const c = await (await fetch("/api/status/clearbot")).json();
+  $("cbRunning").textContent = c.running === null ? "unknown (Windows-only)" : c.running;
+  $("cbKillSwitch").textContent = c.killSwitchEngaged ? "ENGAGED" : "off";
+  $("cbPending").textContent = c.pending.length;
+}
+
+$("spendingRefresh").onclick = loadSpending;
+$("cbRefresh").onclick = loadClearbot;
+
+$("policySave").onclick = async () => {
+  const block = {
+    context: { softK: Number($("softK").value), hardK: Number($("hardK").value) },
+    week: { amberTokens: Number($("amberTokens").value), redTokens: Number($("redTokens").value) },
+    subagents: {
+      mode: $("subMode").value,
+      allow: $("subAllow").value.split(",").map((s) => s.trim()).filter(Boolean),
+      maxPerSession: Number($("maxPerSession").value),
+    },
+    review: { maxFinders: Number($("maxFinders").value) },
+  };
+  const r = await post("/api/status/policy", block);
+  const j = await r.json();
+  $("policyStatus").textContent = r.ok ? "Saved" : "Not saved: " + j.error;
+  $("policyStatus").className = r.ok ? "ok" : "err";
+  if (r.ok) await loadPolicy();
+};
+
+$("cbStart").onclick = async () => {
+  const r = await post("/api/status/clearbot", { op: "start" });
+  const j = await r.json();
+  $("clearbotStatus").textContent = r.ok ? "started" : "failed: " + j.error;
+  $("clearbotStatus").className = r.ok ? "ok" : "err";
+  await loadClearbot();
+};
+$("cbStop").onclick = async () => {
+  const r = await post("/api/status/clearbot", { op: "stop" });
+  const j = await r.json();
+  $("clearbotStatus").textContent = r.ok ? "stopped" : "failed: " + j.error;
+  $("clearbotStatus").className = r.ok ? "ok" : "err";
+  await loadClearbot();
+};
+$("cbClearNow").onclick = async () => {
+  const r = await post("/api/status/clearbot", { op: "clear-now" });
+  const j = await r.json();
+  $("clearbotStatus").textContent = r.ok ? "clear requested" : "failed: " + j.error;
+  $("clearbotStatus").className = r.ok ? "ok" : "err";
+};
+
+// btnKill has no confirmation in the WinForms tab today (a gap the design
+// spec named explicitly, §5) -- the web port adds one, same inline-confirm
+// pattern the Runbox tab's flush button already uses, rather than a native
+// window.confirm().
+let killArmed = false;
+$("btnKill").onclick = async () => {
+  if (!killArmed) {
+    killArmed = true;
+    $("btnKill").textContent = "Click again to confirm STOP";
+    setTimeout(() => { killArmed = false; $("btnKill").textContent = "STOP all automated work"; }, 4000);
+    return;
+  }
+  killArmed = false;
+  $("btnKill").textContent = "STOP all automated work";
+  const r = await post("/api/status/stop", {});
+  $("actionStatus").textContent = r.ok ? "Stopped" : "Not stopped";
+  $("actionStatus").className = r.ok ? "ok" : "err";
+};
+$("btnUnstop").onclick = async () => {
+  const r = await post("/api/status/unstop", {});
+  $("actionStatus").textContent = r.ok ? "Resumed" : "Not resumed";
+  $("actionStatus").className = r.ok ? "ok" : "err";
+};
+$("btnFanout").onclick = async () => {
+  const mins = Number($("fanoutMins").value);
+  const r = await post("/api/status/fanout", { mins });
+  const j = await r.json();
+  $("actionStatus").textContent = r.ok ? `Fan-out granted for ${mins} min` : "Not granted: " + j.error;
+  $("actionStatus").className = r.ok ? "ok" : "err";
+};
+
+loadSpending();
+loadPolicy();
+loadClearbot();
+</script>
+</body>
+</html>

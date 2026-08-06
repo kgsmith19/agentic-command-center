@@ -36,6 +36,7 @@ fs.mkdirSync(process.env.ACC_GOALS_DIR, { recursive: true });
 const {
   statePath, readJson, atomicWrite, weekTier, scanWeek, stopRunner,
   lastAssistantText, lastUserText, pausedGoalWarning, goalContext, queuedPromptContext,
+  clearbotStatus,
 } = await import("./budget.mjs");
 const { createGoal, setStatus } = await import("./goal.mjs");
 
@@ -222,4 +223,31 @@ test("queuedPromptContext returns '' with no consolePid or no queued file, and c
   assert.match(out, /the deferred prompt/);
   assert.equal(fs.existsSync(qf), false, "the queued file must be deleted once read");
   assert.equal(queuedPromptContext({ consolePid: cpid }), "", "a second read finds nothing");
+});
+
+// Spending tab (2026-08-06): clearbotStatus() extracted from the CLI's
+// inline block so hooks/status.mjs can call it directly. On a host with no
+// `powershell` (this sandbox), the OLD code's execFileSync threw ENOENT
+// uncaught out of main() -- caught only by the outer fail-open catch, which
+// swallowed the WHOLE command's output including pending/killSwitchEngaged,
+// fields that have nothing to do with whether powershell exists. The fixed
+// version must return those honestly, with running:null (not 0, not a throw)
+// standing in for "unknown on this host".
+test("clearbotStatus reports pending/killSwitch honestly even with no powershell binary, running:null not a throw", () => {
+  const stop = path.join(BASE, "watcher", "clearbot.stop");
+  fs.mkdirSync(path.dirname(stop), { recursive: true });
+  fs.rmSync(stop, { force: true });
+  fs.mkdirSync(path.join(BASE, "runner", "clear-requests"), { recursive: true });
+  fs.writeFileSync(path.join(BASE, "runner", "clear-requests", "abc123.json"), "{}");
+
+  let s;
+  assert.doesNotThrow(() => { s = clearbotStatus(); });
+  assert.equal(s.running, null, "no powershell on this host -- unknown, not 0");
+  assert.equal(s.killSwitchEngaged, false);
+  assert.deepEqual(s.pending, ["abc123.json"]);
+  assert.match(s.log, /clearbot\.log$/);
+
+  fs.writeFileSync(stop, "stopped by hand\n");
+  assert.equal(clearbotStatus().killSwitchEngaged, true);
+  fs.rmSync(stop, { force: true });
 });

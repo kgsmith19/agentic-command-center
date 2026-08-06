@@ -113,6 +113,25 @@ test("handler(): a request with no Host header at all is denied (defensive defau
   assert.equal(res.code, 403);
 });
 
+// Found while building the Spending tab: a page GET whose file is missing or
+// unreadable threw uncaught before this catch existed -- the client's
+// fetch() hung forever rather than getting a fast, clean error, since
+// nothing ever called res.end(). This is the only regression test that can
+// exercise it without a real missing file on disk permanently.
+test("handler(): a PAGES route whose file is unreadable is a clean 500, not a hang", () => {
+  const real = path.join(path.dirname(fileURLToPath(import.meta.url)), "engine.html");
+  const away = real + ".moved-for-test";
+  fs.renameSync(real, away);
+  try {
+    const res = { writeHead(code, headers) { res.code = code; res.headers = headers; }, end(body) { res.body = body; } };
+    handler({ headers: { host: "127.0.0.1" }, url: "/engine.html", method: "GET" }, res);
+    assert.equal(res.code, 500);
+    assert.match(JSON.parse(res.body).error, /ENOENT/);
+  } finally {
+    fs.renameSync(away, real);
+  }
+});
+
 test("a POST body over the cap is dropped before parsing (no memory blow-up)", async () => {
   const port = Number(new URL(base).port);
   const before = fs.readFileSync(process.env.ACC_POLICY, "utf8");
@@ -300,4 +319,82 @@ test("runbox/preview refuses a ref not in the current listing (400, not a filesy
   const r = await fetch(`${base}/api/engine/runbox/preview?ref=${encodeURIComponent("../../../etc/passwd")}`);
   assert.equal(r.status, 400);
   assert.match((await r.json()).error, /not found/);
+});
+
+// ================================================================
+// gui/spending.html routes (design spec §5) — same CSRF/loopback/error-shape
+// discipline as the routes above; business logic lives in hooks/status.mjs
+// (already unit-tested on its own), so these focus on the HTTP contract.
+// ================================================================
+
+const postStatus = (route, body, headers = {}) => fetch(`${base}${route}`, {
+  method: "POST", body: JSON.stringify(body ?? {}),
+  headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
+});
+
+test("GET /spending.html serves the page", async () => {
+  const r = await fetch(`${base}/spending.html`);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /id="weekTier"/);
+});
+
+test("GET /api/status/spending returns the live week summary", async () => {
+  const r = await fetch(`${base}/api/status/spending`);
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.tier, "green");
+  assert.equal(typeof j.costUsd, "number");
+});
+
+test("GET/POST /api/status/policy round-trips the ops dials, CSRF applies the same as kernel-policy", async () => {
+  const before = await (await fetch(`${base}/api/status/policy`)).json();
+  assert.equal(before.context.softK, 400);
+
+  const noHeader = await postStatus("/api/status/policy", { ...before, context: { softK: 100, hardK: 200 } }, { "X-ACC": "" });
+  assert.equal(noHeader.status, 403);
+  assert.equal((await (await fetch(`${base}/api/status/policy`)).json()).context.softK, 400);
+
+  const good = await postStatus("/api/status/policy", { ...before, context: { softK: 100, hardK: 200 } });
+  assert.equal(good.status, 200);
+  assert.equal((await good.json()).policy.context.softK, 100);
+  assert.equal((await (await fetch(`${base}/api/status/policy`)).json()).context.softK, 100);
+});
+
+test("POST /api/status/policy with an invalid block is a 400 with status.mjs's own message, dials untouched", async () => {
+  const before = await (await fetch(`${base}/api/status/policy`)).json();
+  const bad = await postStatus("/api/status/policy", { ...before, context: { softK: 600, hardK: 400 } });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /hardK must be greater than/);
+  assert.equal((await (await fetch(`${base}/api/status/policy`)).json()).context.softK, before.context.softK);
+});
+
+test("GET /api/status/clearbot never 500s even with no powershell on this host", async () => {
+  const r = await fetch(`${base}/api/status/clearbot`);
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.running, null);
+  assert.deepEqual(j.pending, []);
+});
+
+test("POST /api/status/stop then /unstop round-trip the real stop-file on disk", async () => {
+  assert.equal((await postStatus("/api/status/stop", {})).status, 200);
+  assert.ok(fs.existsSync(path.join(process.env.ACC_ROOT, "runner", "stop", "slice-runner.stop")));
+  assert.equal((await postStatus("/api/status/unstop", {})).status, 200);
+  assert.equal(fs.existsSync(path.join(process.env.ACC_ROOT, "runner", "stop", "slice-runner.stop")), false);
+});
+
+test("POST /api/status/fanout grants a real time-boxed window; a non-positive value is a 400 with no header set to disk", async () => {
+  const r = await postStatus("/api/status/fanout", { mins: 20 });
+  assert.equal(r.status, 200);
+  const grant = JSON.parse(fs.readFileSync(path.join(process.env.ACC_ROOT, "runner", "state", "fanout.json"), "utf8"));
+  assert.ok(grant.until > Date.now());
+
+  const bad = await postStatus("/api/status/fanout", { mins: 0 });
+  assert.equal(bad.status, 400);
+});
+
+test("POST /api/status/clearbot rejects an unknown op with status.mjs's own message", async () => {
+  const r = await postStatus("/api/status/clearbot", { op: "explode" });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /unknown clearbot op/);
 });

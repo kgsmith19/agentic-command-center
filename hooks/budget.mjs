@@ -214,6 +214,43 @@ export function reserveAgentSlot(sessionId, cap) {
   });
 }
 
+// Spending tab (design spec 2026-08-06-acc-gui-remaining-tabs-design.md §5):
+// exported so hooks/status.mjs can call this directly instead of a THIRD
+// duplicate of the same Win32_Process scan (budget.mjs's CLI already has one,
+// guards-gui.ps1's Refresh-Clearbot is the second). `running: null` (not `0`
+// or a thrown error) is the honest answer on a host with no `powershell` --
+// previously this whole CLI command produced NO output at all on such a
+// host: execFileSync threw ENOENT, main()'s outer catch swallowed it silent
+// and fail-open (by design, for the hook-dispatch paths), which for a CLI
+// helper meant losing the pending-count/kill-switch fields too, not just the
+// unreachable process count.
+export function clearbotStatus() {
+  ensureDirs();
+  const stop = path.join(ROOT, "watcher", "clearbot.stop");
+  let running = null;
+  try {
+    running = Number(
+      execFileSync(
+        "powershell",
+        ["-NoProfile", "-Command",
+         // must exclude the probe's own command line, which also contains the
+         // pattern - otherwise this always reports "running".
+         "$me=$PID; @(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | " +
+         "Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*clearbot.ps1*' }).Count"],
+        { encoding: "utf8", timeout: 15000, windowsHide: true }
+      ).trim()
+    );
+  } catch {
+    running = null;
+  }
+  return {
+    running,
+    killSwitchEngaged: fs.existsSync(stop),
+    pending: fs.readdirSync(CLEARREQ).filter((f) => f.endsWith(".json")),
+    log: path.join(ROOT, "watcher", "clearbot.log"),
+  };
+}
+
 // ------------------------------------------------------------- hook output
 
 // UserPromptSubmit / SessionStart: inject text into the session.
@@ -846,23 +883,12 @@ function main() {
   }
 
   if (argv[0] === "clearbot-status") {
-    ensureDirs();
-    const stop = path.join(ROOT, "watcher", "clearbot.stop");
-    const running = execFileSync(
-      "powershell",
-      ["-NoProfile", "-Command",
-       // must exclude the probe's own command line, which also contains the
-       // pattern - otherwise this always reports "running".
-       "$me=$PID; @(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | " +
-       "Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*clearbot.ps1*' }).Count"],
-      { encoding: "utf8", timeout: 15000, windowsHide: true }
-    ).trim();
-    const pending = fs.readdirSync(CLEARREQ).filter((f) => f.endsWith(".json"));
-    console.log(`clearbot processes : ${running}`);
-    console.log(`kill switch        : ${fs.existsSync(stop) ? "ENGAGED (clearbot.stop present)" : "off"}`);
-    console.log(`pending requests   : ${pending.length}${pending.length ? " -> " + pending.join(", ") : ""}`);
-    console.log(`log                : ${path.join(ROOT, "watcher", "clearbot.log")}`);
-    if (running === "0") console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-clearbot.cmd`);
+    const s = clearbotStatus();
+    console.log(`clearbot processes : ${s.running === null ? "unknown (no powershell on this host)" : s.running}`);
+    console.log(`kill switch        : ${s.killSwitchEngaged ? "ENGAGED (clearbot.stop present)" : "off"}`);
+    console.log(`pending requests   : ${s.pending.length}${s.pending.length ? " -> " + s.pending.join(", ") : ""}`);
+    console.log(`log                : ${s.log}`);
+    if (s.running === 0) console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-clearbot.cmd`);
     return;
   }
 

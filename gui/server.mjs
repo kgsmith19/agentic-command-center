@@ -16,11 +16,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadKernelPolicy, saveKernelPolicy } from "../kernel/policy.mjs";
 import * as engine from "./engineClient.mjs";
+import * as status from "../hooks/status.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Exact-match route map — request input never touches a filesystem path, so
 // there is no traversal surface to defend.
-const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/engine.html": "engine.html" };
+const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/engine.html": "engine.html", "/spending.html": "spending.html" };
 const BODY_CAP = 64 * 1024;
 
 const localHost = (h) => /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(String(h || ""));
@@ -94,12 +95,26 @@ const ENGINE_MUTATIONS = {
   },
 };
 
+const STATUS_MUTATIONS = {
+  "/api/status/stop": () => status.stopRunnerNow(),
+  "/api/status/unstop": () => status.unstopRunner(),
+  "/api/status/fanout": (b) => status.fanout(b.mins),
+  "/api/status/clearbot": (b) => status.clearbotOp(b.op),
+};
+
 export function handler(req, res) {
   if (!localHost(req.headers.host)) return send(res, 403, { error: "non-local Host" });
   if (!localOrigin(req.headers.origin)) return send(res, 403, { error: "non-local Origin" });
   const route = req.url.split("?")[0];
   if (req.method === "GET" && PAGES[route]) {
-    return send(res, 200, fs.readFileSync(path.join(HERE, PAGES[route])), "text/html; charset=utf-8");
+    // Found by this file's own test suite (2026-08-06, Spending tab):
+    // fs.readFileSync throwing here (a page listed in PAGES but missing or
+    // unreadable on disk) had no catch, unlike every other route below --
+    // the exception escaped the request listener uncaught, and the client's
+    // fetch() simply hung waiting for a response that was never going to
+    // arrive, rather than a clean, fast error.
+    try { return send(res, 200, fs.readFileSync(path.join(HERE, PAGES[route])), "text/html; charset=utf-8"); }
+    catch (e) { return send(res, 500, { error: e.message }); }
   }
   if (route === "/api/kernel-policy") {
     if (req.method === "GET") {
@@ -124,6 +139,22 @@ export function handler(req, res) {
   }
   if (route === "/api/engine/vault-import" && req.method === "POST") return postRaw(req, res, (text) => engine.vaultImport(text));
   if (ENGINE_MUTATIONS[route] && req.method === "POST") return postJson(req, res, ENGINE_MUTATIONS[route]);
+  if (route === "/api/status/spending" && req.method === "GET") {
+    try { return send(res, 200, status.spendingSummary()); }
+    catch (e) { return send(res, 500, { error: e.message }); }
+  }
+  if (route === "/api/status/policy") {
+    if (req.method === "GET") {
+      try { return send(res, 200, status.loadOpsPolicy()); }
+      catch (e) { return send(res, 500, { error: e.message }); }
+    }
+    if (req.method === "POST") return postJson(req, res, (block) => ({ ok: true, policy: status.saveOpsPolicy(block) }));
+  }
+  if (route === "/api/status/clearbot" && req.method === "GET") {
+    try { return send(res, 200, status.clearbotStatus()); }
+    catch (e) { return send(res, 500, { error: e.message }); }
+  }
+  if (STATUS_MUTATIONS[route] && req.method === "POST") return postJson(req, res, STATUS_MUTATIONS[route]);
   send(res, 404, { error: "not found" });
 }
 

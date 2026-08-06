@@ -469,6 +469,26 @@ flagged as "not verified on Windows" too.
    than shipping an edit to load-bearing code blind.
 2. **Tonight, if context allows after (1):** §5 (Spending) —
    `hooks/status.mjs`, `gui/spending.html`, route additions, tests, spec.
+   **Shipped** (separate follow-up session, same night): `hooks/status.mjs`
+   (spendingSummary/loadOpsPolicy/saveOpsPolicy/clearbotStatus/stopRunnerNow/
+   unstopRunner/fanout/clearbotOp), `gui/spending.html`, `gui/server.mjs`
+   route additions (`/api/status/*`), fast-tier tests
+   (`hooks/status.test.mjs`, `gui/server.test.mjs` additions), and
+   `gui/e2e/spending.spec.mjs` (4 specs, verified against real Chromium).
+   The two-writer `policy.json` race this section called out is closed —
+   `saveOpsPolicy` is the one owner, same atomic tmp+rename discipline
+   `kernel/policy.mjs`'s `saveKernelPolicy` already uses for the sibling
+   `kernel` block. `btnKill`'s missing confirmation (named above) is added
+   as a real, deliberate behavior change: two clicks required, same inline-
+   confirm pattern the Runbox tab's flush button already uses. **What did
+   NOT ship, named rather than silently left**: same as §4's own honesty
+   note — `guards-gui.ps1` itself still shows the old WinForms Spending tab;
+   wiring it to host `gui/spending.html` needs a real PowerShell
+   environment, same reasoning as tier 1's own deferred wiring step. Also
+   not built: the shared `<div id="global-status">` header widget this
+   section proposed for cross-page tier visibility — `spending.html` shows
+   its own tier badge, but no other page polls it yet; a small, separable
+   follow-up, not blocking.
 3. **Not tonight, spec only:** §7 (Start Work's launch action + Terminal).
    Everything in Start Work THAT ISN'T the launch action (route
    suggestion, goal list/done/stop, profile picker) is tier-1-shaped and
