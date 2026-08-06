@@ -253,6 +253,22 @@ test("the staging directory is removed on every exit path (AC-G3)", async () => 
   assert.equal(fs.existsSync(S.runDir(badRun.runId)), false);
 });
 
+test("OI-019: a staging-directory cleanup failure does not crash the run after it has already finalized", async () => {
+  const okRun = await R.runTask(contractFile(good()), {
+    adapter: recordingAdapter().adapter,
+    cleanup: () => { throw new Error("EBUSY: resource busy or locked"); },
+  });
+  // The run's own outcome must still be reported, not an uncaught rejection —
+  // a lingering file handle (a real cross-platform possibility, not
+  // hypothetical: a just-stopped harness process, AV scanning) must not turn
+  // an already-decided, already-ledgered outcome into a crash.
+  assert.equal(okRun.outcome, "accepted");
+  assert.ok(
+    L.readRuns().some((r) => r.event === "run_finalized" && r.runId === okRun.runId),
+    "the run_finalized record must exist regardless of whether cleanup succeeded"
+  );
+});
+
 test("a run over its wall-clock ceiling is stopped and marked aborted-by-budget (AC-B1)", async () => {
   let stopped = false;
   const c = good();

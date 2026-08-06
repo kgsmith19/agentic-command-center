@@ -119,7 +119,33 @@ line under `## Resolved`.
   flake already noted throughout this ledger), `node hooks/covgate.mjs`
   scoped to both changed files: guardhook.mjs and ledger.mjs both
   100%/100%/100%.
-  Remaining, in rough risk order: `kernel/run.mjs`, `kernel/verifier.mjs`,
+  `kernel/run.mjs` pass (2026-08-06): found a real, concrete gap —
+  `finalize()` called `cleanupRun(runId)` unprotected AFTER
+  `appendFinalized()` already durably recorded the run's real outcome; a
+  lingering file handle on the staging dir (a genuine cross-platform
+  possibility — a just-stopped harness child, AV scanning, not
+  hypothetical) would throw out of `runTask()` uncaught, crashing the CLI
+  entry point (which also has no try/catch around `await runTask(...)`)
+  even though the run had already legitimately finished. Fixed: `cleanup`
+  is now an injectable seam (same pattern as the existing `afterStage` test
+  seam) defaulting to the real `cleanupRun`, wrapped in try/catch inside
+  `finalize()` — a cleanup failure now logs and the run's already-decided
+  outcome still returns normally. Also reviewed and found sound (no bug,
+  documented here rather than re-litigated per module later): `identity()`
+  is genuinely synchronous so the missing `await` is safe;
+  `updateAfterRun`'s deliberate exclusion of `failed-to-start` from both
+  the reject-rate calc AND the `runsLeft` decrement is self-consistent, not
+  a gap; `checkpointVerdict`'s multi-ceiling-breach priority order
+  (wallClock > tokens > toolCalls > stalled) is deterministic; no shared
+  mutable module-level state exists across concurrent `runTask()` calls in
+  one process. Verified: `node --test kernel/run.test.mjs` (22/22, RED
+  confirmed first — the cleanup-failure test failed with the exact thrown
+  error propagating uncaught before the fix), `node hooks/covgate.mjs`
+  (run.mjs 100%/100%/90.9%), full `npm test` (428/429, the 1 fail is the
+  same pre-existing unrelated `lane.test.mjs` flake noted throughout this
+  ledger).
+  Progress: 3/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  `kernel/run.mjs`). Remaining, in rough risk order: `kernel/verifier.mjs`,
   `kernel/autonomy.mjs`, `kernel/policy.mjs`, `kernel/contract.mjs`,
   `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.

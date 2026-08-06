@@ -50,7 +50,7 @@ function promptFor(contract) {
   ].join("\n");
 }
 
-export async function runTask(contractPath, { adapter, afterStage, tickMs = 60000 } = {}) {
+export async function runTask(contractPath, { adapter, afterStage, tickMs = 60000, cleanup = cleanupRun } = {}) {
   const contract = loadContract(contractPath);
   const { ok, errors } = validateContract(contract);
   if (!ok) {
@@ -75,7 +75,17 @@ export async function runTask(contractPath, { adapter, afterStage, tickMs = 6000
       decisions: decisionCounts(runId), ...extra,
     };
     appendFinalized(entry);
-    cleanupRun(runId);
+    // OI-019: the run's outcome is already decided and durably recorded above
+    // this line -- a lingering file handle on the staging dir (a real
+    // cross-platform possibility: a just-stopped harness child, AV scanning,
+    // not hypothetical) must not turn an already-finalized run into an
+    // uncaught rejection. Best-effort: log and move on, never let cleanup
+    // override or hide the real outcome.
+    try {
+      cleanup(runId);
+    } catch (e) {
+      console.error(`kernel: cleanup failed for run ${runId} (${e.message}) — the run itself is still finalized`);
+    }
     return { runId, errors: [], ...entry };
   };
   const failClosed = (message, harness = null) => {
