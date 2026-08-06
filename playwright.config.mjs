@@ -11,6 +11,18 @@ process.env.ACC_GUI_E2E_DIR = dir;
 
 export default defineConfig({
   testDir: "gui/e2e",
+  // Serial, not the default CPU-based parallelism: every spec file shares
+  // ONE server process and ONE policy.json/config.json under `dir` above,
+  // and each file's own beforeEach does a blind fixture reset (kernel-
+  // settings.spec.mjs overwrites the whole file with just its "kernel" key;
+  // spending.spec.mjs overwrites it with context/week/subagents/review).
+  // Under >1 worker those resets can interleave across DIFFERENT spec
+  // files hitting the SAME file concurrently -- caught for real (2026-08-06,
+  // adding gui/e2e/spending.spec.mjs): a parallel run corrupted
+  // kernel-settings.spec.mjs's own toolCalls field via exactly this race.
+  // The whole suite is ~15 fast HTTP/DOM specs (a few seconds total), so
+  // trading parallel speed for correctness here costs nothing real.
+  workers: 1,
   use: { baseURL: "http://127.0.0.1:43117" },
   webServer: {
     command: "node gui/server.mjs --port 43117",

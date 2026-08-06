@@ -34,6 +34,11 @@ test("renders the green tier and the current dials from a fresh fixture", async 
 
 test("saving a dial lands on disk and survives reload", async ({ page }) => {
   await page.goto("/spending.html");
+  // Same wait-for-initial-load discipline as the invalid-input test below --
+  // policySave reads every field's CURRENT value at click time, so hardK
+  // (and every other field) must be populated from the fixture before this
+  // click, not left racing the page's own async loadPolicy() fetch.
+  await expect(page.locator("#hardK")).toHaveValue("600");
   await page.locator("#softK").fill("300");
   await page.locator("#policySave").click();
   await expect(page.locator("#policyStatus")).toContainText("Saved");
@@ -45,6 +50,13 @@ test("saving a dial lands on disk and survives reload", async ({ page }) => {
 test("a hardK not greater than softK is refused visibly, file untouched", async ({ page }) => {
   const before = fs.readFileSync(policyFile(), "utf8");
   await page.goto("/spending.html");
+  // Wait for the page's own async loadPolicy() fetch to populate softK from
+  // the fixture (400) BEFORE touching hardK -- policySave reads softK's
+  // current field value at click time, and filling hardK first (without
+  // this wait) raced the fetch: softK's field was still "" (-> 0 via
+  // Number()), so 100 > 0 validated as FINE instead of failing against the
+  // real fixture value. A real bug in this test, not in spending.html.
+  await expect(page.locator("#softK")).toHaveValue("400");
   await page.locator("#hardK").fill("100"); // less than the fixture's softK (400)
   await page.locator("#policySave").click();
   await expect(page.locator("#policyStatus")).toContainText("Not saved");
