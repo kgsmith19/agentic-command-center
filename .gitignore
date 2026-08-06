@@ -18,3 +18,9 @@ watcher/claude-cap-watch.state.json
 node_modules/
 test-results/
 playwright-report/
+# Pre-rename runtime state. A machine that ran the watcher before the
+# clearbot->autopilot rename still produces these, and renaming the ignore
+# rules alone let `git add -A` commit them as tracked files (caught in a
+# post-merge review of f223191, which did exactly that).
+watcher/clearbot.stop
+watcher/clearbot.heartbeat
