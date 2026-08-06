@@ -97,7 +97,15 @@ function withAutonomyLock(fn) {
       fs.closeSync(fs.openSync(lockPath, "wx"));
       break;
     } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+      // Full-repo review (2026-08-06), real Windows CI failure: EPERM is a
+      // transient failure to acquire the lock, same as EEXIST -- observed
+      // for real ("operation not permitted, open .../autonomy.json.lock"
+      // under 20-way concurrent load), a well-documented Windows quirk
+      // where antivirus/Defender transiently locks a just-created file
+      // during a scan. Retrying past it is correct; surfacing it as a hard
+      // failure (the previous behavior) aborted the whole lock acquisition
+      // for a condition that resolves itself within milliseconds.
+      if (e.code !== "EEXIST" && e.code !== "EPERM") throw e;
       try {
         if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
           fs.rmSync(lockPath, { force: true });

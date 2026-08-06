@@ -168,6 +168,37 @@ test("writeAutonomy writes atomically -- content round-trips, no leftover .tmp- 
   assert.deepEqual(leftovers, []);
 });
 
+// Full-repo review (2026-08-06): a real Windows CI failure on this file's
+// own 20-way concurrent lock race (below) surfaced a genuine production
+// gap, not a test-tuning issue: withAutonomyLock's retry loop only retries
+// on EEXIST (another process already holds the lock). ANY other error --
+// including EPERM, which really happened on CI ("operation not permitted,
+// open .../autonomy.json.lock", a well-documented Windows quirk where
+// antivirus/Defender transiently locks a just-created file during a scan)
+// -- was rethrown immediately, aborting the whole lock acquisition instead
+// of retrying like a transient failure deserves. The same duplicated lock
+// primitive in kernel/ledger.mjs, hooks/budget.mjs, and hooks/mission.mjs
+// shares this exact gap; fixed identically in all four.
+test("withAutonomyLock retries past a transient EPERM instead of aborting the whole lock acquisition", () => {
+  const origOpenSync = fs.openSync;
+  let thrown = false;
+  fs.openSync = (p, flags, ...rest) => {
+    if (!thrown && String(p).endsWith(".lock") && flags === "wx") {
+      thrown = true;
+      const e = new Error("operation not permitted, open '" + p + "'");
+      e.code = "EPERM";
+      throw e;
+    }
+    return origOpenSync(p, flags, ...rest);
+  };
+  try {
+    assert.doesNotThrow(() => A.updateAfterRun(), "a transient EPERM on lock creation must be retried, not surfaced as a hard failure");
+    assert.equal(thrown, true, "sanity: the mocked EPERM actually fired");
+  } finally {
+    fs.openSync = origOpenSync;
+  }
+});
+
 // Lean-review finding (2026-08-06): updateAfterRun's read-modify-write was
 // unserialized across PROCESSES -- the lane slot a harness run holds is
 // released on the child's `close`, which fires BEFORE run.mjs's own

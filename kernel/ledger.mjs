@@ -123,7 +123,15 @@ export function withDecisionLock(runId, fn, { timeoutMs = LOCK_TIMEOUT_MS, stale
       fs.closeSync(fs.openSync(lockPath, "wx"));
       break;
     } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+      // Full-repo review (2026-08-06), real Windows CI failure: EPERM is a
+      // transient failure to acquire the lock, same as EEXIST -- a
+      // well-documented Windows quirk where antivirus/Defender transiently
+      // locks a just-created file during a scan. Retrying past it is
+      // correct; surfacing it as a hard failure aborted the whole lock
+      // acquisition for a condition that resolves itself within
+      // milliseconds. Same fix as kernel/autonomy.mjs's withAutonomyLock,
+      // which shares this exact duplicated lock primitive.
+      if (e.code !== "EEXIST" && e.code !== "EPERM") throw e;
       try {
         if (Date.now() - fs.statSync(lockPath).mtimeMs > staleMs) {
           fs.rmSync(lockPath, { force: true });
