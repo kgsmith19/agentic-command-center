@@ -585,17 +585,17 @@ $lblStartOut.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawi
 # The live half of the screen. Once Go is pressed this is the only thing Kyle
 # needs to look at: is it still going, how many restarts has it taken, and the
 # two ways to end it.
-$grpGoal = Add-Ctl $tabS (New-Object System.Windows.Forms.GroupBox) 15 504 650 96
-$grpGoal.Text = ' What Claude is working on now '
-$grpGoal.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-$lblMission = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Label) 15 24 615 26
+$grpMission = Add-Ctl $tabS (New-Object System.Windows.Forms.GroupBox) 15 504 650 96
+$grpMission.Text = ' What Claude is working on now '
+$grpMission.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$lblMission = Add-Ctl $grpMission (New-Object System.Windows.Forms.Label) 15 24 615 26
 $lblMission.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-$btnGoalDone = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Button) 15 54 200 28
-$btnGoalDone.Text = 'Mark it finished'
-$btnGoalStop = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Button) 225 54 200 28
-$btnGoalStop.Text = 'Stop restarting it'
-$btnGoalLog = Add-Ctl $grpGoal (New-Object System.Windows.Forms.Button) 435 54 195 28
-$btnGoalLog.Text = 'Open the progress log'
+$btnMissionDone = Add-Ctl $grpMission (New-Object System.Windows.Forms.Button) 15 54 200 28
+$btnMissionDone.Text = 'Mark it finished'
+$btnMissionStop = Add-Ctl $grpMission (New-Object System.Windows.Forms.Button) 225 54 200 28
+$btnMissionStop.Text = 'Stop restarting it'
+$btnMissionLog = Add-Ctl $grpMission (New-Object System.Windows.Forms.Button) 435 54 195 28
+$btnMissionLog.Text = 'Open the progress log'
 
 $lblS3 = Add-Ctl $tabS (New-Object System.Windows.Forms.Label) 15 606 650 40
 $lblS3.Text = 'Sessions you start from a terminal still work exactly as before - they just use the standard limits instead of the profile you pick here.'
@@ -1113,7 +1113,7 @@ function Refresh-Missions {
         $script:MissionId = ''
         $lblMission.ForeColor = [System.Drawing.Color]::FromArgb(90, 95, 100)
         $lblMission.Text = 'Nothing running. Type the job above and press Go.'
-        $btnGoalDone.Enabled = $false; $btnGoalStop.Enabled = $false; $btnGoalLog.Enabled = $false
+        $btnMissionDone.Enabled = $false; $btnMissionStop.Enabled = $false; $btnMissionLog.Enabled = $false
         return
     }
     $script:MissionId = $g.id
@@ -1123,22 +1123,22 @@ function Refresh-Missions {
     $when = if ($restarts -eq 0) { 'no restarts yet' } elseif ($restarts -eq 1) { '1 restart so far' } else { "$restarts restarts so far" }
     $lblMission.ForeColor = [System.Drawing.Color]::FromArgb(20, 90, 40)
     $lblMission.Text = ("Working: {0}  ({1})" -f $first, $when)
-    $btnGoalDone.Enabled = $true; $btnGoalStop.Enabled = $true; $btnGoalLog.Enabled = $true
+    $btnMissionDone.Enabled = $true; $btnMissionStop.Enabled = $true; $btnMissionLog.Enabled = $true
 }
 
-$btnGoalDone.Add_Click({
+$btnMissionDone.Add_Click({
     if (-not $script:MissionId) { return }
     [void](Invoke-Node $script:MissionJs @('done', $script:MissionId, '--why', 'marked finished from the Command Center'))
     $script:MissionId = ''
     Refresh-Missions
 })
-$btnGoalStop.Add_Click({
+$btnMissionStop.Add_Click({
     if (-not $script:MissionId) { return }
     [void](Invoke-Node $script:MissionJs @('paused', $script:MissionId))
     $script:MissionId = ''
     Refresh-Missions
 })
-$btnGoalLog.Add_Click({
+$btnMissionLog.Add_Click({
     if (-not $script:MissionId) { return }
     $p = Join-Path $PSScriptRoot ("runner\missions\{0}.log.md" -f $script:MissionId)
     if (Test-Path $p) { Start-Process notepad.exe $p }
@@ -1572,7 +1572,7 @@ if ($btnKill) { $btnKill.Font = New-Object System.Drawing.Font('Segoe UI', 9, [S
 # drift from the tab within a week.
 $pnlWork = New-Object System.Windows.Forms.Panel
 $pnlWork.Dock = 'Fill'
-foreach ($c in @($lblS0, $lblS0b, $grpS1, $grpS2, $btnStartWork, $lblStartOut, $grpGoal, $lblS3)) {
+foreach ($c in @($lblS0, $lblS0b, $grpS1, $grpS2, $btnStartWork, $lblStartOut, $grpMission, $lblS3)) {
     $at = $c.Location
     $tabS.Controls.Remove($c)
     $pnlWork.Controls.Add($c)

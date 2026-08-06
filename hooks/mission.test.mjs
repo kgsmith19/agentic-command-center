@@ -555,6 +555,41 @@ test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when
   }
 });
 
+// OI-026 rename regression: the real repo policy.json must key its ceiling
+// dials under "missions" (matching hooks/mission.mjs's own `pol?.missions?.*`
+// reads at the 'pending' CLI verb), not the pre-rename "goals". A stale key
+// name means every real-world call silently reads `undefined` for maxCycles/
+// maxWallClockMinutes/maxCostUsd, which ceilingReached() treats as "disabled"
+// -- Phase 1's loop-runaway ceiling (full-remediation-prompt.md, "the single
+// most evidence-backed fix in either review") would be silently OFF in
+// production while policy.json still shows real numbers to a human reading
+// it. Proven end to end, not just by inspecting the JSON key: a mission at
+// the real repo's configured maxCycles must actually get paused by 'pending'
+// against the REAL policy.json (ACC_POLICY unset, root() resolves to this
+// repo's own policy.json -- see the test above's own comment).
+test("OI-026 regression: the real repo policy.json's ceiling dials are keyed 'missions' and actually pause an at-ceiling mission via CLI 'pending'", () => {
+  const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const real = JSON.parse(fs.readFileSync(path.join(repoRoot, "policy.json"), "utf8"));
+  const dials = real.missions;
+  assert.ok(dials, "policy.json must have a top-level \"missions\" block (not a stale \"goals\" key)");
+  assert.ok(Number(dials.maxCycles) > 0, "missions.maxCycles must be a real, positive ceiling");
+
+  const g = m.createMission({ text: "t" });
+  m.bindSession({ sessionId: SID(41), consolePid: LIVE, missionId: g.id });
+  for (let i = 0; i < Number(dials.maxCycles); i++) m.appendCycle(g.id, { sessionId: SID(41), text: "cycle" });
+
+  const savedPolicy = process.env.ACC_POLICY;
+  try {
+    delete process.env.ACC_POLICY; // resolves to the real repo policy.json, exactly like production
+    runMain(["pending"]);
+  } finally {
+    if (savedPolicy === undefined) delete process.env.ACC_POLICY;
+    else process.env.ACC_POLICY = savedPolicy;
+  }
+  const after = m.readMissionAnywhere(g.id);
+  assert.equal(after.status, "paused", "an at-ceiling mission must be paused by the real repo's own policy.json dials, not stay active");
+});
+
 test("CLI: main() 'kicked <id>' clears needsKick", () => {
   const g = m.createMission({ text: "t" });
   m.bindSession({ sessionId: SID(41), consolePid: LIVE, missionId: g.id });

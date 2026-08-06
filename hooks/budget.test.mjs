@@ -365,7 +365,7 @@ function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
 }
 
 // Seed a mission in the sandbox and bind this session to it, as SessionStart does.
-function seedGoal(sb, sid) {
+function seedMission(sb, sid) {
   process.env.ACC_ROOT = sb.root;
   process.env.ACC_MISSIONS_DIR = "";
   const g = gm.createMission({ text: "keep going", cwd: sb.root });
@@ -377,7 +377,7 @@ function seedGoal(sb, sid) {
 test("under budget with an active mission: the turn end re-arms the kick", async () => {
   const sb = sandbox();
   const sid = SID(2);
-  const { gm, g } = await seedGoal(sb, sid);
+  const { gm, g } = await seedMission(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC mission.");
 
   const out = runStop(sb, { sid, transcript: t, active: false });
@@ -392,7 +392,7 @@ test("under budget with an active mission: the turn end re-arms the kick", async
 test("a human-prompted turn end is classified as human", async () => {
   const sb = sandbox();
   const sid = SID(3);
-  const { gm, g } = await seedGoal(sb, sid);
+  const { gm, g } = await seedMission(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
 
   runStop(sb, { sid, transcript: t, active: false });
@@ -470,7 +470,7 @@ test("a deliberate stop is never overridden by the revive", () => {
 
 test("no mission: an under-budget stop still does nothing at all", () => {
   const sb = sandbox();
-  const sid = "s-live-nogoal";
+  const sid = "s-live-nomission";
   const t = writeTranscriptWithUser(sb, sid, 10000, "hello");
   assert.equal(runStop(sb, { sid, transcript: t, active: false }).trim(), "");
 });

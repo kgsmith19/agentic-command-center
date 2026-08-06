@@ -2,7 +2,7 @@ vault.json
 runbox/
 runner/state/
 runner/logs/
-runner/goals/
+runner/missions/
 runner/clear-requests/
 runner/queued/
 runner/stop/
