@@ -480,7 +480,47 @@ live session hosting.
 
 ## Phase 6 — Residue, in case Phase 5 stalls or ships partially
 
-**Status: not started**
+**Status: DONE (4/5 items fixed, 1 documented as an accepted gap) — commit
+(see next commit in this branch)**
+
+All applicable, since Phase 5 shipped step 1 (wiring) only — the keystroke
+channel these items target still exists, untouched, as specified.
+
+1. **PtyHost pipe authentication** — fixed. `gui/PtyHost.cs`'s
+   `ServePipe` now constructs its `NamedPipeServerStream` with a
+   `PipeSecurity` restricted to the current Windows user's SID (was the
+   .NET default DACL).
+2. **`Kill()` targets the wrong process** — fixed. Was
+   `Process.GetProcessById(ChildPid).Kill()` (only the immediate
+   `CreateProcessW` target, a shell wrapper); now `taskkill /pid <ChildPid>
+   /t /f` — the same real process-TREE kill `runner.mjs`'s `killTreeWin32`
+   already uses for the identical OI-14-class orphan problem.
+3. **Reboot-leaves-goal-dead** — documented as an accepted gap, `OI-034`,
+   rather than implemented. The Startup-folder launcher (OI-007) already
+   relaunches the watcher at logon; nothing respawns a console for
+   whatever goal was bound to the pre-reboot session, so interrupted work
+   just stops until Kyle notices. Auto-launching a real interactive console
+   at logon, unattended, is a materially bigger and riskier change than
+   anything else in this phase, and this remote session has no way to test
+   Windows logon/reboot behavior — a design pass Kyle should make
+   deliberately, not something to implement blind.
+4. **Connected-but-silent pipe wedge** — fixed. `watcher/clearbot.ps1`'s
+   `Send-Pipe` now sets `$c.ReadTimeout = 5000` after connecting — a pipe
+   that accepts and never replies now throws (caught by the existing catch
+   block, same failure path as any other pipe error) instead of blocking
+   the whole watcher forever.
+5. **Two-watcher TOCTOU** — fixed. `watcher/start-clearbot.cmd`'s
+   probe-then-start sequence was a genuine check-then-act race; now guarded
+   by a lock file (`New-Item -ErrorAction Stop`, the same exclusive-create
+   mutex primitive `kernel/ledger.mjs`'s `withDecisionLock` and
+   `hooks/goal.mjs`'s `withGoalLock` already use), with stale-lock reclaim
+   so a crashed start attempt can't deadlock every future one.
+
+**None of items 1/2/4/5 are verified on Windows** — no Windows machine in
+this session. Written carefully, following this repo's own established
+precedent for changes made without local verification (OI-010's note is
+the exact precedent cited in each). Flag for a real smoke test before
+trusting them in practice.
 
 Belt-and-suspenders. If Phase 5 doesn't fully land — partial migration,
 paused for a reason, or the GUI survives longer than planned — these are

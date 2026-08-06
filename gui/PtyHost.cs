@@ -14,6 +14,8 @@ using System;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
@@ -168,6 +170,24 @@ namespace Acc
             ResizePseudoConsole(_hPC, size);
         }
 
+        // Phase 6 (full-remediation-prompt.md): the pipe name alone is not
+        // authentication -- it's written in cleartext to a `.window` file and
+        // the child's environment, and the plain NamedPipeServerStream
+        // constructor below used to accept the .NET DEFAULT DACL, not a
+        // deliberately scoped one. Restricts the pipe to the CURRENT
+        // Windows user's SID (the account this GUI is running as) rather
+        // than whatever the OS default happens to allow. Not verified on
+        // Windows -- no Windows machine in this session; written carefully
+        // per this repo's own precedent for changes made without local
+        // verification (see OI-010's note).
+        static PipeSecurity CurrentUserOnlyPipeSecurity()
+        {
+            PipeSecurity security = new PipeSecurity();
+            SecurityIdentifier user = WindowsIdentity.GetCurrent().User;
+            security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
+            return security;
+        }
+
         // Line protocol on \\.\pipe\<name>: "TEXT <payload>" | "SUBMIT" | "ESC".
         // One request per connection; reply "OK" or "FAIL <reason>".
         public void ServePipe(string pipeName)
@@ -178,7 +198,8 @@ namespace Acc
                 {
                     try
                     {
-                        using (NamedPipeServerStream srv = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1))
+                        using (NamedPipeServerStream srv = new NamedPipeServerStream(
+                            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None, 0, 0, CurrentUserOnlyPipeSecurity()))
                         {
                             srv.WaitForConnection();
                             using (StreamReader rd = new StreamReader(srv, Encoding.UTF8, false, 4096, true))
@@ -239,9 +260,31 @@ namespace Acc
             return "FAIL unknown op";
         }
 
+        // Phase 6 (full-remediation-prompt.md): killed only ChildPid -- the
+        // immediate CreateProcessW target, a shell/cmd wrapper -- not the
+        // real node/claude descendant several hops down the tree the rest of
+        // this codebase already knows to walk (budget.mjs's ptyAnchorPid/
+        // ancestorChain). The interactive analog of OI-014's orphan-on-
+        // timeout bug, closed there via a real process-TREE kill
+        // (runner.mjs's killTreeWin32: `taskkill /pid <pid> /t /f`) -- same
+        // fix here, same flags, so a Stop/close here can no longer leave the
+        // actual claude process running and still holding its API stream.
+        // Not verified on Windows -- no Windows machine in this session;
+        // written carefully per this repo's own precedent for changes made
+        // without local verification (see OI-010's note).
         public void Kill()
         {
-            try { if (ChildPid != 0) System.Diagnostics.Process.GetProcessById(ChildPid).Kill(); }
+            if (ChildPid == 0) return;
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "taskkill",
+                    Arguments = "/pid " + ChildPid + " /t /f",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                }).WaitForExit(5000);
+            }
             catch (Exception) { }
         }
 

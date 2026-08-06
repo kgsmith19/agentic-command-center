@@ -172,6 +172,16 @@ function Send-Pipe([string]$PipeName, [string[]]$Ops) {
         try {
             $c = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
             $c.Connect(2000)
+            # Phase 6 (full-remediation-prompt.md): Connect() had a timeout,
+            # ReadLine() below did not -- a pipe that accepts the connection
+            # and never replies (PtyHost.cs wedged, deadlocked) used to block
+            # this whole watcher forever, and reviveClearbotIfDead won't
+            # replace a process that's still technically alive. ReadTimeout
+            # makes the read itself throw IOException on timeout, caught by
+            # the existing catch below exactly like any other pipe failure --
+            # no new failure path, just a bound on an unbounded one. Not
+            # verified on Windows -- no Windows machine in this session.
+            $c.ReadTimeout = 5000
             $w = New-Object System.IO.StreamWriter($c); $w.AutoFlush = $true
             $r = New-Object System.IO.StreamReader($c)
             $w.WriteLine($op)

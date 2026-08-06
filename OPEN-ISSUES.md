@@ -23,6 +23,36 @@ line under `## Resolved`.
 
 ## Open
 
+## OI-034 a reboot leaves an in-progress goal's console dead with nothing to respawn it
+- opened: 2026-08-06, found during Phase 6 (full-remediation-prompt.md)
+  residue pass — "if any keystroke-path code survives Phase 5, fix it
+  explicitly (respawn the console on reboot, or accept and document the
+  gap)." The keystroke/ConPTY channel does survive (Phase 5 shipped step 1,
+  the runner-wiring half, only — step 2's deletion is deliberately not
+  done, see that phase's own status note), so this applies.
+- where: `watcher/watchdog/acc-watchdog-startup.ps1`, `hooks/goal.mjs`
+- what: the Startup-folder launcher (OI-007) relaunches `start-clearbot.cmd`
+  at logon — the WATCHER comes back. Nothing relaunches or resumes a
+  console for whatever goal was bound to the pre-reboot session: that
+  console is simply gone, OI-031's `reapDeadGoals()` correctly reaps the
+  now-unbound goal as "dead" the next time anything reads `activeGoals()`
+  (clean, not a zombie), but no NEW session picks the work back up. A goal
+  interrupted by a reboot (Windows Update, a crash, a power loss) just
+  stops, silently, until Kyle notices and manually starts a new session.
+- why open: taking the doc's explicitly offered "accept and document" path
+  rather than "respawn the console" — auto-launching a real interactive
+  console at logon, unattended, before Kyle is even at the machine, is a
+  materially bigger and riskier change than anything else in this phase
+  (what if he rebooted deliberately and does NOT want work resuming
+  immediately?), and this remote session has no way to test Windows
+  logon/reboot behavior at all. A considered design pass, not a blind
+  implementation, is what this needs.
+- done when: Kyle decides — either a real design for safe console respawn
+  at logon (probably headless via `runner.mjs` now that Phase 5 step 1
+  wired it to the goal store, rather than another interactive console),
+  or this gap is formally accepted as permanent and this entry closes on
+  that decision alone.
+
 ## OI-033 usage.mjs/budget.mjs/statusline.mjs/engine.mjs cannot clear covgate's floor today
 - opened: 2026-08-06, found while shipping Phase 1 (docs/2026-08-03-full-
   remediation-prompt.md) — NOT introduced by that work, pre-existing.
