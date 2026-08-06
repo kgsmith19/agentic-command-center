@@ -24,7 +24,14 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Phase 7 (full-remediation-prompt.md): ACC_ROOT-overridable like every
+// other hooks/ file (goal.mjs, usage.mjs, budget.mjs) -- previously always
+// resolved relative to this file's own location, so a test could only ever
+// exercise the real repo's own config.json/vault.json (gitignored, but
+// still live state, not a throwaway sandbox).
+const ROOT = process.env.ACC_ROOT
+  ? path.resolve(process.env.ACC_ROOT)
+  : path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG = path.join(ROOT, "config.json");
 const VAULT = path.join(ROOT, "vault.json");
 

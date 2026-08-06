@@ -119,8 +119,33 @@ line under `## Resolved`.
   through as a side effect of a coverage-honesty pass. Left open,
   deliberately, rather than either half-fixed or hidden behind a new
   `branchFloorOverrides` entry (which the phase's own instructions warn
-  against using to "duck real gaps" — this is a real gap). `engine.mjs`
-  next.
+  against using to "duck real gaps" — this is a real gap).
+- UPDATE 2026-08-06 (Phase 7 item 3): `hooks/engine.mjs` un-blinded too, on
+  both axes the entry names. `ROOT` now reads `ACC_ROOT` the same way every
+  sibling hooks/ file already does (was hardcoded relative to the file's own
+  location — the entry's own second-gap note). `hooks/engine.test.mjs`
+  rewritten from 3 tests (Phase 4's narrow D2 regression pins, run against
+  the REAL repo's own gitignored vault.json) to 31, all sandboxed via a
+  throwaway `ACC_ROOT` per test: vault read/write round-trip, corrupt/
+  missing vault and config (both fail closed with a message, not a raw
+  crash), every config-side command (status/toggle/secret/protected/
+  projects, including dedup-on-readd), and the full runbox lifecycle (list/
+  run/trash/restore/flush, keep-marker scripts, a failing script staying in
+  place with its own exit code, a self-cleaning script, ambiguous and
+  absolute-path refs, restoring the newest of two same-named trashed
+  copies, both `.mjs` and `.js` runner extensions). Real measured result:
+  lines 100%, funcs 89.7%, branches 71.1% — up from a flat, opaque 0%.
+  Genuinely gated now, per the phase's definition of done, though still
+  short of the 100/100/90 floor. What's left, named rather than hidden:
+  the `.ps1`/`.cmd`/`.bat` entries in the `RUNNERS` map (need `powershell`/
+  `cmd`, neither exists in this Linux sandbox — the same class of gap
+  OI-010 already established precedent for), the `ACC_ROOT`-unset fallback
+  branch (untestable without pointing a subprocess at the real repo, which
+  is the exact live-state risk making it `ACC_ROOT`-overridable existed to
+  avoid), and a handful of V8 branch-coverage points inside the CLI's
+  `switch` cases that didn't resolve to an obviously worthwhile additional
+  test in the time spent here. `budget.mjs`'s dispatch-handler gap (above)
+  is the one still fully open piece of this entry.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
