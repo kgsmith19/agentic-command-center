@@ -247,6 +247,37 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-044 [RESOLVED 2026-08-06] a genuine appendCycle failure was fully swallowed while the checkpoint/clear fired anyway
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (MEDIUM).
+- where: `hooks/budget.mjs`'s checkpoint Stop handler, the
+  `missionForSession`/`costOfTranscript`/`appendCycle` block.
+- what: wrapped in a bare `catch {}`, whose own comment said
+  `costOfTranscript never throws ... so this can't cost the checkpoint
+  its clean exit` — true, but `appendCycle` itself genuinely CAN throw:
+  its `withMissionLock` (`hooks/mission.mjs`) throws when it can't
+  acquire the mission's lock within its timeout, real contention under
+  real concurrent load (guardhook, another Stop fire, a runner cycle all
+  hitting the same mission at once). The bare catch swallowed that
+  completely — the mission's cycle/cost ceiling went uncounted for the
+  turn while the checkpoint/clear immediately below fired as if nothing
+  had gone wrong, with zero trace anywhere a human could find.
+- fix: same "fail open, but leave a trace" philosophy this file's own
+  top-level `catch` already uses (further down, for `main()` itself), not
+  a new mechanism. The catch still swallows — a corrupted mission store
+  must never cost the checkpoint its clean exit — but now appends a line
+  to the existing `runner/logs/budget-errors.log`, naming the session and
+  mission.
+- verified: new test in `hooks/budget.test.mjs` forces the REAL throw
+  path (not a mock) by pre-holding the mission's own lock file with a
+  short `ACC_MISSION_LOCK_TIMEOUT_MS`, the same lock primitive OI-038
+  exercises. RED against the unfixed code (cycle genuinely uncounted, no
+  trace anywhere), GREEN after the fix (27/27 in the file's own suite,
+  the trace names the right mission). Full `npm test`: 539 pass, 1
+  pre-existing unrelated failure (`hooks/lane.test.mjs`'s chmod-based
+  test, root-sandbox limitation).
+
 ## OI-043 [RESOLVED 2026-08-06] ensureJobMission silently reset a paused mission's ceiling on the runner's next scheduled invocation
 
 - opened and resolved 2026-08-06, found by one of the three parallel
