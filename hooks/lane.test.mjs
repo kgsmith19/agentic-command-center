@@ -399,11 +399,18 @@ test("529/overloaded failures use overloadBaseMs, not backoffBaseMs", async () =
     calls++;
     return calls === 1 ? { code: 1, err: "api error: 529 overloaded_error" } : { code: 0 };
   });
-  // base=1 would make this near-instant; overloadBaseMs=5000 with cap=5000
-  // means the single retry's delay is U(0, 5000) — not a tight bound, but
-  // enough headroom (>=50ms) to prove it picked the overload base at all,
-  // without making the test itself slow or flaky in the common case.
+  const elapsed = Date.now() - t0;
+  // Phase 7 (full-remediation-prompt.md): this test's own comment used to
+  // describe this exact bound without the code ever checking it — `calls`
+  // alone can't distinguish "used overloadBaseMs" from "used backoffBaseMs"
+  // since both eventually reach the same 2 calls; only the DELAY between
+  // them does. base=1 would make this near-instant (a few ms); overloadBaseMs
+  // =5000 with cap=5000 means the single retry's delay is U(0, 5000) — not a
+  // tight bound, but >=50ms is enough headroom to prove it picked the
+  // overload base at all, without making the test itself slow or flaky in
+  // the common case.
   assert.equal(calls, 2);
+  assert.ok(elapsed >= 50, `expected overloadBaseMs's delay to dominate (>=50ms), got ${elapsed}ms`);
   setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
 });
 
