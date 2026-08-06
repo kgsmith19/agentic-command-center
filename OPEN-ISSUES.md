@@ -159,11 +159,51 @@ line under `## Resolved`.
   invalidate), `node hooks/covgate.mjs` scoped to the touched files
   (`kernel/guardhook.mjs` 100%/100%/87.5% at its override, `kernel/ledger.mjs`
   100%/100%/98.8%, both PASS).
-  Progress: 2/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`;
-  `kernel/ledger.mjs`'s new lock primitive is now also covered by its own
-  dedicated tests above, though a full scenario pass on the REST of
-  ledger.mjs — the run-record/query surface — is still open). Remaining, in
-  rough risk order: `kernel/run.mjs`, `kernel/ledger.mjs` (run-record/query
+  UPDATE 2026-08-06 (same cycle): third module done, `kernel/run.mjs`. Found
+  a second REAL, live crash bug, same session: the supervisor's `setInterval`
+  tick called `harnessAdapter.readState()` with no try/catch. A timer
+  callback is not inside `runTask`'s own async try/catch — an exception
+  thrown there is a genuine `uncaughtException` that kills the WHOLE kernel
+  process immediately, not just the one run: the harness child is left
+  orphaned (nothing ever calls `stopTask`), and no `run_finalized` ledger
+  line is ever written (a permanently "interrupted" record). Reproduced
+  live via a subprocess (had to run out-of-process — an uncaught exception
+  in-process would have taken the whole test file down with it): a fake
+  adapter whose `readState()` always throws crashes `node` with exit code 1
+  on the very first tick. `kernel/adapter.mjs`'s `ADAPTER_INTERFACE` only
+  checks a harness module's SHAPE (function presence), never its behavior,
+  and this file's own stated philosophy is to never trust the harness to
+  police itself — a tick that cannot even be evaluated deserves the same
+  fail-closed treatment as a genuine budget breach, not a process kill.
+  Fixed: the tick body is now wrapped in try/catch; a caught fault produces
+  a synthetic `{ stop: true, dimension: "supervisor-fault", reason:
+  e.message }` verdict, which flows through the EXISTING breach-handling
+  path unchanged (clears the interval, best-effort `stopTask()`, finalizes
+  the run as `aborted-by-budget`). The two post-loop `readState()` calls
+  (breach-finalize and normal-completion paths) got the same fault-tolerance
+  treatment via a small `safeTokens()` helper, on a deliberately different
+  design because the risk they defend against is categorically smaller: by
+  the time either runs the harness has already exited, so a throw there
+  cannot hide an ONGOING budget breach the way it could mid-loop (hence the
+  tick still fails the whole run closed) — falling back to 0 tokens loses at
+  most a stale count on a run finishing regardless, so those two sites
+  degrade gracefully instead of stopping anything further. New test in
+  `kernel/run.test.mjs` (also out-of-process, same reason as the repro):
+  proves the process exits 0, the outcome is `aborted-by-budget` with
+  dimension `supervisor-fault` and the adapter's own error message, and a
+  `run_finalized` ledger line exists despite the broken adapter (red without
+  the fix — reproduced the crash directly; green and stable across 3
+  repeated runs after). Verified: `node --test kernel/run.test.mjs` (3
+  repeated runs, all green, 22/22), full `npm test` (430/431 excluding known
+  skips, same pre-existing unrelated root-permissions artifact as above),
+  `node hooks/covgate.mjs` scoped to the touched file (`kernel/run.mjs`
+  100%/100%/92.9%, both isolated and merged with `ledger`/`guardhook`'s
+  suites — above its existing OI-017 85% override, PASS).
+  Progress: 3/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  `kernel/run.mjs`; `kernel/ledger.mjs`'s new lock primitive is now also
+  covered by its own dedicated tests above, though a full scenario pass on
+  the REST of ledger.mjs — the run-record/query surface — is still open).
+  Remaining, in rough risk order: `kernel/ledger.mjs` (run-record/query
   surface), `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
   `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.

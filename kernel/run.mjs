@@ -136,16 +136,29 @@ export async function runTask(contractPath, { adapter, afterStage, tickMs = 6000
   let attemptsAtLastCheckpoint = 0;
   const timer = setInterval(() => {
     ticks += 1;
-    const checkpointDue = ticks % ticksPerCheckpoint === 0;
-    const verdict = checkpointVerdict({
-      elapsedMs: Date.now() - startedAt,
-      ceilings,
-      tokens: harnessAdapter.readState(handle.events || []).tokens,
-      attemptsNow: decisionCounts(runId).total,
-      attemptsAtLastCheckpoint,
-      checkpointDue,
-    });
-    if (checkpointDue) attemptsAtLastCheckpoint = decisionCounts(runId).total;
+    let verdict;
+    try {
+      const checkpointDue = ticks % ticksPerCheckpoint === 0;
+      verdict = checkpointVerdict({
+        elapsedMs: Date.now() - startedAt,
+        ceilings,
+        tokens: harnessAdapter.readState(handle.events || []).tokens,
+        attemptsNow: decisionCounts(runId).total,
+        attemptsAtLastCheckpoint,
+        checkpointDue,
+      });
+      if (checkpointDue) attemptsAtLastCheckpoint = decisionCounts(runId).total;
+    } catch (e) {
+      // OI-019: a timer callback is not inside runTask's own try/catch — an
+      // adapter (or anything else in this block) throwing here is a real
+      // uncaughtException that kills the WHOLE kernel process, orphaning the
+      // harness child with no ledger entry at all. The adapter interface
+      // (kernel/adapter.mjs) only checks shape, never behavior, and this file
+      // already refuses to trust the harness to police its own budget — a
+      // tick that cannot even be evaluated gets the same fail-closed
+      // treatment as a genuine breach, not a crash.
+      verdict = { stop: true, dimension: "supervisor-fault", reason: e.message };
+    }
     if (verdict.stop && !breach) {
       breach = verdict;
       clearInterval(timer);
@@ -169,10 +182,20 @@ export async function runTask(contractPath, { adapter, afterStage, tickMs = 6000
     clearInterval(timer);
   }
 
+  // The harness has already exited by the time either finalize path below
+  // runs, so a readState() fault here cannot hide an ongoing budget breach
+  // the way it could mid-loop (hence the tick above fails the run closed
+  // instead) — falling back to 0 loses at most a stale token count on a run
+  // that is finishing regardless, never masks a live runaway (OI-019).
+  const safeTokens = () => {
+    try { return harnessAdapter.readState(handle.events || []).tokens; }
+    catch { return 0; }
+  };
+
   if (breach) {
     const aborted = finalize({
       outcome: "aborted-by-budget", dimension: breach.dimension, error: breach.reason,
-      harness, criteria: [], tokens: harnessAdapter.readState(handle.events || []).tokens,
+      harness, criteria: [], tokens: safeTokens(),
     });
     updateAfterRun(policy);
     return aborted;
@@ -180,12 +203,12 @@ export async function runTask(contractPath, { adapter, afterStage, tickMs = 6000
 
   // Only now, with the harness process gone, does the kernel form its own
   // opinion — from the filesystem, never from what the harness said (AC-V3).
-  const state = harnessAdapter.readState(handle.events || []);
+  const tokens = safeTokens();
   const { criteria, accepted } = await verifyAll(contract, { cwd: workspaceOf(contract) });
 
   const outcome = finalize({
     outcome: accepted ? "accepted" : "rejected",
-    harness, criteria, tokens: state.tokens,
+    harness, criteria, tokens,
   });
   updateAfterRun(policy);
   return outcome;

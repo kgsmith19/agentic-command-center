@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUN = path.join(HERE, "run.mjs");
@@ -292,6 +292,47 @@ test("a stopTask that itself throws while enforcing a breach is swallowed, not c
   const r = await R.runTask(contractFile(c), { adapter, tickMs: 10 });
   assert.equal(r.outcome, "aborted-by-budget");
   assert.equal(r.dimension, "wallClock");
+});
+
+test("OI-019: an adapter's readState() throwing inside a supervisor tick fails the RUN closed, not the whole process (AC-B1 fault tolerance)", async () => {
+  // Must run out-of-process: an uncaught exception inside run.mjs's
+  // setInterval callback is NOT caught by the enclosing async function (timer
+  // callbacks are not try/catch'd by their creator's call frame) — it becomes
+  // a real uncaughtException that kills the whole node process. Reproducing
+  // that in-process would take this entire test file down with it.
+  const c = good();
+  c.budget.wallClockMin = 10; // long enough that only the injected fault stops it
+  const cFile = contractFile(c);
+  const script = path.join(BASE, "run-crash-caller.mjs");
+  fs.writeFileSync(script, `
+    import { runTask } from ${JSON.stringify(pathToFileURL(RUN).href)};
+    let resolveDone;
+    const done = new Promise((r) => { resolveDone = r; });
+    const adapter = {
+      id: "fake", identity: () => ({ name: "fake", version: "1.0.0" }),
+      startTask: async () => ({ pid: 1, events: [], done }),
+      sendStep: async () => {},
+      stopTask: async () => { resolveDone({ code: 143, events: [] }); },
+      readState: () => { throw new Error("readState blew up"); },
+    };
+    const r = await runTask(process.argv[2], { adapter, tickMs: 10 });
+    process.stdout.write(JSON.stringify(r));
+  `);
+  const { spawn } = await import("node:child_process");
+  const { code, out, err } = await new Promise((resolve) => {
+    const child = spawn("node", [script, cFile], { env: process.env });
+    let out = "", err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("close", (code) => resolve({ code, out, err }));
+  });
+  assert.equal(code, 0, `the process must not crash uncaught; stderr:\n${err}`);
+  const r = JSON.parse(out);
+  assert.equal(r.outcome, "aborted-by-budget");
+  assert.equal(r.dimension, "supervisor-fault");
+  assert.match(r.error, /readState blew up/);
+  const f = L.readRuns().find((x) => x.runId === r.runId && x.event === "run_finalized");
+  assert.ok(f, "a finalized ledger entry must exist even though the harness adapter is broken");
 });
 
 test("a run over its token ceiling is stopped, using the LIVE event stream (AC-B1)", async () => {
