@@ -594,6 +594,42 @@ test("integration: the spawn path is DEP0190-clean (--throw-deprecation stays ex
   assert.equal(r.status, 0, r.stderr);
 });
 
+test("Full-repo review (2026-08-06) regression: a spawn failure (claude not found on PATH) resolves runClaudeOnce cleanly instead of crashing the whole runner process", async () => {
+  // child_process.spawn does NOT throw synchronously on ENOENT -- it emits an
+  // async 'error' event on the ChildProcess. With no listener for that event,
+  // Node's EventEmitter contract re-throws it as an uncaught exception,
+  // killing the entire runner.mjs process (proven directly against this
+  // Node version: a bare `spawn(nonexistentBinary)` with no "error" handler
+  // crashes with "Unhandled 'error' event" and exit code 1, even though a
+  // "close" event would otherwise have fired right after with code -2).
+  // runClaudeOnce only ever listened for "close" -- one bad PATH, one dead
+  // job binary, a typo in the "claude" name, and the whole loop dies instead
+  // of that one job reporting a clean failure. Run in a real subprocess
+  // (same pattern as the DEP0190 test above) because the crash this proves
+  // is a process-level uncaught exception, not something a same-process
+  // try/catch could ever observe.
+  const dir = fakeClaudeDir("spawn-enoent");
+  const emptyPathDir = path.join(BASE, "empty-path-for-enoent-test");
+  fs.mkdirSync(emptyPathDir, { recursive: true });
+  const j = job({ bootstrap: "x" });
+  const driver = `
+    const m = await import(${JSON.stringify(pathToFileURL(path.join(HERE, "runner.mjs")).href)});
+    const j = ${JSON.stringify(j)};
+    const r = await m.runClaudeOnce(j);
+    console.log(JSON.stringify(r));
+    process.exit(0);
+  `;
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", driver], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: emptyPathDir, FAKE_CLAUDE_STATE_DIR: dir },
+  });
+  assert.equal(r.status, 0, `subprocess must exit cleanly, not crash on the unhandled 'error' event; stderr:\n${r.stderr}`);
+  assert.ok(!/Unhandled 'error' event/.test(r.stderr), `spawn failure must not surface as an uncaught exception:\n${r.stderr}`);
+  const out = JSON.parse(r.stdout.trim().split("\n").pop());
+  assert.notEqual(out.code, 0, "a spawn failure must not report success");
+  assert.match(out.err, /ENOENT|spawn/i, "the failure reason must be surfaced, not swallowed");
+});
+
 test("integration: non-JSON stdout falls back to the raw text as result", async () => {
   fakeClaudeDir("badjson");
   process.env.FAKE_CLAUDE_MODE = "badjson";

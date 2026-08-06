@@ -213,7 +213,26 @@ export function runClaudeOnce(job, missionId) {
     }, job.runTimeoutMin * 60 * 1000);
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
+    // Full-repo review (2026-08-06): spawn() does not throw synchronously on
+    // a launch failure (bad PATH, missing binary, EMFILE) -- it emits an
+    // async "error" event on the child. With no listener, Node's
+    // EventEmitter contract re-throws that as an uncaught exception, killing
+    // the entire runner.mjs process instead of just failing this one job.
+    // Reproduced directly: a bare spawn(nonexistentBinary) with no "error"
+    // handler crashes with "Unhandled 'error' event" even though "close"
+    // fires right after with a real exit code. Guarded against a double
+    // resolve (both "error" and "close" can fire for the same failure) the
+    // same way the rest of this file already guards its once-only callbacks.
+    let settled = false;
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveRun({ code: -1, result: "", err: `spawn failed: ${e.message}`.slice(-500) });
+    });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       let result = "";
       try {
