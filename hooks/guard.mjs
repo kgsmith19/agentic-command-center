@@ -71,6 +71,17 @@ if (!WRITE_TOOLS.has(payload.tool_name)) process.exit(0);
 // the user to review and run (/approve or the Guards GUI), so they are exempt
 // from every write rule below. Covers the central runbox and each
 // <project>/.guards folder.
+//
+// OI-032 (accepted risk, 2026-08-06): with policy.autoApprove.enabled:true,
+// clearbot auto-executes a runbox script with the user's full authority
+// ~2s after it's written, unsupervised -- "the user reviews and runs it"
+// above is only true when autoApprove is OFF. Demonstrated live: this exact
+// deny fired on a direct edit to a protected path, and a runbox script
+// achieved the same change minutes later via auto-approve. So this
+// exemption is a speed bump against a DIRECT edit, not a boundary against
+// the system as a whole while autoApprove is on -- Kyle's accepted tradeoff
+// (AGENTS.md's guard-enforcement section documents this the same way),
+// not a gap this file's own deny message should overclaim past.
 const runboxDirs = [
   ...(config.runboxDir ? [config.runboxDir] : []),
   ...(config.projects ?? []).map((p) => path.join(p, ".guards")),
@@ -80,7 +91,7 @@ if (runboxDirs.some((d) => target === d || target.startsWith(d + "/"))) process.
 for (const p of config.protected ?? []) {
   const pref = norm(p);
   if (target === pref || target.startsWith(pref + "/")) {
-    deny(`guard: "${filePath}" is guard machinery — agents may not edit the rules that constrain them. To hand this change to the user, write a script into ${config.runboxDir ?? "the runbox"} instead and ask them to run it (/approve or the Guards GUI).`);
+    deny(`guard: "${filePath}" is guard machinery — agents may not edit the rules that constrain them via a DIRECT edit. To hand this change to the user, write a script into ${config.runboxDir ?? "the runbox"} instead and ask them to run it (/approve or the Guards GUI) — note that with autoApprove enabled, that script runs automatically and unsupervised, not after a human looks at it.`);
   }
 }
 
