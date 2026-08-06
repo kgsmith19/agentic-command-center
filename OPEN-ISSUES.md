@@ -75,7 +75,7 @@ line under `## Resolved`.
   via `runner.mjs`, per this entry's own suggestion above), that remains
   open, now as a smaller, separable follow-up rather than the whole gap.
 
-## OI-035 runner.mjs's kill is single-shot: no SIGKILL escalation, no verification the tree actually died
+## OI-035 [RESOLVED 2026-08-06] runner.mjs's kill is single-shot: no SIGKILL escalation, no verification the tree actually died
 - opened: 2026-08-06, found by the lean-review sweep (kernel/hooks/gui/
   runner+watcher, 4-way parallel pass before wrapping up tonight's session).
 - where: `runner/runner.mjs` `killTreePosix`/`killTreeWin32` (~lines 115-124)
@@ -105,6 +105,40 @@ line under `## Resolved`.
   attempt and verify the tree is actually gone before returning, with a
   test proving an uncooperative child (traps SIGTERM, or a taskkill that
   errors) still ends up dead and `runOnce`'s await still resolves.
+- fix: `killTreePosix` now sends `SIGTERM`, then after a 300ms grace
+  period probes liveness via `process.kill(pid, 0)` and escalates to
+  `SIGKILL` (which cannot be trapped or ignored) if the process group is
+  still alive. Stays fire-and-forget from the caller's side — the
+  escalation runs via an internal `setTimeout`, never a blocking sleep,
+  so one hung job's kill sequence can't stall the runner's own loop; the
+  real "did it actually die" signal remains the child's own `close`
+  event in `runClaudeOnce`, unchanged. `killTreeWin32` is unchanged:
+  `taskkill /t /f` is already maximum force with no weaker signal to
+  step up from, so no escalation ladder applies there, and verifying
+  that path for real needs Kyle's own Windows machine (same as every
+  other Windows-only claim in this repo).
+- verified: a new test spawns a real child that traps and ignores
+  `SIGTERM` (`process.on("SIGTERM", () => {})`), confirms it survives
+  the initial signal, then confirms it's dead once the grace-period
+  `SIGKILL` escalation lands. Proven RED first — with the escalation
+  temporarily stripped back to a single `SIGTERM`, the test failed with
+  the uncooperative child still alive after the grace window — then
+  GREEN with the real fix restored; full `runner/runner.test.mjs` suite
+  (50 tests) passes.
+- **safety note found while implementing**: this sandbox runs as root
+  (`process.kill(1, 0)` succeeds without throwing). The pre-existing
+  fallback-path test fixtures used `pid: -1` to force `process.kill(-pid,
+  ...)` to throw — but `-(-1)` is `1` (PID 1 / init), and under root that
+  signal call does NOT throw, it succeeds. Combined with the new
+  escalation logic, that fixture would have sent a REAL `SIGTERM` then a
+  REAL, unblockable `SIGKILL` to PID 1, risking crashing the whole
+  container. Caught before running any test in the escalation work, via
+  a pre-flight `process.kill(1, 0)` privilege check plus a targeted
+  `grep -n "pid: -1"`; fixed by switching both fixtures to a large fake
+  pid (`999999999`), matching this codebase's own established
+  `999999`-style "definitely not a real process" convention elsewhere.
+  Nothing dangerous was ever actually executed — this was caught in
+  review before the first test run, not as an incident.
 
 ## OI-036 clearbot.ps1/sendconsole.ps1: a dead console's recycled PID could be attached-to and typed into by a stale clear/cd request
 - opened: 2026-08-06, found by the same lean-review sweep as OI-035.
