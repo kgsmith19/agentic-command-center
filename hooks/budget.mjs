@@ -791,7 +791,26 @@ function onStop(p, policy) {
       appendCycle(mission.id, { sessionId: p.session_id, ctx, text: lastAssistantText(p.transcript_path), costUsd });
       fs.writeFileSync(cycled, "1");
     }
-  } catch {}
+  } catch (e) {
+    // Full-repo review (2026-08-06): appendCycle can genuinely throw --
+    // withMissionLock throws when it can't acquire the mission's lock
+    // within its timeout, real contention under real concurrent load, not
+    // just the costOfTranscript-never-throws case this catch was written
+    // for. Silently swallowing it meant the mission's cycle/cost ceiling
+    // went uncounted for the turn while the checkpoint/clear below still
+    // fired as if nothing had gone wrong. Same "fail open, but leave a
+    // trace" philosophy this file's own top-level catch already uses, not
+    // a new mechanism -- must still fail open here (a corrupted mission
+    // store must never cost the checkpoint its clean exit).
+    try {
+      ensureDirs();
+      fs.appendFileSync(
+        path.join(LOGS, "budget-errors.log"),
+        `${new Date().toISOString()} cycle accounting failed for session ${p.session_id}` +
+          `${mission ? ` (mission ${mission.id})` : ""}: ${(e && e.stack) || e}\n`
+      );
+    } catch {}
+  }
 
   // Interactive: hand off to the outside watcher, which types /clear as real
   // keystrokes (hooks cannot clear context - see watcher/clearbot.ps1).

@@ -207,6 +207,49 @@ test("Phase 1: the checkpoint stop accumulates the transcript's REAL cost onto t
   );
 });
 
+test("Full-repo review (2026-08-06) regression: a genuine appendCycle failure (real lock timeout) is traced to budget-errors.log, not fully swallowed", () => {
+  // Corroborated MEDIUM finding: the checkpoint Stop handler wraps
+  // missionForSession/costOfTranscript/appendCycle in a bare `catch {}`.
+  // costOfTranscript never throws (documented), but appendCycle genuinely
+  // can -- its withMissionLock throws when it can't acquire the mission's
+  // lock within its timeout, real contention under real concurrent load.
+  // The bare catch swallowed that completely: the mission's cycle/cost
+  // ceiling silently went uncounted for the turn while the checkpoint/
+  // clear immediately below fired as if nothing had gone wrong. Forces
+  // the REAL throw path (not a mock) by pre-holding the mission's own
+  // lock file, the same primitive OI-038 exercises, with a short timeout
+  // so the test doesn't wait out the real 3s default.
+  const sb = sandbox();
+  const sid = SID(93);
+  seedWindow(sb, sid);
+  const t = writeTranscript(sb, sid, 60000);
+
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_MISSIONS_DIR = "";
+  const g = gm.createMission({ text: "will fail to account", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, missionId: g.id });
+
+  const lockPath = path.join(sb.root, "runner", "missions", `${g.id}.json.lock`);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, "held by another process");
+  process.env.ACC_MISSION_LOCK_TIMEOUT_MS = "50";
+  process.env.ACC_MISSION_LOCK_STALE_MS = "5000"; // comfortably longer than the timeout above
+  try {
+    runStop(sb, { sid, transcript: t, active: false }); // block + latch
+    runStop(sb, { sid, transcript: t, active: true }); // latched stop: appendCycle genuinely throws here
+  } finally {
+    delete process.env.ACC_MISSION_LOCK_TIMEOUT_MS;
+    delete process.env.ACC_MISSION_LOCK_STALE_MS;
+    fs.rmSync(lockPath, { force: true });
+  }
+
+  assert.equal(gm.readMission(g.id).cycles, 0, "sanity: the cycle genuinely did not get counted");
+  const errLog = path.join(sb.root, "runner", "logs", "budget-errors.log");
+  assert.ok(fs.existsSync(errLog), "a swallowed cycle-accounting failure must be traced somewhere, not fully silent");
+  const text = fs.readFileSync(errLog, "utf8");
+  assert.match(text, new RegExp(g.id), "the trace must name which mission's accounting failed");
+});
+
 test("Phase 1: SessionStart warns instead of saying nothing when the adopted mission is paused at a ceiling", () => {
   const sb = sandbox();
   const sid = SID(91);
