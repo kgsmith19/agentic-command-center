@@ -376,7 +376,49 @@ get to them — don't fix code that's about to be deleted.
 
 ## Phase 5 — Wire the runner as the goal loop; retire the keystroke channel
 
-**Status: not started**
+**Status: STEP 1 ONLY — commit (see next commit in this branch). Step 2
+(retiring the keystroke channel) deliberately NOT done.**
+
+Step 1 shipped 2026-08-06, as specified: `runner.mjs` now integrates with
+the real goal store. New `ensureJobGoal(job)` creates (or reuses, keyed by
+a `runner/state/<job>.goalid` marker) a real `hooks/goal.mjs` record per
+job, and `runClaudeOnce` sets `ACC_GOAL=<id>` on every spawn — so a
+runner-launched session now gets the exact same Phase-1 ceiling
+enforcement, Phase-3 `accActive()` gating, and Stop-hook checkpoint
+handling a GUI-launched session does, which it silently didn't before.
+`goalSignal(job, goalId)` reads the goal's status via the new
+`readGoalAnywhere` (setStatus archives done/blocked goals out of the live
+directory the instant they're set — a plain `readGoal` would see a false
+"not found" at exactly the moment the model signals completion, found and
+fixed while writing this) as an ADDITIONAL completion signal alongside the
+existing `boardState` file-hash heuristic, not a replacement of it (this is
+wiring, not the deletion step 2 would be) — `done` ends the loop with the
+same exit as a doneMarker match, `blocked`/`paused` stop with a distinct
+exit code (6/7) and an alert, all checked before AND after every run so
+neither the board nor the goal can silently disagree. `runLoop` also now
+checks the week tier itself (new exported `usage.mjs weekTier()`, with a
+short-circuit-to-green-with-no-scan when both thresholds are 0, matching
+`budget.mjs`'s own existing protection) BEFORE every launch — closing "the
+runner burns a red week the clearbot loop would hold" gap the earlier
+review named; today only `budget.mjs`'s `waitingGuard` catches this, and
+the runner never goes through that hook path at all.
+
+Step 2 (retiring `sendconsole.ps1`/`winfind.ps1`/clearbot's typing core/
+`PtyHost.cs`/the GUI's pty wiring) is explicitly NOT part of this: it needs
+real Windows verification this remote session cannot do, and deleting
+Kyle's only currently-proven-working nightly automation mechanism with no
+way to confirm the replacement works end-to-end on his real machine would
+be reckless regardless of how much authority this session was given.
+Everything step 2 would have deleted still exists, untouched.
+
+Verified: `node --test hooks/goal.test.mjs runner/runner.test.mjs
+hooks/usage.test.mjs` (128/128, red-first for the `readGoalAnywhere`
+archival bug — `goalSignal` genuinely returned `null` instead of `0`/`6`
+for a just-archived done/blocked goal before the fix). `node
+hooks/covgate.mjs`: `goal.mjs` 100%/100%/95.1%, `runner.mjs`
+100%/100%/93.5% (`usage.mjs` remains under `OI-033`, unrelated to the new
+`weekTier` addition which is itself fully unit-tested in isolation). Full
+`npm test`: 469/470 (1 pre-existing unrelated `lane.test.mjs` flake).
 
 The architectural fix. This single phase is worth more than Phases 2-4
 combined in terms of attack-surface and bug-class reduction, because it

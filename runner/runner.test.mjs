@@ -30,13 +30,23 @@ process.env.ACC_RUNNER_ROOT = path.join(BASE, "runnerroot");
 process.env.ACC_LANE_DIR = path.join(BASE, "lane");
 process.env.ACC_POLICY = path.join(BASE, "policy.json");
 fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ lane: { slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 5, backoffCapMs: 20, pollMs: 20 } }));
+// Phase 5 step 1: runner.mjs now calls into hooks/goal.mjs directly
+// (ensureJobGoal/goalSignal). goal.mjs resolves its store from ACC_ROOT/
+// ACC_GOALS_DIR, a DIFFERENT env var than ACC_RUNNER_ROOT -- without this,
+// every test in this file would silently read/write the real repo's
+// runner/goals directory (route.test.mjs/goal.test.mjs discipline: live
+// state must never see test data).
+process.env.ACC_ROOT = process.env.ACC_RUNNER_ROOT;
+process.env.ACC_GOALS_DIR = "";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(HERE, "runner.mjs");
 const {
   loadJob, boardState, runLoop, install, status, runClaudeOnce, runOnce,
   killTreeWin32, killTreePosix, killTree, log, cli: cliFn,
+  ensureJobGoal, goalSignal,
 } = await import("./runner.mjs");
+const { createGoal, readGoal, setStatus } = await import("../hooks/goal.mjs");
 
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
@@ -185,6 +195,100 @@ test("runLoop: once=true with an undefined code falls back to 0, and stderr is l
   assert.equal(code, 0);
   const logText = fs.readFileSync(path.join(process.env.ACC_RUNNER_ROOT, "logs", `${j.name}.log`), "utf8");
   assert.ok(logText.includes("stderr tail: boom on stderr"));
+});
+
+// ---------------------------------------------------- Phase 5 step 1: goal wiring
+
+test("ensureJobGoal creates a goal on first call and REUSES the same one on a second call for the same job", () => {
+  const j = job();
+  const id1 = ensureJobGoal(j);
+  assert.ok(readGoal(id1), "a real goal now exists");
+  assert.equal(readGoal(id1).cwd, j.workdir);
+  const id2 = ensureJobGoal(j);
+  assert.equal(id2, id1, "the same job reuses its goal rather than creating a new one every run");
+});
+
+test("ensureJobGoal creates a FRESH goal once the previous one is no longer active", () => {
+  const j = job();
+  const id1 = ensureJobGoal(j);
+  setStatus(id1, "done", "finished");
+  const id2 = ensureJobGoal(j);
+  assert.notEqual(id2, id1, "a done goal is not reused -- a new one is created");
+});
+
+test("goalSignal: null while active, 0/6/7 for done/blocked/paused, null for a nonexistent goal", () => {
+  const j = job();
+  const g = createGoal({ text: "t", cwd: j.workdir });
+  assert.equal(goalSignal(j, g.id), null, "an active goal is not a stop signal");
+
+  const done = createGoal({ text: "t2", cwd: j.workdir });
+  setStatus(done.id, "done", "shipped");
+  assert.equal(goalSignal(j, done.id), 0);
+
+  const blocked = createGoal({ text: "t3", cwd: j.workdir });
+  setStatus(blocked.id, "blocked", "needs a human");
+  assert.equal(goalSignal(j, blocked.id), 6);
+
+  const paused = createGoal({ text: "t4", cwd: j.workdir });
+  setStatus(paused.id, "paused", "CEILING REACHED: cycles");
+  assert.equal(goalSignal(j, paused.id), 7);
+
+  assert.equal(goalSignal(j, "g-does-not-exist"), null, "a missing goal is not treated as a stop signal");
+});
+
+test("runLoop: a RED week tier holds the loop before ever calling run (exit 5)", async () => {
+  const savedPolicy = fs.readFileSync(process.env.ACC_POLICY, "utf8");
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({
+    lane: { slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 5, backoffCapMs: 20, pollMs: 20 },
+    week: { amberTokens: 1, redTokens: 1 }, // any real usage at all trips red
+  }));
+  try {
+    const j = job();
+    let called = false;
+    const code = await runLoop(j, false, { run: async () => { called = true; return { code: 0, result: "", err: "" }; } });
+    assert.equal(code, 5);
+    assert.equal(called, false, "claude must never launch while the week is red");
+  } finally {
+    fs.writeFileSync(process.env.ACC_POLICY, savedPolicy);
+  }
+});
+
+test("runLoop: the injected run() receives the job's own goal id", async () => {
+  const j = job();
+  let seenGoalId = null;
+  await runLoop(j, true, {
+    run: async (jobArg, goalId) => { seenGoalId = goalId; return { code: 0, result: "", err: "" }; },
+  });
+  assert.ok(seenGoalId, "a goal id was passed");
+  assert.ok(readGoal(seenGoalId), "and it resolves to a real goal");
+  assert.equal(readGoal(seenGoalId).cwd, j.workdir);
+});
+
+test("runLoop: stops via the goal signal (blocked) even though the board itself shows no progress yet", async () => {
+  const j = job({ maxStuck: 100, maxRuns: 100 }); // high enough that board-stuck logic would never trigger first
+  const goalId = ensureJobGoal(j);
+  const code = await runLoop(j, false, {
+    run: async () => { setStatus(goalId, "blocked", "needs Kyle"); return { code: 0, result: "", err: "" }; },
+  });
+  assert.equal(code, 6);
+});
+
+test("runLoop: stops via the goal signal (paused) even though the board itself shows no progress yet", async () => {
+  const j = job({ maxStuck: 100, maxRuns: 100 });
+  const goalId = ensureJobGoal(j);
+  const code = await runLoop(j, false, {
+    run: async () => { setStatus(goalId, "paused", "CEILING REACHED: cycles"); return { code: 0, result: "", err: "" }; },
+  });
+  assert.equal(code, 7);
+});
+
+test("runLoop: the goal reaching done ends the loop even if the board's own doneMarker never appears", async () => {
+  const j = job({ maxStuck: 100, maxRuns: 100 });
+  const goalId = ensureJobGoal(j);
+  const code = await runLoop(j, false, {
+    run: async () => { setStatus(goalId, "done", "shipped via the goal, not the board"); return { code: 0, result: "", err: "" }; },
+  });
+  assert.equal(code, 0);
 });
 
 // ------------------------------------------------------------- install

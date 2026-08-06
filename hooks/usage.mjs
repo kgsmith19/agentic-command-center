@@ -506,6 +506,22 @@ function tierFor(weekTokens) {
   return { tier, weekTokens, pct: red ? (weekTokens / red) * 100 : 0, redTokens: red };
 }
 
+// Phase 5 step 1 (full-remediation-prompt.md): runner.mjs needs to check the
+// week tier itself (today only budget.mjs's waitingGuard does, and that's a
+// hook path the runner never goes through -- "the runner burns a red week
+// the clearbot loop would hold" gap the earlier review named). Exported
+// rather than making runner.mjs shell out to `usage.mjs check` as a
+// subprocess. Short-circuits to green with NO scan when both thresholds are
+// 0 (disabled) -- same protective early-exit budget.mjs's own weekTier()
+// already has, which tierWindowTotal() alone lacks: without it, every call
+// here would walk the whole real transcript tree for a number tierFor()
+// would discard anyway.
+export function weekTier(project) {
+  const w = loadPolicy().week;
+  if (!w.redTokens && !w.amberTokens) return { tier: "green", weekTokens: 0, pct: 0, redTokens: 0 };
+  return tierFor(tierWindowTotal(project));
+}
+
 function cmdCheck(project) {
   const { main, sub } = weekTotals(project);
   const total = totalTokens(main) + totalTokens(sub);

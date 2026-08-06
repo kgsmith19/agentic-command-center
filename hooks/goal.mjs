@@ -184,6 +184,20 @@ export function readGoal(id) {
   return g && g.id ? g : null;
 }
 
+// Phase 5 step 1 (full-remediation-prompt.md): readGoal only ever finds a
+// LIVE goal -- setStatus archives done/blocked/dead goals out of the live
+// directory the instant they're set, so a caller that wants to know a
+// goal's FINAL status (e.g. runner.mjs checking whether the model called
+// `done`/`blocked` after a run) would see a false "not found" the moment
+// the very state it's checking for is reached. Checks the archive too,
+// once the live lookup misses.
+export function readGoalAnywhere(id) {
+  const live = readGoal(id);
+  if (live) return live;
+  const g = readJson(path.join(doneDir(), `${safeId(id)}.json`), null);
+  return g && g.id ? g : null;
+}
+
 export function listGoals() {
   try {
     return fs

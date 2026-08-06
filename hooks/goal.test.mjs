@@ -56,6 +56,22 @@ test("a goal survives as a file and starts unbound", async () => {
   assert.equal(m.readGoal(g.id).text, "ship the thing");
 });
 
+test("readGoalAnywhere finds a live goal via the normal path, and an archived one via the done dir", async () => {
+  const { m } = await loadGoal();
+  const active = m.createGoal({ text: "still going" });
+  assert.deepEqual(m.readGoalAnywhere(active.id), m.readGoal(active.id));
+
+  const archived = m.createGoal({ text: "finished" });
+  m.setStatus(archived.id, "done", "shipped");
+  assert.equal(m.readGoal(archived.id), null, "archived goals are gone from the live lookup");
+  const found = m.readGoalAnywhere(archived.id);
+  assert.ok(found, "but still findable via readGoalAnywhere");
+  assert.equal(found.status, "done");
+  assert.equal(found.text, "finished");
+
+  assert.equal(m.readGoalAnywhere("g-never-existed"), null);
+});
+
 test("multi-line goal text round-trips intact (OI-004: text never becomes keystrokes)", async () => {
   const { m } = await loadGoal();
   const text = "line one\nline two\n\n- a bullet\n- another";

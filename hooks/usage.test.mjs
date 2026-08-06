@@ -262,6 +262,31 @@ test("Phase 4 D1: DEFAULT_POLICY's runner/subagents/review are conservative, not
   delete process.env.ACC_POLICY;
 });
 
+test("Phase 5: weekTier short-circuits to green with NO scan when both thresholds are 0 (disabled)", async () => {
+  const sb = sandbox();
+  process.env.ACC_POLICY = path.join(sb.dir, "policy.json");
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ week: { amberTokens: 0, redTokens: 0 } }));
+  const u = await loadUsage(sb);
+  // A huge, expensive-to-scan transcript that would trip a real threshold if
+  // scanning ever happened -- proves the short-circuit skips the scan
+  // entirely rather than merely landing on green by coincidence.
+  writeSession(sb, "huge", [turn("2026-08-06T01:00:00.000Z", { input: 999_999_999 })]);
+  assert.deepEqual(u.weekTier(), { tier: "green", weekTokens: 0, pct: 0, redTokens: 0 });
+  delete process.env.ACC_POLICY;
+});
+
+test("Phase 5: weekTier reports red once the real rolling total reaches redTokens", async () => {
+  const sb = sandbox();
+  process.env.ACC_POLICY = path.join(sb.dir, "policy.json");
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ week: { amberTokens: 500, redTokens: 1000 } }));
+  const u = await loadUsage(sb);
+  writeSession(sb, "s1", [turn(new Date().toISOString(), { input: 1200 })]);
+  const t = u.weekTier();
+  assert.equal(t.tier, "red");
+  assert.equal(t.weekTokens, 1200);
+  delete process.env.ACC_POLICY;
+});
+
 test("Phase 3: accActive() is true when ANY of ACC_SESSION/ACC_GOAL/ACC_PROFILE/ACC_PTY is set, false when none are", async () => {
   const sb = sandbox();
   const u = await loadUsage(sb);
