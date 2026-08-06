@@ -383,8 +383,22 @@ line under `## Resolved`.
   Verified: `node --test kernel/contract.test.mjs` (16/16, RED confirmed
   first — the malformed-budget test failed pre-fix, contract validated
   clean), `node hooks/covgate.mjs` (contract.mjs 100%/100%/100%).
-  Progress: 8/12 modules done. Remaining, in rough risk order:
-  `kernel/credentials.mjs`, `kernel/adapter.mjs`,
+  `kernel/credentials.mjs` pass (2026-08-06): no bug found — this is the
+  smallest, most tightly-scoped kernel module (36 lines, single purpose:
+  hand vault values to a child env, never disk/argv/stdout/ledger) and it
+  showed. `readVault`'s corrupt-vault handling already fails closed
+  (treats corrupt the same as absent — "no keys," which denies rather
+  than grants, consistent with the file's own stated design). Reviewed
+  and found sound, not a gap: `vaultPath()` uses its own `ACC_VAULT`
+  override rather than `ACC_ROOT` (unlike every other kernel module),
+  which is a naming inconsistency but not a bug — both resolve to the
+  same default path (`<repo>/vault.json`) and the override is exercised
+  correctly by every test. The one real gap was untested, not unhandled:
+  the `ACC_VAULT`-unset fallback (production default) had no test.
+  Verified: `node --test kernel/credentials.test.mjs` (5/5), `node
+  hooks/covgate.mjs` (credentials.mjs 100%/100%/100%, up from 90%).
+  Progress: 9/12 modules done. Remaining, in rough risk order:
+  `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5

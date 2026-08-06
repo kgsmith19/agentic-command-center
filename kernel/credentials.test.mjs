@@ -39,3 +39,19 @@ test("a missing vault file yields no keys rather than throwing on first run", ()
   assert.deepEqual(C.vaultNames(), []);
   process.env.ACC_VAULT = old;
 });
+
+// OI-019 scenario-enumeration pass: vaultPath's ACC_VAULT-unset fallback
+// (production default, when nobody has overridden it) had no test at all.
+// Checks the computed PATH only, never reads/writes it -- must not touch
+// whatever real vault.json exists on this machine.
+test("vaultPath falls back to <repo>/vault.json when ACC_VAULT is unset", () => {
+  const old = process.env.ACC_VAULT;
+  delete process.env.ACC_VAULT;
+  try {
+    const p = C.vaultPath();
+    assert.ok(p.endsWith("vault.json"));
+    assert.ok(!p.startsWith(BASE), "must not resolve into this test's throwaway sandbox");
+  } finally {
+    process.env.ACC_VAULT = old;
+  }
+});
