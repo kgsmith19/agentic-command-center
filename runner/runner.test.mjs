@@ -439,7 +439,20 @@ test("killTreePosix signals the process GROUP (negative pid), and falls back to 
   assert.doesNotThrow(() => killTreePosix({ pid: 999999999, kill: () => { throw new Error("also broken"); } }));
 });
 
-test("OI-035: killTreePosix escalates to SIGKILL if an uncooperative child ignores SIGTERM", async () => {
+test("OI-035: killTreePosix escalates to SIGKILL if an uncooperative child ignores SIGTERM", {
+  // killTreePosix is a POSIX-only code path — killTree() dispatches to
+  // killTreeWin32 (taskkill /t /f) on win32 in production, never this
+  // function. This test's premise (a child that TRAPS SIGTERM and survives
+  // it until the SIGKILL escalation) doesn't hold on Windows: Node has no
+  // real signal-trapping there, and process.kill(pid, "SIGTERM") terminates
+  // the process outright regardless of any "SIGTERM" listener (confirmed via
+  // a real CI failure — the child was already dead after the FIRST signal,
+  // "false !== true" on the "must survive the initial SIGTERM" assertion,
+  // not after the grace-period escalation). Matches the established
+  // skip-on-win32 convention for POSIX-only fault injection elsewhere in
+  // this repo (see hooks/testplan.test.mjs).
+  skip: process.platform === "win32" ? "killTreePosix is POSIX-only; Windows has no real SIGTERM-trap semantics for this test to exercise" : false,
+}, async () => {
   // A real child that traps/ignores SIGTERM (a hung/misbehaving job is
   // exactly the kind of process most likely to do this — not hypothetical).
   // A single SIGTERM with no escalation leaves it alive forever; killTree
