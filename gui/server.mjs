@@ -143,6 +143,10 @@ export function handler(req, res) {
     try { return send(res, 200, status.spendingSummary()); }
     catch (e) { return send(res, 500, { error: e.message }); }
   }
+  if (route === "/api/status/summary" && req.method === "GET") {
+    try { return send(res, 200, status.globalStatusSummary()); }
+    catch (e) { return send(res, 500, { error: e.message }); }
+  }
   if (route === "/api/status/policy") {
     if (req.method === "GET") {
       try { return send(res, 200, status.loadOpsPolicy()); }

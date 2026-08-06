@@ -18,9 +18,14 @@
   .err { color: #b22222; }
   .danger { color: #b22222; }
   pre#preview { border: 1px solid #ccc; padding: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+  #global-status { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 3px; float: right; }
+  .gs-green { background: #d6f5d6; color: #1a7a1a; }
+  .gs-amber { background: #fff2cc; color: #8a6d00; }
+  .gs-red { background: #f8d7da; color: #a71d2a; }
 </style>
 </head>
 <body>
+<div id="global-status"></div>
 <h3>What Claude cannot touch</h3>
 <fieldset><legend>Blocked file patterns (secrets)</legend>
   <ul id="secretList"></ul>
@@ -199,6 +204,21 @@ $("runboxFlush").onclick = async () => {
 
 loadStatus().catch((e) => { $("status").textContent = "cannot read status: " + e; $("status").className = "err"; });
 loadRunbox().catch((e) => { $("runboxStatus").textContent = "cannot read runbox: " + e; $("runboxStatus").className = "err"; });
+
+// Design spec §5, "Global-status leakage, named not ignored": mirrored on
+// every migrated page (a small, independently-pollable summary each page
+// asks for on its own, since there's no shared DOM spanning pages the way
+// WinForms panels shared one process).
+async function pollGlobalStatus() {
+  try {
+    const s = await (await fetch("/api/status/summary")).json();
+    const el = $("global-status");
+    el.textContent = s.text;
+    el.className = "gs-" + s.tier;
+  } catch {}
+}
+pollGlobalStatus();
+setInterval(pollGlobalStatus, 30000);
 </script>
 </body>
 </html>

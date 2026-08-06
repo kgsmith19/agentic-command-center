@@ -18,9 +18,14 @@
   .tier-green { background: #d6f5d6; color: #1a7a1a; }
   .tier-amber { background: #fff2cc; color: #8a6d00; }
   .tier-red { background: #f8d7da; color: #a71d2a; }
+  #global-status { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 3px; float: right; }
+  .gs-green { background: #d6f5d6; color: #1a7a1a; }
+  .gs-amber { background: #fff2cc; color: #8a6d00; }
+  .gs-red { background: #f8d7da; color: #a71d2a; }
 </style>
 </head>
 <body>
+<div id="global-status"></div>
 <h3>Spending</h3>
 <fieldset><legend>This week</legend>
   <div class="row">tier: <span id="tierBadge">-</span>
@@ -173,6 +178,22 @@ $("btnFanout").onclick = async () => {
 loadSpending();
 loadPolicy();
 loadClearbot();
+
+// Design spec §5, "Global-status leakage, named not ignored": mirrored on
+// every migrated page. Redundant with this page's own #tierBadge (which
+// stays — it's the detailed view), but keeps the shared widget's contract
+// identical everywhere, not a special case for the one page that already
+// has a bespoke tier display.
+async function pollGlobalStatus() {
+  try {
+    const s = await (await fetch("/api/status/summary")).json();
+    const el = $("global-status");
+    el.textContent = s.text;
+    el.className = "gs-" + s.tier;
+  } catch {}
+}
+pollGlobalStatus();
+setInterval(pollGlobalStatus, 30000);
 </script>
 </body>
 </html>

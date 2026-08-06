@@ -485,10 +485,15 @@ flagged as "not verified on Windows" too.
    note — `guards-gui.ps1` itself still shows the old WinForms Spending tab;
    wiring it to host `gui/spending.html` needs a real PowerShell
    environment, same reasoning as tier 1's own deferred wiring step. Also
-   not built: the shared `<div id="global-status">` header widget this
-   section proposed for cross-page tier visibility — `spending.html` shows
-   its own tier badge, but no other page polls it yet; a small, separable
-   follow-up, not blocking.
+   **Shipped** (separate follow-up, same night): the shared
+   `<div id="global-status">` header widget — `GET /api/status/summary`
+   (`hooks/status.mjs`'s `globalStatusSummary()`, same `weekTier()` math
+   `spendingSummary()` already uses), mirrored on all three migrated pages
+   (`kernel.html`, `engine.html`, `spending.html`) with a 30s poll, tests
+   for green/amber/red text in `hooks/status.test.mjs`, an HTTP contract
+   test in `gui/server.test.mjs`, and an e2e proof on `kernel.html`
+   specifically (a page with nothing to do with spending, showing the
+   widget is genuinely independent) in `gui/e2e/kernel-settings.spec.mjs`.
 3. **Not tonight, spec only:** §7 (Start Work's launch action + Terminal).
    Everything in Start Work THAT ISN'T the launch action (route
    suggestion, goal list/done/stop, profile picker) is tier-1-shaped and

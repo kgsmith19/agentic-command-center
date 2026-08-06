@@ -346,6 +346,14 @@ test("GET /api/status/spending returns the live week summary", async () => {
   assert.equal(typeof j.costUsd, "number");
 });
 
+test("GET /api/status/summary returns the tiny global-status block every page's shared header polls", async () => {
+  const r = await fetch(`${base}/api/status/summary`);
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.tier, "green");
+  assert.equal(j.text, "week usage: green");
+});
+
 test("GET/POST /api/status/policy round-trips the ops dials, CSRF applies the same as kernel-policy", async () => {
   const before = await (await fetch(`${base}/api/status/policy`)).json();
   assert.equal(before.context.softK, 400);

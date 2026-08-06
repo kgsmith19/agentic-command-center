@@ -28,6 +28,16 @@ test("renders the real on-disk field state", async ({ page }) => {
   await expect(page.locator("#alwaysAllowTools")).toHaveValue("TodoWrite");
 });
 
+// Design spec §5's global-status widget: this page's own fixture carries
+// no week thresholds, so the shared header polls a real green summary from
+// hooks/status.mjs's globalStatusSummary() -- proof the widget is wired on
+// a page whose own tab has nothing to do with spending.
+test("the shared global-status header widget shows the real week tier", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#global-status")).toHaveText("week usage: green");
+  await expect(page.locator("#global-status")).toHaveClass(/gs-green/);
+});
+
 test("live edit applies without restart: save lands on disk, reload shows it", async ({ page }) => {
   await page.goto("/");
   await page.locator("#toolCalls").fill("150");

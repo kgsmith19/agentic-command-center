@@ -59,6 +59,25 @@ export function spendingSummary() {
   };
 }
 
+// Design spec §5, "Global-status leakage, named not ignored": the WinForms
+// tab wrote into the outer window's header chrome ($lblStatusAct) when the
+// tier went amber/red -- a cross-tab side effect that has no web analog
+// (there's no single process/DOM spanning every page the way WinForms
+// panels shared one). The fix: a tiny, cheap, independently-pollable
+// summary any page's shared header widget can ask for on its own, rather
+// than one page reaching into another's state. Same tier math
+// spendingSummary() already uses -- kept separate rather than having
+// spendingSummary return a `text` field too, since every OTHER page that
+// polls this only needs the one-line summary, not the full week/cost block.
+export function globalStatusSummary() {
+  const { tier, pct } = weekTier();
+  const text =
+    tier === "red" ? "week usage RED — kill switch engaged" :
+    tier === "amber" ? `week usage AMBER (${Math.round(pct)}%)` :
+    "week usage: green";
+  return { tier, text };
+}
+
 // ---------------------------------------------------------- ops policy dials
 
 const OPS_DEFAULTS = {

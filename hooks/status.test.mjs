@@ -75,6 +75,42 @@ test("spendingSummary tier flips red once the real rolling total reaches redToke
   assert.equal(s.weekTokens, 1200);
 });
 
+// Design spec §5's "global-status leakage" fix: a tiny, independently-
+// pollable {tier, text} any page's shared header widget can ask for.
+test("globalStatusSummary: green with no scan when thresholds are 0", async () => {
+  fs.writeFileSync(spendSandbox.policy, JSON.stringify({ week: { amberTokens: 0, redTokens: 0 } }));
+  const S = await loadStatus(spendSandbox.root, spendSandbox.policy);
+  assert.deepEqual(S.globalStatusSummary(), { tier: "green", text: "week usage: green" });
+});
+
+test("globalStatusSummary: amber and red text carry the real rolling total", async () => {
+  fs.writeFileSync(spendSandbox.policy, JSON.stringify({ week: { amberTokens: 500, redTokens: 1000 } }));
+  const S = await loadStatus(spendSandbox.root, spendSandbox.policy);
+  // spendSandbox is shared across every spendingSummary/globalStatusSummary
+  // test in this file (usage.mjs's CLAUDE_DIR is pinned at its first import
+  // -- see the sandbox-sharing comment above). weekTier() scans ALL
+  // projects under it, so an earlier test's leftover transcript (the
+  // "flips red" test's 1200-token session) would otherwise silently
+  // contribute to this test's own total. Reset to a clean slate.
+  fs.rmSync(path.join(spendSandbox.root, "cfg", "projects"), { recursive: true, force: true });
+  const proj = path.join(spendSandbox.root, "cfg", "projects", "p2");
+  fs.mkdirSync(proj, { recursive: true });
+  const turn = (n) => JSON.stringify({
+    type: "assistant",
+    timestamp: new Date().toISOString(),
+    message: { model: "claude-opus-5", usage: { input_tokens: n, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [{ type: "text", text: "x" }] },
+  });
+
+  fs.writeFileSync(path.join(proj, "amber.jsonl"), turn(600) + "\n");
+  const amber = S.globalStatusSummary();
+  assert.equal(amber.tier, "amber");
+  assert.match(amber.text, /^week usage AMBER \(\d+%\)$/);
+
+  fs.writeFileSync(path.join(proj, "red.jsonl"), turn(500) + "\n"); // 600+500=1100 >= redTokens
+  const red = S.globalStatusSummary();
+  assert.deepEqual(red, { tier: "red", text: "week usage RED — kill switch engaged" });
+});
+
 // ------------------------------------------------------------- ops policy
 
 test("loadOpsPolicy defaults on a missing file, and deep-merges a partial one", async () => {

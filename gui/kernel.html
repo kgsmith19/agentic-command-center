@@ -13,9 +13,14 @@
   #status { margin-left: 12px; }
   .ok { color: #1a7a1a; }
   .err { color: #b22222; }
+  #global-status { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 3px; float: right; }
+  .gs-green { background: #d6f5d6; color: #1a7a1a; }
+  .gs-amber { background: #fff2cc; color: #8a6d00; }
+  .gs-red { background: #f8d7da; color: #a71d2a; }
 </style>
 </head>
 <body>
+<div id="global-status"></div>
 <h3>Kernel — ceilings and dials</h3>
 <p>Edits apply to the very next tool call of a running kernel task — no restart.</p>
 <fieldset><legend>Harness, per-run budget, and hard caps</legend>
@@ -83,6 +88,21 @@ $("save").onclick = async () => {
   }
 };
 load().catch((e) => { $("status").textContent = "cannot read policy: " + e; $("status").className = "err"; });
+
+// Design spec §5, "Global-status leakage, named not ignored": mirrored on
+// every migrated page (a small, independently-pollable summary each page
+// asks for on its own, since there's no shared DOM spanning pages the way
+// WinForms panels shared one process).
+async function pollGlobalStatus() {
+  try {
+    const s = await (await fetch("/api/status/summary")).json();
+    const el = $("global-status");
+    el.textContent = s.text;
+    el.className = "gs-" + s.tier;
+  } catch {}
+}
+pollGlobalStatus();
+setInterval(pollGlobalStatus, 30000);
 </script>
 </body>
 </html>
