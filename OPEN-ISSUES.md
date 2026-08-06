@@ -247,6 +247,39 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-041 [RESOLVED 2026-08-06] a mission's dollar ceiling never saw subagent spend
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (MEDIUM-HIGH).
+- where: `hooks/usage.mjs`'s `costOfTranscript()`, the sole feed for
+  `hooks/mission.mjs`'s Phase 1 `maxCostUsd` ceiling (via `budget.mjs`'s
+  Stop handler).
+- what: a subagent (Task tool) run's token spend lands in a SEPARATE
+  transcript file — `<project>/<sid>/subagents/agent-*.jsonl`
+  (`isSidechain=true`, this file's own header comment already documents
+  the layout, and `listSessions()`'s `subFiles` derivation already uses it
+  for the weekly spending scan/dashboard). `costOfTranscript` only ever
+  read the ONE file it was given — the main session's own transcript — so
+  a mission that spent heavily entirely through subagents looked
+  completely free to its own cost ceiling. The function's own comment
+  called this "real spend, not a rough proxy"; it was a rough proxy
+  exactly when subagents were involved, silently letting real dollar
+  spend past a ceiling meant to catch it.
+- fix: `costOfTranscript` now also sums every file under the main
+  transcript's own `<sid>/subagents/` directory into the same aggregate,
+  reusing the same project/sid derivation `listSessions()` already
+  established, so the two mechanisms stay consistent. No other production
+  caller of `costOfTranscript` exists, so this is a pure widening of the
+  one real use (the mission cost ceiling) — nothing else changes.
+- verified: new test in `hooks/usage.test.mjs` RED against the unfixed
+  code (reported the main-file-only total instead of the true total
+  including two fixture subagent files), GREEN after the fix (20/20 in
+  the file's own suite). Full `npm test`: 536 pass, 1 pre-existing
+  unrelated failure (`hooks/lane.test.mjs`'s chmod-based test,
+  root-sandbox limitation). `hooks/usage.mjs` remains under the
+  pre-existing, already-documented OI-033 coverage floor — an unrelated
+  structural gap, unaffected by this change.
+
 ## OI-040 [RESOLVED 2026-08-06] runner.mjs had no spawn() error handler; a bad PATH crashed the whole loop, not just the one job
 
 - opened and resolved 2026-08-06, found by one of the three parallel
