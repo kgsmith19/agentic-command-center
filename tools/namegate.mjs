@@ -68,6 +68,11 @@ const EXCLUDE_FILES = new Set([
   "tools/namegate.test.mjs",
   "tools/namegate.mjs",
   "core/migrate-standing.test.mjs",
+  // .gitignore must NAME the pre-rename runtime files in order to ignore them
+  // on a machine that still produces them, and a gitignore pattern line cannot
+  // carry a trailing `# namegate-ok:` — git would read the marker as part of
+  // the pattern. File-level exclusion is the only honest option here.
+  ".gitignore",
 ]);
 
 export function realIo() {

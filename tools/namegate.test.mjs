@@ -89,6 +89,7 @@ test("realIo() excludes docs/, notes/, OPEN-ISSUES.md and the files that must na
   assert.ok(!io.files.includes("tools/namegate.test.mjs"), "this gate's own test excluded");
   assert.ok(!io.files.includes("tools/namegate.mjs"), "this gate's own source excluded");
   assert.ok(!io.files.includes("core/migrate-standing.test.mjs"), "the legacy-layout migration test excluded");
+  assert.ok(!io.files.includes(".gitignore"), "gitignore excluded — its patterns cannot carry the marker");
   assert.ok(io.files.includes("core/standing.mjs"), "ordinary source is still in scope");
 });
 
