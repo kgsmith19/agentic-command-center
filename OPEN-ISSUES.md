@@ -247,6 +247,34 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-049 [RESOLVED 2026-08-06] appendCycle had no status guard of its own, unlike every other mutating function in the file
+
+- opened and resolved 2026-08-06, found by a fresh adversarial review pass
+  launched specifically to check this session's own OI-039/041/043/044
+  fixes for anything they might have introduced or missed (not part of
+  the original Big Lean Review) — LOW severity, non-blocking at the time
+  it was found.
+- where: `hooks/mission.mjs`'s `appendCycle()`.
+- what: `resumeMission()` requires `status === "paused"`;
+  `reapCeilings()`/`pendingKicks()` only ever iterate `activeMissions()`
+  — every other mutating function in this file guards its own status
+  precondition. `appendCycle` did not: it would happily increment
+  `cycles`/`totalCostUsd` on a PAUSED (or blocked/done) mission if
+  anything ever called it without pre-filtering through
+  `missionForSession()` first. Not exploitable through any call path that
+  exists today (`missionForSession` already filters to active-only), but
+  a paused mission's cycles/cost silently growing would corrupt the
+  baseline `resumeMission` snapshots on its next resume (OI-039) — a
+  latent gap worth closing now rather than waiting for a future caller to
+  trip it.
+- fix: `appendCycle` now requires `status === "active"`, matching
+  `resumeMission`'s own precondition guard exactly.
+- verified: new test in `hooks/mission.test.mjs` RED against the unfixed
+  code (a paused mission's cycles silently incremented to 1), GREEN
+  after the fix (73/73 in the file's own suite). Full `npm test`: 544
+  pass, 1 pre-existing unrelated failure (`hooks/lane.test.mjs`'s
+  chmod-based test, root-sandbox limitation).
+
 ## OI-048 [RESOLVED 2026-08-06] hooks/lane.mjs's try-acquire/reown handshake could be stolen mid-flight
 
 - opened and resolved 2026-08-06, found by one of the three parallel
