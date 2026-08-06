@@ -574,7 +574,7 @@ Phase 5` rather than doing speculative work on code that's gone.
 
 ## Phase 7 — Coverage-gate honesty
 
-**Status: DONE (all 4 items) — commit (see next commit in this branch)**
+**Status: DONE (all 4 items) — commit df66274**
 
 1. **`parseLcov` merge fix** — shipped, but not the bug the phase guessed.
    Fixed a real bug: node emits one `SF:` block per SUBPROCESS, so a file
