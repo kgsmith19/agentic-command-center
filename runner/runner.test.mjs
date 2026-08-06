@@ -439,6 +439,43 @@ test("killTreePosix signals the process GROUP (negative pid), and falls back to 
   assert.doesNotThrow(() => killTreePosix({ pid: 999999999, kill: () => { throw new Error("also broken"); } }));
 });
 
+// Full-repo review (2026-08-06): the escalation's liveness probe
+// (process.kill(child.pid, 0)) and its kill target (process.kill(-child.pid,
+// sig), the process GROUP) check two DIFFERENT things. If the immediate
+// child (the shell wrapper) exits on SIGTERM but a grandchild survives in
+// the same process group, the probe asks about the now-dead leader pid,
+// gets ESRCH, and concludes "not alive" -- so the SIGKILL that would have
+// actually reached the surviving grandchild via the group is never sent.
+// Separately: child.pid stays populated after Node reaps the process, so a
+// recycled pid could make the OS-level probe return a false "still alive"
+// for an unrelated process. Both close with the same fix: ask Node's OWN
+// tracked state (exitCode/signalCode, set reliably on 'exit') instead of
+// re-asking the OS about a pid number that may not mean what it used to.
+test("killTreePosix's SIGKILL escalation is gated on Node's own child state, not an OS pid probe that can disagree with the kill target", async () => {
+  // Simulates the exact disagreement the review found: the OS-level probe
+  // (process.kill(pid, 0)) would report "alive" -- e.g. because the pid was
+  // recycled by an unrelated process after this child was reaped -- while
+  // Node's OWN bookkeeping (exitCode, set the instant the real child
+  // exited) already knows better. A probe-based implementation escalates
+  // to SIGKILL against whatever now holds that pid; a state-based one does
+  // not, because it never asks the OS at all.
+  const reaped = { pid: 999999999, exitCode: 0, signalCode: null, kill: () => {} };
+  let killAttempted = false;
+  const origKill = process.kill;
+  process.kill = (pid, sig) => {
+    if (sig === "SIGKILL") killAttempted = true;
+    if (sig === 0) return true; // OS-probe stand-in: "yes, something alive holds this pid now"
+    return origKill.call(process, pid, sig);
+  };
+  try {
+    killTreePosix(reaped, { graceMs: 30 });
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(killAttempted, false, "a child Node's own bookkeeping already marks exited must never be re-signaled, even if an OS-level pid probe would (wrongly) report it alive");
+  } finally {
+    process.kill = origKill;
+  }
+});
+
 test("OI-035: killTreePosix escalates to SIGKILL if an uncooperative child ignores SIGTERM", {
   // killTreePosix is a POSIX-only code path — killTree() dispatches to
   // killTreeWin32 (taskkill /t /f) on win32 in production, never this

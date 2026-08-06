@@ -135,15 +135,26 @@ export function killTreeWin32(child, exec = execFileSync) {
 // the child's own `close` event, already handled there) via an internal,
 // non-blocking setTimeout rather than a synchronous sleep, so one hung
 // job's kill sequence never stalls the runner's own event loop.
+// Full-repo review (2026-08-06): the liveness check and the kill both need
+// to agree on what they're asking about. An OS-level probe
+// (process.kill(child.pid, 0)) asks about the LEADER pid while the kill
+// itself signals the PROCESS GROUP (-child.pid) -- if the leader (a shell
+// wrapper) exits on SIGTERM but a grandchild survives in the group, the
+// probe reports "not alive" and the SIGKILL that would have reached the
+// survivor via the group is never sent. Worse, child.pid stays populated
+// after Node reaps the process, so a pid recycled by an unrelated process
+// in the meantime could make the probe report a false "still alive".
+// Node's OWN bookkeeping (exitCode/signalCode, set reliably the instant
+// THIS child exits) answers the actual question -- "is the child *I*
+// spawned still running" -- without re-asking the OS about a pid number
+// that may no longer mean what it used to.
 export function killTreePosix(child, { graceMs = 300 } = {}) {
   const signal = (sig) => {
     try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch {} }
   };
   signal("SIGTERM");
   setTimeout(() => {
-    let alive = true;
-    try { process.kill(child.pid, 0); } catch { alive = false; }
-    if (alive) signal("SIGKILL");
+    if (child.exitCode === null && child.signalCode === null) signal("SIGKILL");
   }, graceMs);
 }
 export function killTree(child, platform = process.platform) {
