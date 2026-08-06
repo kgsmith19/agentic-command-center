@@ -83,8 +83,23 @@ export function ensureJobMission(job) {
   let id = null;
   try { id = readFileSync(marker, "utf8").trim() || null; } catch {}
   if (id) {
+    // Full-repo review (2026-08-06): this only reused an "active" mission --
+    // a mission PAUSED at a ceiling (OI-039) is still live (readMission finds
+    // it; only done/blocked missions get archived by setStatus) but failed
+    // this check and fell through to a fresh createMission() below, silently
+    // abandoning the paused mission's accumulated cycles/cost for a new one
+    // starting at zero. runLoop calls ensureJobMission exactly once per
+    // PROCESS, so a scheduled task re-invoking `node runner.mjs <job>` after
+    // an earlier run exited 7 ("paused at a ceiling") would silently reset
+    // the very ceiling that just tripped. "paused" must be reused the same
+    // as "active" -- missionSignal() then correctly reports it as still
+    // paused (exit 7) until a human actually runs `mission.mjs resume`, no
+    // silent bypass. "blocked"/"done" missions are excluded on purpose: they
+    // are already archived by setStatus the instant they're set, so
+    // readMission(id) returns null for them below and this falls through to
+    // a fresh mission regardless -- the existing, correct behavior.
     const existing = readMission(id);
-    if (existing && existing.status === "active") return id;
+    if (existing && (existing.status === "active" || existing.status === "paused")) return id;
   }
   const g = createMission({ text: job.missionText || job.bootstrap, cwd: job.workdir });
   mkdirSync(join(ROOT, "state"), { recursive: true });

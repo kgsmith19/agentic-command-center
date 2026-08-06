@@ -221,6 +221,29 @@ test("ensureJobMission creates a FRESH mission once the previous one is no longe
   assert.notEqual(id2, id1, "a done mission is not reused -- a new one is created");
 });
 
+test("Full-repo review (2026-08-06) regression: ensureJobMission REUSES a PAUSED mission instead of silently abandoning it for a fresh one", () => {
+  // Corroborated MEDIUM finding: ensureJobMission's reuse check was
+  // `existing.status === "active"` -- a paused mission (OI-039's ceiling
+  // pause, still LIVE, not archived -- only done/blocked missions get
+  // archived by setStatus) failed that check and fell through to
+  // createMission(), silently abandoning the paused mission and its
+  // accumulated cycles/cost for a brand-new one starting at zero. Since
+  // runLoop calls ensureJobMission exactly once per PROCESS (a scheduled
+  // task re-invoking `node runner.mjs <job>` after an earlier run exited 7
+  // for "paused at a ceiling"), every such re-invocation would silently
+  // reset the very ceiling that just tripped -- defeating the whole
+  // point of pausing for a human to look at it. The fix must treat a
+  // paused mission the same as an active one: reuse it, so the runner's
+  // own missionSignal() keeps reporting it as paused (exit 7) until a
+  // human actually runs `mission.mjs resume`, not silently move on.
+  const j = job();
+  const id1 = ensureJobMission(j);
+  setStatus(id1, "paused", "CEILING REACHED: cycles (test)");
+  const id2 = ensureJobMission(j);
+  assert.equal(id2, id1, "a paused mission must be reused, not silently replaced with a fresh one");
+  assert.equal(readMission(id2).status, "paused", "reusing it must not itself un-pause it");
+});
+
 test("missionSignal: null while active, 0/6/7 for done/blocked/paused, null for a nonexistent mission", () => {
   const j = job();
   const g = createMission({ text: "t", cwd: j.workdir });
