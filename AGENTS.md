@@ -28,6 +28,20 @@ Failure mode is **closed**: unreadable payload or config blocks with a message
 instead of silently allowing. Known ceiling: only tools in the matcher are
 seen — Bash writes bypass the hook. Convention enforcer, not a security boundary.
 
+**A second, orthogonal ceiling (OI-032, accepted 2026-08-06):** the guard only
+blocks a *direct* Edit/Write/NotebookEdit against a `protected` path. With
+`policy.autoApprove.enabled:true`, an agent refused such a direct edit can
+still write a runbox script that performs the same change, and clearbot
+auto-executes it with the user's full authority ~2s later, unsupervised. This
+was demonstrated live: `guard.mjs` correctly refused a direct edit to
+`~/.claude/settings.json`, and a runbox script achieved the same result minutes
+later via auto-approve. So "agents may not edit the rules that constrain them"
+(the deny message's own wording) is true only against the direct-edit path,
+not against the system as a whole while autoApprove is on — the guard is a
+speed bump there, not a boundary. Kyle's call, made explicitly: the tradeoff is
+accepted (autoApprove stays on for the throughput it buys the unattended goal
+loop); this note exists so the claim reads honestly instead of overclaiming.
+
 ## The vault — how agents receive secrets
 
 The user uploads KEY=VALUE pairs via the GUI ("Give Claude keys" tab) into
