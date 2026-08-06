@@ -149,3 +149,17 @@ test("readAutonomyStrict: missing file is fresh, corrupt file THROWS (never fail
   fs.writeFileSync(L.autonomyFile(), JSON.stringify({ factor: 0.5, runsLeft: 3 }));
   assert.equal(A.readAutonomyStrict().factor, 0.5);
 });
+
+// OI-019 scenario-enumeration pass: writeAutonomy was the one JSON state
+// file in this codebase still using a bare writeFileSync instead of
+// tmp+rename -- a reader (readAutonomyStrict, an enforcement point that
+// fails CLOSED on any read error) could observe a half-written file from a
+// crash mid-write and deny every subsequent tool call for a reason that
+// isn't real tightening. Same tmp+rename discipline every other JSON state
+// file already uses (goal.mjs, budget.mjs, engine.mjs).
+test("writeAutonomy writes atomically -- content round-trips, no leftover .tmp- file", () => {
+  A.writeAutonomy({ factor: 0.5, runsLeft: 3, log: [{ direction: "tighten" }] });
+  assert.deepEqual(A.readAutonomy(), { factor: 0.5, runsLeft: 3, log: [{ direction: "tighten" }] });
+  const leftovers = fs.readdirSync(path.dirname(L.autonomyFile())).filter((f) => f.includes(".tmp-"));
+  assert.deepEqual(leftovers, []);
+});

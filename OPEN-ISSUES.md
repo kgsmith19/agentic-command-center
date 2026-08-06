@@ -312,8 +312,41 @@ line under `## Resolved`.
   Verified: `node --test kernel/verifier.test.mjs` (11/11, RED confirmed
   first — the malformed-pattern tests threw uncaught pre-fix), `node
   hooks/covgate.mjs` (verifier.mjs 100%/100%/100%).
-  Progress: 5/12 modules done. Remaining, in rough risk order:
-  `kernel/autonomy.mjs`, `kernel/policy.mjs`, `kernel/contract.mjs`,
+  `kernel/autonomy.mjs` pass (2026-08-06): `writeAutonomy` was the one JSON
+  state file left in this codebase still using a bare `writeFileSync`
+  instead of tmp+rename — a reader (`readAutonomyStrict`, an ENFORCEMENT
+  point that fails closed on any read error, per its own doc comment) could
+  observe a half-written file from a crash mid-write and deny every
+  subsequent tool call for a reason that isn't real tightening. Fixed with
+  the same tmp+rename discipline every other JSON state file already uses.
+  Verified: `node --test kernel/autonomy.test.mjs` (13/13), `node
+  hooks/covgate.mjs` (autonomy.mjs 100%/100%/100%). Honest caveat: unlike
+  guardhook.mjs's race (provably reproduced via concurrent same-process
+  calls, since its flow has a real async boundary), `updateAfterRun`'s
+  read-modify-write is fully synchronous with no await point, so a genuine
+  cross-process race (two `kernel/run.mjs` invocations finalizing
+  concurrently, both reading the same pre-tighten state, one silently
+  overwriting the other's decision and log entry) is real in principle —
+  nothing in `run.mjs` itself enforces "one kernel run at a time" despite
+  the kernel plan doc's own architecture note assuming it reuses
+  `hooks/lane.mjs` for that, which it does not actually import — but
+  isn't cheaply provable in a fast unit test the way the guardhook race
+  was, and no lock was added without being able to red-test it first, per
+  this repo's own discipline against speculative fixes. Left as an open
+  question rather than either fixed unverified or silently ignored: does
+  anything outside this repo actually guarantee kernel runs are launched
+  serially, or is this exposure real? Also reviewed and found sound (no
+  bug, documented rather than re-litigated per module later):
+  `effectiveCeilings`'s hard cap only applies to `wallClockMin` because
+  `hardCaps` only defines that one field by design (`toolCalls`/`tokens`
+  have no separate hard-cap concept anywhere in `kernel/policy.mjs`, not a
+  gap); `checkpointVerdict`'s dimension-priority order (wallClock > tokens
+  > toolCalls > stalled) is already directly tested; `autonomy.rejectRate`
+  can never reach `updateAfterRun` as `0` in practice (schema-validated to
+  `(0, 1]` in `kernel/policy.mjs`), so the permanent-tightening edge case
+  that value would cause is unreachable, not a live bug.
+  Progress: 6/12 modules done. Remaining, in rough risk order:
+  `kernel/policy.mjs`, `kernel/contract.mjs`,
   `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
