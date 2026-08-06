@@ -68,7 +68,9 @@ test("projectOp add/rm round-trips through status", () => {
   const proj = path.join(root, "myproj");
   fs.mkdirSync(proj, { recursive: true });
   E.projectOp("add", proj);
-  assert.deepEqual(E.status().projects, [proj]);
+  // engine.mjs's projects-add normalizes stored paths to forward slashes
+  // (see norm() in hooks/engine.mjs); expect that normalized form.
+  assert.deepEqual(E.status().projects, [proj.replaceAll("\\", "/")]);
   E.projectOp("rm", proj);
   assert.deepEqual(E.status().projects, []);
 });

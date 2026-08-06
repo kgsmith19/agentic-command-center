@@ -196,7 +196,10 @@ test("secret/protected/project add-then-remove round-trip through the real files
   const proj = path.join(process.env.ACC_ROOT, "myproj");
   fs.mkdirSync(proj, { recursive: true });
   assert.equal((await postEngine("/api/engine/project", { op: "add", path: proj })).status, 200);
-  assert.deepEqual((await (await fetch(`${base}/api/engine/status`)).json()).projects, [proj]);
+  // engine.mjs's projects-add normalizes stored paths to forward slashes
+  // (see norm() in hooks/engine.mjs) — unlike protected-add above, which
+  // stores the raw path verbatim. Expect the normalized form here.
+  assert.deepEqual((await (await fetch(`${base}/api/engine/status`)).json()).projects, [proj.replaceAll("\\", "/")]);
 });
 
 test("an invalid engine mutation is a 400 with engine.mjs's own message, and CSRF applies the same as kernel-policy", async () => {

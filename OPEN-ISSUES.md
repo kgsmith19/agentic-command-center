@@ -169,6 +169,19 @@ line under `## Resolved`.
   batches (bigger, separate change to the gate's own mechanics, not a
   coverage-honesty fix to an individual hooks/ file) — out of scope for
   tonight, named here rather than silently absorbed into "Phase 7 done."
+- UPDATE 2026-08-06 (tier-1 GUI migration, PR #9): `gui/engineClient.mjs`
+  (new tonight) joins this entry's signature at CI scale — isolated local
+  run (`node --test --experimental-test-coverage gui/engineClient.test.mjs`)
+  measures 97.56% lines/branches/funcs combined, genuinely covered; the full
+  CI `covgate` job reports lines 91.2% branches 78.1% (funcs still 100%) on
+  the same commit, under the 100/90 floor. Same root cause as engine.mjs/
+  route.mjs/usage.mjs above (node's `--experimental-test-coverage`
+  degrading at the repo's full ~35-test-file invocation size), not a new
+  mechanism — not re-diagnosed per-occurrence, only recorded here so the
+  file list stays accurate. No production code change; `gui/server.mjs`
+  cleared its own floor in the same CI run (100/100/90.8) since its route
+  logic is thinner and less branch-heavy than engineClient.mjs's op-dispatch
+  functions.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real
