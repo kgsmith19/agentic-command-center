@@ -51,18 +51,44 @@ test("an explicitly justified line is allowed", () => {
   assert.deepEqual(f, []);
 });
 
+// This gate scans .ps1 and .cmd as well as .mjs, and the only unavoidable uses
+// of a retired name live in the PowerShell watchdog installers - they must name
+// the pre-rename Startup launcher and Scheduled Task to remove them. An escape
+// hatch that only speaks `//` is no escape hatch for the files that need it.
+test("the justification is honoured in PowerShell and batch comment syntax too", () => {
+  const ps = m.findRetired(["a.ps1"], () => "Remove-Item 'ACC clearbot.cmd'  # namegate-ok: removes the pre-rename launcher\n");
+  assert.deepEqual(ps, []);
+  const cmd = m.findRetired(["a.cmd"], () => "del clearbot.stop  rem namegate-ok: clears the pre-rename kill switch\n");
+  assert.deepEqual(cmd, []);
+});
+
+test("a comment marker without the namegate-ok token is still a finding", () => {
+  const f = m.findRetired(["a.ps1"], () => "Remove-Item 'ACC clearbot.cmd'  # just a normal comment\n");
+  assert.equal(f.length, 1);
+});
+
 test("multiple retired names on one line are each reported", () => {
   const f = m.findRetired(["a.mjs"], () => 'clearbot also called kernel/adapter.mjs\n');
   assert.equal(f.length, 2);
 });
 
-test("realIo() excludes docs/, notes/, OPEN-ISSUES.md and its own test fixture", () => {
+test("realIo() excludes docs/, notes/, OPEN-ISSUES.md and the files that must name what it catches", () => {
   const io = m.realIo();
   assert.ok(!io.files.some((f) => f.startsWith("docs/")), "docs/ excluded");
   assert.ok(!io.files.some((f) => f.startsWith("notes/")), "notes/ excluded");
   assert.ok(!io.files.includes("OPEN-ISSUES.md"), "OPEN-ISSUES.md excluded");
   assert.ok(!io.files.includes("tools/namegate.test.mjs"), "this gate's own test excluded");
-  assert.ok(io.files.includes("tools/namegate.mjs"), "the gate's own source is still included");
+  assert.ok(!io.files.includes("tools/namegate.mjs"), "this gate's own source excluded");
+  assert.ok(!io.files.includes("core/migrate-standing.test.mjs"), "the legacy-layout migration test excluded");
+  assert.ok(io.files.includes("core/standing.mjs"), "ordinary source is still in scope");
+});
+
+// The gate is only worth wiring into `npm run gates` if a clean tree really
+// reports zero - otherwise it is a permanently-red check everyone learns to
+// ignore. This is the assertion that keeps it honest.
+test("the real tree is clean: every retired name left is deliberately excluded or justified", () => {
+  const r = m.run(m.realIo());
+  assert.equal(r.code, 0, r.stdout);
 });
 
 test("realIo()'s readFile reads real file contents", () => {

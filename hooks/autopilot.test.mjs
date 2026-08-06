@@ -1,15 +1,15 @@
-// Fast-tier tests for watcher/clearbot.ps1 - the process that physically types.
+// Fast-tier tests for watcher/autopilot.ps1 - the process that physically types.
 //
 // Until now it had ZERO automated tests, which was backwards: it is the part of
 // the loop whose failure is silent and whose blast radius is a real keyboard.
 //
-// Each case drives `clearbot.ps1 -Once` against a throwaway ACC root and a stub
+// Each case drives `autopilot.ps1 -Once` against a throwaway ACC root and a stub
 // console (watcher/stubconsole.ps1) whose received keystrokes land in a log
 // file. Both directions are asserted: the valid request IS typed, and every
 // refusal case types NOTHING. An assertion that only checked the log line would
-// pass against a clearbot that logged REFUSE and typed anyway.
+// pass against a autopilot that logged REFUSE and typed anyway.
 //
-// Run: node --test hooks/clearbot.test.mjs
+// Run: node --test hooks/autopilot.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -22,7 +22,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 
 // Every powershell/cmd child this suite spawns below inherits process.env
-// unmodified (none pass an explicit `env:`), and clearbot.ps1 itself shells
+// unmodified (none pass an explicit `env:`), and autopilot.ps1 itself shells
 // out to `node core/standing.mjs` / `usage.mjs` / `engine.mjs` repeatedly per
 // -Once pass — so under `node hooks/covgate.mjs` (coverage-instrumented),
 // every one of those nested node invocations would inherit and dump into
@@ -33,18 +33,18 @@ const REPO = path.resolve(HERE, "..");
 // matching fix for the mechanism). Cleared once here, not at each spawn.
 delete process.env.NODE_V8_COVERAGE;
 
-// clearbot resolves its tree from its own location ($Root = parent of the
+// autopilot resolves its tree from its own location ($Root = parent of the
 // script), so the sandbox gets a COPY of the watcher scripts and the only state
 // it can reach is the throwaway one.
 function sandbox() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acc-clearbot-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acc-autopilot-"));
   for (const d of [["runner", "state"], ["runner", "clear-requests"], ["watcher"]])
     fs.mkdirSync(path.join(root, ...d), { recursive: true });
   fs.writeFileSync(
     path.join(root, "policy.json"),
     JSON.stringify({ context: { hardK: 50 }, autoApprove: { enabled: false } })
   );
-  for (const f of ["clearbot.ps1", "sendconsole.ps1", "stubconsole.ps1"])
+  for (const f of ["autopilot.ps1", "sendconsole.ps1", "stubconsole.ps1"])
     fs.copyFileSync(path.join(REPO, "watcher", f), path.join(root, "watcher", f));
   return root;
 }
@@ -103,7 +103,7 @@ function runOnce(root, extraEnv = {}) {
   try {
     return execFileSync(
       "powershell",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "watcher", "clearbot.ps1"), "-Once"],
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "watcher", "autopilot.ps1"), "-Once"],
       { encoding: "utf8", timeout: 90000, windowsHide: true, env: { ...process.env, ...extraEnv } }
     );
   } catch (e) {
@@ -112,7 +112,7 @@ function runOnce(root, extraEnv = {}) {
 }
 
 // What actually reached the console. Retried briefly: the stub polls, so the
-// line can land a moment after clearbot returns.
+// line can land a moment after autopilot returns.
 function typed(stub, waitMs = 3000) {
   const end = Date.now() + waitMs;
   let out = "";
@@ -131,7 +131,7 @@ test("a validly-bound clear request types /clear", () => {
     writeWindow(root, "s-ok", stub.pid);
     writeRequest(root, "s-ok", { consolePid: stub.pid });
     const out = runOnce(root);
-    assert.match(out, /CLEARED/, "clearbot reports the clear");
+    assert.match(out, /CLEARED/, "autopilot reports the clear");
     assert.match(typed(stub), /\/clear/, "and /clear actually reached the console");
   } finally { stub.kill(); }
 });
@@ -173,7 +173,7 @@ test("an off-table cd destination is refused and never typed", () => {
 
 // guards OI-003: the non-clear /cd settle used to be a hardcoded 1200ms that
 // failed a real-token repro; it now reads policy.json's tui.readySettleMs
-// (watcher/clearbot.ps1 Get-TuiReadyMs), the same dial core/standing.mjs's kick
+// (watcher/autopilot.ps1 Get-TuiReadyMs), the same dial core/standing.mjs's kick
 // delay falls back to. Get-AllowedPaths needs a real ROUTING.md match to let
 // a cd through at all, so this is the one test in the file that also needs
 // the ACC_ROUTING_MD override (mirrors hooks/route.mjs's own override) -
@@ -194,7 +194,7 @@ function cdSettleRun(readySettleMs) {
     const t0 = Date.now();
     const out = runOnce(root, { ACC_ROUTING_MD: routingPath });
     const elapsed = Date.now() - t0;
-    assert.match(out, /CD .* -> /, "clearbot reports the cd");
+    assert.match(out, /CD .* -> /, "autopilot reports the cd");
     assert.ok(typed(stub).includes(`/cd ${dest}`), "and /cd actually reached the console");
     return elapsed;
   } finally { stub.kill(); }
@@ -278,7 +278,7 @@ test("a failing auto-approve script is logged, and the cycle survives it", () =>
   assert.match(out, /AUTO-APPROVE running central:boom\.ps1/, "attempt is logged");
   assert.match(out, /FAILED/, "and so is the failure");
   assert.ok(
-    fs.existsSync(path.join(root, "watcher", "clearbot.heartbeat")),
+    fs.existsSync(path.join(root, "watcher", "autopilot.heartbeat")),
     "the cycle still completed rather than throwing out of Step"
   );
 });
@@ -286,21 +286,21 @@ test("a failing auto-approve script is logged, and the cycle survives it", () =>
 test("every cycle writes a heartbeat", () => {
   const root = sandbox();
   runOnce(root);
-  const hb = path.join(root, "watcher", "clearbot.heartbeat");
+  const hb = path.join(root, "watcher", "autopilot.heartbeat");
   assert.ok(fs.existsSync(hb), "heartbeat written");
   assert.ok(Date.now() - fs.statSync(hb).mtimeMs < 30_000, "and it is fresh");
 });
 
 // --- pty transport (spec 2026-07-31) ---------------------------------------
 // A session ACC hosts on a pseudoconsole records transport:"pty" + pipe in its
-// window record; clearbot must then write the pipe protocol and type NOTHING.
+// window record; autopilot must then write the pipe protocol and type NOTHING.
 // A pty record whose pipe is dead must fall back to keystroke injection.
 
 function startPipeStub(name) {
   // Records each protocol line to a file; replies OK. One line per connection,
   // like the real server (gui/PtyHost.cs). A .NET (PowerShell) server on
   // purpose: the real server is .NET, and node's libuv pipes do not interop
-  // with the .NET NamedPipeClientStream clearbot uses (connection accepted,
+  // with the .NET NamedPipeClientStream autopilot uses (connection accepted,
   // data never delivered - observed 2026-07-31).
   const id = `${process.pid}-${Math.floor(Math.random() * 1e9)}`;
   const log = path.join(os.tmpdir(), `acc-pipestub-${id}.log`);
@@ -353,7 +353,7 @@ test("pty transport: a clear request goes to the pipe, zero keystrokes", () => {
     writePtyWindow(root, "s-pty", stub.pid, pipeName);
     writeRequest(root, "s-pty", { consolePid: stub.pid });
     const out = runOnce(root);
-    assert.match(out, /CLEARED/, "clearbot reports the clear");
+    assert.match(out, /CLEARED/, "autopilot reports the clear");
     assert.deepEqual(pipe.linesNow(), ["ESC", "TEXT /clear", "SUBMIT"], "the pipe got the exact protocol");
     assert.equal(typed(stub, 1500).trim(), "", "pty transport must not inject keystrokes");
   } finally { pipe.close(); stub.kill(); }
@@ -375,7 +375,7 @@ test("pty transport: a dead pipe falls back to keystroke injection", () => {
 
 // --- OI-009: a hosted GUI dying is detected without needing any request ----
 // The hosted session's own claude.exe lives inside the GUI's ConPTY, so a GUI
-// crash kills the session too - there is no Stop hook left to notice. clearbot
+// crash kills the session too - there is no Stop hook left to notice. autopilot
 // watches every pty window record on its own cycle, independent of requests.
 
 test("OI-009: a pty window whose hosting process dies is flagged after having been seen alive", () => {
@@ -407,7 +407,7 @@ test("OI-009: a pty window whose hosting process dies is flagged after having be
 
 test("OI-009: a pty window never confirmed alive is not falsely flagged as a dead GUI", () => {
   const root = sandbox();
-  // A pid essentially guaranteed not to be a running process, and clearbot
+  // A pid essentially guaranteed not to be a running process, and autopilot
   // never got a cycle where it WAS alive - this must read as stale debris
   // (or a race at session start), not a crash to alert on.
   writePtyWindow(root, "s-stale", 999999, "acc-term-unused");
@@ -419,17 +419,17 @@ test("OI-009: a pty window never confirmed alive is not falsely flagged as a dea
   );
 });
 
-// OI-034, Task 5: clearbot builds the console table and pipes it to
+// OI-034, Task 5: autopilot builds the console table and pipes it to
 // standing.mjs pending on stdin - a static-content contract, since exercising it
 // live would mean asserting on the caller's own real process table.
-test("clearbot pipes a console table into standing.mjs pending", () => {
-  const ps = fs.readFileSync(path.join(REPO, "watcher", "clearbot.ps1"), "utf8");
+test("autopilot pipes a console table into standing.mjs pending", () => {
+  const ps = fs.readFileSync(path.join(REPO, "watcher", "autopilot.ps1"), "utf8");
   assert.match(ps, /ToUniversalTime\(\)\.ToString\('o'\)/, "start times must be ISO-8601 UTC");
   assert.match(ps, /\$json \| & node .*standing\.mjs.*'pending'/, "the table must reach standing.mjs on stdin");
 });
 
-test("clearbot no longer gates a kick on a bare Get-Process existence check", () => {
-  const ps = fs.readFileSync(path.join(REPO, "watcher", "clearbot.ps1"), "utf8");
+test("autopilot no longer gates a kick on a bare Get-Process existence check", () => {
+  const ps = fs.readFileSync(path.join(REPO, "watcher", "autopilot.ps1"), "utf8");
   const start = ps.indexOf("function Invoke-Kicks");
   const kicks = ps.slice(start, start + 2000);
   assert.doesNotMatch(

@@ -23,7 +23,7 @@ param(
     # Observed for real - an injected test string stayed in Kyle's input buffer.
     [switch]$ClearLineFirst,
     # Sends ONE Esc key event and nothing else - no text, no Enter. Interrupts
-    # the running turn in the target TUI. Used only by clearbot's escalation
+    # the running turn in the target TUI. Used only by autopilot's escalation
     # path (OI-011) when a typed /clear could not land because the over-budget
     # turn never ends. Esc cannot type, submit, or delete anything.
     [switch]$Esc
@@ -39,7 +39,7 @@ if (-not $Esc -and [string]::IsNullOrEmpty($Text)) {
 }
 
 # Self-defense (guards OI-004). The closed set of typeable strings is enforced
-# by clearbot's invariant 1, one layer up - but THIS is the process that
+# by autopilot's invariant 1, one layer up - but THIS is the process that
 # actually presses keys, so it refuses the two shapes that turn one injection
 # into many: control characters (a newline SUBMITS, so a multi-line string is
 # several prompts, which is OI-004's whole point) and absurd length. It does
@@ -147,12 +147,12 @@ if ($ClearLineFirst) {
     # slash-command menu. The backspaces are belt-and-braces for the case where
     # Esc is swallowed: on an already-empty prompt they are harmless no-ops.
     # Written as its OWN WriteConsoleInputW call, with a settle before the text
-    # batch that follows. Raised alongside clearbot.ps1's pre-type settle
+    # batch that follows. Raised alongside autopilot.ps1's pre-type settle
     # (guards OI-003, 2026-08-04) as a second, independent gap the old single-
     # call batching never covered: the clear and the text landing in the SAME
     # buffer write, zero beat between them, mirroring exactly the
     # TEXT-then-SUBMIT race the pty transport already guards against with its
-    # own 80ms gap (clearbot.ps1 Send-Pipe). Not proven to be part of the root
+    # own 80ms gap (autopilot.ps1 Send-Pipe). Not proven to be part of the root
     # cause on its own -- added because it is cheap and directionally correct,
     # not because it was isolated as the specific fix.
     $clearRecs = New-Object System.Collections.ArrayList

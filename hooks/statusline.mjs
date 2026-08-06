@@ -21,7 +21,7 @@ const STATE = path.join(ROOT, "runner", "state");
 const HEARTBEAT_STALE_MS = 30_000;
 function botDead() {
   try {
-    return Date.now() - fs.statSync(path.join(ROOT, "watcher", "clearbot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
+    return Date.now() - fs.statSync(path.join(ROOT, "watcher", "autopilot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
   } catch {
     return false; // absent = never started here; do not cry wolf
   }

@@ -3,7 +3,7 @@
 # to -LogFile, replies OK, loops until -TimeoutSeconds or the caller kills the
 # pid. A .NET server on purpose - the real server is .NET, and node's libuv
 # pipes turned out not to interop with the .NET NamedPipeClientStream
-# clearbot uses.
+# autopilot uses.
 #
 # Mirrors PtyHost.ServePipe's blocking WaitForConnection() exactly - do not
 # reintroduce BeginWaitForConnection()+poll here. That shape (tried

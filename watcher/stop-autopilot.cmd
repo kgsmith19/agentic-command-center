@@ -7,7 +7,7 @@ rem powershell command line contains 'autopilot.ps1' (it is inside the filter
 rem string), so the naive pattern enumerated ITSELF and could Stop-Process its
 rem own probe before ever reaching the real watcher - Stop silently not
 rem stopping. Same discrimination start-autopilot.cmd and budget.mjs
-rem clearbot-status already use.
+rem autopilot-status already use.
 setlocal
 echo stopped %DATE% %TIME% > "%~dp0autopilot.stop"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^

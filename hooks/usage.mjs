@@ -490,7 +490,7 @@ function cmdClears(project) {
 // The pty window record (budget.mjs, ACC_PTY path) must name the process that
 // PERSISTS across /clear. The hook's immediate parent on Windows is a
 // transient shell (node -> bash -> bash -> claude.exe) that dies with the
-// turn; recording it handed clearbot a dead pid (observed live 2026-07-31:
+// turn; recording it handed autopilot a dead pid (observed live 2026-07-31:
 // consolePid 80480 GONE while claude.exe 70152 hosted the session). The
 // anchor is the first ancestor that is not a shell wrapper. Lives here, not
 // in budget.mjs, because budget.mjs runs main() on import and tests cannot

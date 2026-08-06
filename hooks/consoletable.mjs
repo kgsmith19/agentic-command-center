@@ -1,12 +1,12 @@
 // OI-034 support for budget.mjs's SessionStart path: builds the (pid ->
 // startTime) table bindSession needs to prove console identity, without the
-// full process enumeration clearbot.ps1 does every cycle.
+// full process enumeration autopilot.ps1 does every cycle.
 //
 // SessionStart only ever needs to know about a handful of specific pids - the
 // console it just resolved, plus every currently-bound standing order's console - so
 // this checks exactly those, by id, via hooks/consoletable.ps1 (see that
 // file's own header for why a per-pid check is enough here where it would not
-// be for clearbot's continuous loop, and why enumerating everything would risk
+// be for autopilot's continuous loop, and why enumerating everything would risk
 // re-overrunning the SessionStart hook timeout winfind.ps1 already hit once).
 //
 // Dependencies are injected (activeStanding, execFileSync, here) so this is

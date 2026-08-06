@@ -851,16 +851,16 @@ function Invoke-Node([string]$Script, [string[]]$NodeArgs) {
     return Invoke-Proc -FileName 'node' -Arguments ($quoted -join ' ')
 }
 
-function Refresh-Clearbot {
-    # The probe must exclude ITSELF: a naive '*clearbot.ps1*' match also matches
+function Refresh-Autopilot {
+    # The probe must exclude ITSELF: a naive '*autopilot.ps1*' match also matches
     # the checking process's own command line and always reports "running".
     $n = 0
     try {
         $me = $PID
         $n = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-               Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*clearbot.ps1*' }).Count
+               Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*autopilot.ps1*' }).Count
     } catch {}
-    $killed = Test-Path (Join-Path $PSScriptRoot 'watcher\clearbot.stop')
+    $killed = Test-Path (Join-Path $PSScriptRoot 'watcher\autopilot.stop')
     if ($killed) {
         $lblCB.Text = 'STOPPED - kill switch engaged; sessions will NOT auto-clear.'
         $lblCB.ForeColor = [System.Drawing.Color]::Firebrick
@@ -949,7 +949,7 @@ function Refresh-Process {
         $txtProcOut.Text = "cannot read policy.json: $_`r`n`r`n" + $txtProcOut.Text
     }
 
-    Refresh-Clearbot
+    Refresh-Autopilot
 
     if (Test-Path $script:StopFile) {
         $lblKill.Text = 'STOPPED - the runner will not start a new run until you clear this.'
@@ -1013,14 +1013,14 @@ $btnFanout.Add_Click({
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
 })
 $btnCBStart.Add_Click({
-    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\start-clearbot.cmd') + '"')
+    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\start-autopilot.cmd') + '"')
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
-    Refresh-Clearbot
+    Refresh-Autopilot
 })
 $btnCBStop.Add_Click({
-    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\stop-clearbot.cmd') + '"')
+    $r = Invoke-Proc -FileName 'cmd.exe' -Arguments ('/c "' + (Join-Path $PSScriptRoot 'watcher\stop-autopilot.cmd') + '"')
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
-    Refresh-Clearbot
+    Refresh-Autopilot
 })
 $btnCBTest.Add_Click({
     # Types /clear into the most recently started session for real - confirm first.
@@ -1031,7 +1031,7 @@ $btnCBTest.Add_Click({
     if ($ans -ne 'Yes') { return }
     $r = Invoke-Node $script:Budget @('clear-now')
     $txtProcOut.Text = ($r.Out + $r.Err).Trim() + "`r`n`r`n" + $txtProcOut.Text
-    Refresh-Clearbot
+    Refresh-Autopilot
 })
 
 # ---------- Start work handlers ----------
@@ -1173,7 +1173,7 @@ $btnStartWork.Add_Click({
     try {
         if ($script:TermOk -and $script:wv -and $script:wv.CoreWebView2) {
             # Embedded launch: ACC owns the terminal (ConPTY + xterm.js), so
-            # clearbot drives the session over the pty pipe - guaranteed Enter,
+            # autopilot drives the session over the pty pipe - guaranteed Enter,
             # no keystroke injection.
             if (-not (Start-PtySession -StandingId $standing.id -ProfileName $name -Dir $dir)) { return }
         } else {
@@ -1228,7 +1228,7 @@ $btnStartWork.Add_Click({
 
 # ---------- embedded terminal tab (spec 2026-07-31) ----------
 # ACC hosts claude on a ConPTY (Acc.PtyHost) and renders it in xterm.js inside
-# a WebView2 tab. clearbot then drives the session over the pty's named pipe
+# a WebView2 tab. autopilot then drives the session over the pty's named pipe
 # instead of keystroke injection.
 $tabTerm = New-Object System.Windows.Forms.TabPage
 $tabTerm.Text = 'Terminal'
@@ -1423,7 +1423,7 @@ $script:bindTimer.Add_Tick({
             Write-Host ("pty binding OK: consolePid {0} descends from child {1}" -f $hit.consolePid, $anchor)
         } else {
             $script:bindState = 'MISMATCH'
-            Write-Host ("WARN pty binding MISMATCH: record consolePid {0} does not descend from pty child {1} - clearbot writes may target the wrong session" -f $hit.consolePid, $anchor)
+            Write-Host ("WARN pty binding MISMATCH: record consolePid {0} does not descend from pty child {1} - autopilot writes may target the wrong session" -f $hit.consolePid, $anchor)
         }
     } elseif ([DateTime]::UtcNow -gt $script:bindDeadline) {
         $script:bindTimer.Stop()
@@ -1630,7 +1630,7 @@ if ($ShowTab) {
     if ($match) { $tabControl.SelectedTab = $match }
 }
 if ($SmokeTest) {
-    Write-Output "SMOKE OK status=$($lblStatus.Text) secrets=$($lstSecrets.Items.Count) protected=$($lstProt.Items.Count) projects=$($lstProj.Items.Count) vault=$($lstVault.Items.Count) runbox=$($lstRunbox.Items.Count) folders=$($cboFolder.Items.Count) tabs=$($tabControl.TabPages.Count) tab1=$($tabControl.TabPages[0].Text) workdirs=$($cboWorkDir.Items.Count) profile=$(Get-SelectedProfile) profnote=$($lblS2b.Text) tier=$($lblPTier.Text) summary=$($lblPSummary.Text) act=$($lblStatusAct.Text) clearbot=$($lblCB.Text) work=$($pnlWork.Controls.Count) adv=$($tabControl.Visible) standing=$($lblStanding.Text) autoapprove=$($chkAutoApprove.Checked)"
+    Write-Output "SMOKE OK status=$($lblStatus.Text) secrets=$($lstSecrets.Items.Count) protected=$($lstProt.Items.Count) projects=$($lstProj.Items.Count) vault=$($lstVault.Items.Count) runbox=$($lstRunbox.Items.Count) folders=$($cboFolder.Items.Count) tabs=$($tabControl.TabPages.Count) tab1=$($tabControl.TabPages[0].Text) workdirs=$($cboWorkDir.Items.Count) profile=$(Get-SelectedProfile) profnote=$($lblS2b.Text) tier=$($lblPTier.Text) summary=$($lblPSummary.Text) act=$($lblStatusAct.Text) autopilot=$($lblCB.Text) work=$($pnlWork.Controls.Count) adv=$($tabControl.Visible) standing=$($lblStanding.Text) autoapprove=$($chkAutoApprove.Checked)"
 } else {
     [void]$form.ShowDialog()
 }

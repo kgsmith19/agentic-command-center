@@ -437,7 +437,7 @@ test("CLI: main() with no subcommand defaults to 'list', printing active standin
 // readFileSync(0) with nothing behind it (or a stream node's test runner
 // never closes) would hang the whole file rather than see EOF. execFileSync's
 // `input` option always supplies and closes stdin, matching what
-// clearbot.ps1 really does every cycle.
+// autopilot.ps1 really does every cycle.
 test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when present and falling back when not", async () => {
   const { execFileSync } = await import("node:child_process");
   const g = m.createStanding({ text: "t" });
@@ -520,7 +520,7 @@ test("CLI: main() prints usage for an unrecognized command", () => {
 // ------------------------------------------------- reaping (guards OI-031)
 // Six standing orders sat "active" from 2026-07-31 onward, every one bound to a console
 // that had been gone for days, because nothing ever marked a standing dead when its
-// console died. clearbot even LOGGED those deaths ("GUI-DEAD ... hosting GUI
+// console died. autopilot even LOGGED those deaths ("GUI-DEAD ... hosting GUI
 // (pid 1620) is gone") and left the standing orders active. Detection without reaping.
 const DEAD_PID = 999999;
 
@@ -612,7 +612,7 @@ test("CLI: main() 'reap' archives dead-console standing orders and names them, g
   m.bindSession({ sessionId: SID(66), consolePid: DEAD_PID, standingId: g.id });
 
   // {} is a caller asserting "I enumerated every process and this pid was not
-  // among them" - proof the console is gone, same as clearbot's real table.
+  // among them" - proof the console is gone, same as autopilot's real table.
   assert.equal((await runReap("{}")).trim(), `reaped 1: ${g.id}`);
   assert.equal(m.readStanding(g.id), null);
   assert.equal((await runReap("{}")).trim(), "reaped 0", "nothing left to reap");
@@ -801,7 +801,7 @@ test("standing.mjs never queries the OS - purity is what keeps kick rules in one
 test("a legacy [ACC GOAL g-...] injection is still understood, and warns", () => {
   const r = m.parseInjection("[ACC GOAL g-20260804-1-abcd] keep tests green");
   assert.equal(r.id, "so-20260804-1-abcd");
-  assert.match(r.deprecation, /\[ACC GOAL\] is deprecated/);
+  assert.match(r.deprecation, /\[ACC GOAL\] is deprecated/); // namegate-ok: the retired injection format is the subject of this test
 });
 
 test("the current [ACC STANDING so-...] injection parses with no deprecation warning", () => {

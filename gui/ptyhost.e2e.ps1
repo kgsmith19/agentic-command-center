@@ -1,5 +1,5 @@
 # gui/ptyhost.e2e.ps1 - headless pty host for e2e scenario 5 (spec 2026-07-31).
-# Spawns REAL claude on a ConPTY via Acc.PtyHost, serves the clearbot pipe,
+# Spawns REAL claude on a ConPTY via Acc.PtyHost, serves the autopilot pipe,
 # writes the child pid to -PidFile, then waits until the child exits or
 # -TimeoutSeconds passes, disposing on the way out. No GUI, no WebView2 - the
 # pty transport alone. ACC_ROOT / ACC_POLICY pass through from the caller's

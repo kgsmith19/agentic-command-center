@@ -21,9 +21,9 @@
 //                 either fail to start or run with no ACC hooks at all. The
 //                 transcripts these sessions write are therefore real - that is
 //                 the point, contextOf() reads them.
-//   The sandbox watcher dir deliberately OMITS start-clearbot.cmd, so
-//   ensureClearbot() finds nothing to launch and no stray resident watcher is
-//   left behind. Cycles are driven explicitly with `clearbot.ps1 -Once`.
+//   The sandbox watcher dir deliberately OMITS start-autopilot.cmd, so
+//   ensureAutopilot() finds nothing to launch and no stray resident watcher is
+//   left behind. Cycles are driven explicitly with `autopilot.ps1 -Once`.
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,7 +39,7 @@ const sleep = (ms) =>
   execFileSync("powershell", ["-NoProfile", "-Command", `Start-Sleep -Milliseconds ${ms}`], { windowsHide: true });
 
 function sandbox(hardK) {
-  // Two levels on purpose: clearbot resolves ROUTING.md as <parent of $Root>,
+  // Two levels on purpose: autopilot resolves ROUTING.md as <parent of $Root>,
   // so the routes table has to live one directory above the sandbox root. A
   // flat sandbox would make it look for it in the system temp directory.
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "acc-e2e-"));
@@ -64,11 +64,11 @@ function sandbox(hardK) {
       autoApprove: { enabled: false },
     })
   );
-  // clearbot resolves its tree from its own location. sendconsole is required
-  // by it; start-clearbot.cmd is deliberately absent (see header).
-  for (const f of ["clearbot.ps1", "sendconsole.ps1"])
+  // autopilot resolves its tree from its own location. sendconsole is required
+  // by it; start-autopilot.cmd is deliberately absent (see header).
+  for (const f of ["autopilot.ps1", "sendconsole.ps1"])
     fs.copyFileSync(path.join(REPO, "watcher", f), path.join(root, "watcher", f));
-  // clearbot also shells to <root>/core/standing.mjs (pending kicks) and
+  // autopilot also shells to <root>/core/standing.mjs (pending kicks) and
   // hooks/usage.mjs (live context for the escalation guard). Without these the
   // watcher silently never kicks and never escalates - both calls are wrapped
   // in try/catch, so a missing file looks exactly like "nothing to do".
@@ -99,7 +99,7 @@ function newStanding(sb, text) {
 // SessionStart fires before the TUI can accept input (the same reason standing.mjs
 // delays its kick), so an injected first prompt lands in a console that is
 // still starting and no turn ever runs - the first version of this harness
-// failed exactly that way. What IS under test is the typing clearbot does
+// failed exactly that way. What IS under test is the typing autopilot does
 // later: the /clear and the resume constant.
 function startSession(sb, { standingId, prompt, cwd = REPO, extraEnv = {} }) {
   const wrapper = path.join(sb.root, `launch-${standingId || "x"}.cmd`);
@@ -134,21 +134,21 @@ function windowOf(sb, sid) {
   }
 }
 
-const clearbotLog = (sb) => {
+const autopilotLog = (sb) => {
   try {
-    return fs.readFileSync(path.join(sb.root, "watcher", "clearbot.log"), "utf8");
+    return fs.readFileSync(path.join(sb.root, "watcher", "autopilot.log"), "utf8");
   } catch {
     return "";
   }
 };
 
-// One clearbot cycle against the sandbox. Explicit rather than resident, so a
+// One autopilot cycle against the sandbox. Explicit rather than resident, so a
 // scenario controls timing and nothing outlives the run.
-function clearbotOnce(sb) {
+function autopilotOnce(sb) {
   try {
     return execFileSync(
       "powershell",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(sb.root, "watcher", "clearbot.ps1"), "-Once"],
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(sb.root, "watcher", "autopilot.ps1"), "-Once"],
       { encoding: "utf8", timeout: 120000, windowsHide: true }
     );
   } catch (e) {
@@ -156,13 +156,13 @@ function clearbotOnce(sb) {
   }
 }
 
-// A RESIDENT clearbot for the sandbox. Scenario 3 needs one: the escalation
+// A RESIDENT autopilot for the sandbox. Scenario 3 needs one: the escalation
 // branch keys off $lastFire, which is in-process state, so a sequence of
 // `-Once` cycles can never reach it - each run starts with an empty table.
-function startResidentClearbot(sb) {
+function startResidentAutopilot(sb) {
   const child = spawn(
     "powershell",
-    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(sb.root, "watcher", "clearbot.ps1"),
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(sb.root, "watcher", "autopilot.ps1"),
      "-IntervalMs", "2000"],
     { detached: true, stdio: "ignore", windowsHide: true }
   );
@@ -170,7 +170,7 @@ function startResidentClearbot(sb) {
   return child.pid;
 }
 
-// Type into the session's own console, the same way clearbot does.
+// Type into the session's own console, the same way autopilot does.
 function typeInto(consolePid, text) {
   try {
     return execFileSync(
@@ -264,8 +264,8 @@ function report(n, name, pass, evidence) {
 }
 
 // ---------------------------------------------------------------- scenario 1
-// The happy loop: a session goes over budget, clearbot types /clear, the fresh
-// session adopts the standing order, clearbot types the resume constant, the cycle is
+// The happy loop: a session goes over budget, autopilot types /clear, the fresh
+// session adopts the standing order, autopilot types the resume constant, the cycle is
 // logged. This is the whole promise in one run.
 async function scenario1() {
   const sb = sandbox(5); // tiny ceiling: the first real turn is already over it
@@ -277,23 +277,23 @@ async function scenario1() {
     const win = sid && waitFor("console pid recorded", 60000, () => windowOf(sb, sid)?.consolePid);
     if (win) consoles.push(win);
 
-    const cleared = win && waitFor("clearbot types /clear", 240000, () => {
-      clearbotOnce(sb);
-      return /CLEARED/.test(clearbotLog(sb));
+    const cleared = win && waitFor("autopilot types /clear", 240000, () => {
+      autopilotOnce(sb);
+      return /CLEARED/.test(autopilotLog(sb));
     });
     const cycled = cleared && waitFor("cycle logged", 60000, () => (standingJson(sb, standing.id)?.cycles || 0) >= 1);
     const newSid = cycled && waitFor("a NEW session adopts the standing order", 180000, () => {
       const g = standingJson(sb, standing.id);
       return g && g.sessionId && g.sessionId !== sid ? g.sessionId : null;
     });
-    const resumed = newSid && waitFor("clearbot re-prompts the new session", 120000, () => {
-      clearbotOnce(sb);
-      return /RESUMED standing/.test(clearbotLog(sb));
+    const resumed = newSid && waitFor("autopilot re-prompts the new session", 120000, () => {
+      autopilotOnce(sb);
+      return /RESUMED standing/.test(autopilotLog(sb));
     });
 
     if (newSid) consoles.push(windowOf(sb, newSid)?.consolePid);
     report(1, "over-budget clear, adopt, resume", !!resumed,
-      `first session : ${sid}\nsecond session: ${newSid}\ncycles        : ${standingJson(sb, standing.id)?.cycles}\n\n${clearbotLog(sb).trim()}`);
+      `first session : ${sid}\nsecond session: ${newSid}\ncycles        : ${standingJson(sb, standing.id)?.cycles}\n\n${autopilotLog(sb).trim()}`);
   } finally { cleanup(consoles); }
 }
 
@@ -316,26 +316,26 @@ async function scenario2() {
       const g = standingJson(sb, standing.id);
       return g && g.needsKick === true && g.turnEndedAt ? g : null;
     });
-    const kicked = armed && waitFor("clearbot re-prompts WITHOUT a clear", 180000, () => {
-      clearbotOnce(sb);
-      return /RESUMED standing/.test(clearbotLog(sb));
+    const kicked = armed && waitFor("autopilot re-prompts WITHOUT a clear", 180000, () => {
+      autopilotOnce(sb);
+      return /RESUMED standing/.test(autopilotLog(sb));
     });
 
     const g = standingJson(sb, standing.id);
     report(2, "under-budget turn end is re-prompted (guards OI-002)", !!kicked,
       `needsKick=${g?.needsKick} turnEndedAt=${g?.turnEndedAt} lastKickAt=${g?.lastKickAt}\n` +
-      `no CLEARED expected here: ${/CLEARED/.test(clearbotLog(sb)) ? "BUT ONE HAPPENED" : "correct, none"}\n\n` +
-      clearbotLog(sb).trim());
+      `no CLEARED expected here: ${/CLEARED/.test(autopilotLog(sb)) ? "BUT ONE HAPPENED" : "correct, none"}\n\n` +
+      autopilotLog(sb).trim());
   } finally { cleanup(consoles); }
 }
 
 // ---------------------------------------------------------------- scenario 3
 // ESCALATION (OI-011). When a typed /clear cannot execute because the turn will
-// not end, clearbot must press Esc to interrupt it and then clear. This path
+// not end, autopilot must press Esc to interrupt it and then clear. This path
 // had never fired outside a keystroke smoke test.
 //
 // The stuck turn is REAL and needs no contrivance: a long-running turn is one
-// the typed /clear sits behind. What is asserted is that clearbot notices (the
+// the typed /clear sits behind. What is asserted is that autopilot notices (the
 // request is re-written while throttled and live context is still at the
 // ceiling), presses Esc, and the clear then lands.
 async function scenario3() {
@@ -357,13 +357,13 @@ async function scenario3() {
     }
 
     // A RESIDENT watcher, because escalation depends on in-process throttle
-    // state (see startResidentClearbot).
-    consoles.push(startResidentClearbot(sb));
+    // state (see startResidentAutopilot).
+    consoles.push(startResidentAutopilot(sb));
 
     // Request 1: the turn is mid-flight, so the typed /clear queues behind it
     // rather than executing - exactly the stuck case.
     writeClearRequest(sb, sid, win, transcript);
-    const clearedOnce = waitFor("first /clear typed", 90000, () => /CLEARED/.test(clearbotLog(sb)));
+    const clearedOnce = waitFor("first /clear typed", 90000, () => /CLEARED/.test(autopilotLog(sb)));
 
     // Request 2, re-written inside the 60s throttle: the escalation trigger.
     // Live context is real (~40k) against a 5k ceiling, so the "did it shrink"
@@ -372,20 +372,20 @@ async function scenario3() {
       sleep(4000);
       writeClearRequest(sb, sid, win, transcript);
     }
-    const escalated = clearedOnce && waitFor("clearbot escalates with Esc", 120000, () =>
-      /ESCALATE/.test(clearbotLog(sb)));
+    const escalated = clearedOnce && waitFor("autopilot escalates with Esc", 120000, () =>
+      /ESCALATE/.test(autopilotLog(sb)));
     const cleared = escalated && waitFor("and the clear lands after the Esc", 90000, () => {
-      const log = clearbotLog(sb);
+      const log = autopilotLog(sb);
       return /CLEARED/.test(log.slice(log.indexOf("ESCALATE")));
     });
 
     report(3, "Esc escalation when the turn refuses to end (OI-011)", !!cleared,
-      clearbotLog(sb).trim() || "(no clearbot log)");
+      autopilotLog(sb).trim() || "(no autopilot log)");
   } finally { cleanup(consoles); }
 }
 
 // ---------------------------------------------------------------- scenario 4
-// /cd RELIABILITY (guards OI-003). On 2026-07-31 clearbot typed /cd twice and
+// /cd RELIABILITY (guards OI-003). On 2026-07-31 autopilot typed /cd twice and
 // the session's cwd did not change either time. The assertion here is the thing
 // that actually failed - not "was /cd typed" but "did the cwd MOVE" - read from
 // the session's own transcript, which records cwd per entry.
@@ -412,9 +412,9 @@ async function scenario4() {
       })
     );
 
-    const typedCd = win && waitFor("clearbot types /cd", 120000, () => {
-      clearbotOnce(sb);
-      return /CD .* -> /.test(clearbotLog(sb));
+    const typedCd = win && waitFor("autopilot types /cd", 120000, () => {
+      autopilotOnce(sb);
+      return /CD .* -> /.test(autopilotLog(sb));
     });
     // A successful /cd moves this session's transcript to a NEW project-scoped
     // directory (Claude Code namespaces transcripts by cwd) - the OLD path this
@@ -430,13 +430,13 @@ async function scenario4() {
     });
 
     report(4, "a typed /cd actually changes the session cwd (guards OI-003)", !!took,
-      `cwd before: ${before}\ncwd after : ${cwdOf(afterTranscript())}\nwanted    : ${REPO}\n\n${clearbotLog(sb).trim()}`);
+      `cwd before: ${before}\ncwd after : ${cwdOf(afterTranscript())}\nwanted    : ${REPO}\n\n${autopilotLog(sb).trim()}`);
   } finally { cleanup(consoles); }
 }
 
 // ---------------------------------------------------------------- scenario 5
 // EMBEDDED LAUNCH (spec 2026-07-31). ACC hosts claude on a ConPTY
-// (gui/ptyhost.e2e.ps1 = the GUI's transport without the GUI) and clearbot
+// (gui/ptyhost.e2e.ps1 = the GUI's transport without the GUI) and autopilot
 // drives it over the pty pipe - zero keystroke injection. The reported bug
 // this locks against: the kick text "populates the prompt but never submits".
 // Only a transcript entry proves a submit: text sitting unsubmitted in the
@@ -475,9 +475,9 @@ async function scenario5() {
     });
     if (win) consoles.push(win.consolePid);
 
-    const kicked = win && waitFor("clearbot kicks over the pipe", 180000, () => {
-      clearbotOnce(sb);
-      return /via pty OK/.test(clearbotLog(sb));
+    const kicked = win && waitFor("autopilot kicks over the pipe", 180000, () => {
+      autopilotOnce(sb);
+      return /via pty OK/.test(autopilotLog(sb));
     });
 
     // THE assertion - the reported failure: the kick must have SUBMITTED. The
@@ -500,7 +500,7 @@ async function scenario5() {
       return false;
     });
 
-    const log = clearbotLog(sb);
+    const log = autopilotLog(sb);
     const injected = /OK wrote=/.test(log); // sendconsole's success marker - must be absent
     report(5, "embedded pty launch: the kick submits with zero human input", !!submitted && !injected,
       `pty child   : ${childPid}\nsession     : ${sid}\nwindow      : ${JSON.stringify(windowOf(sb, sid))}\n` +
@@ -514,7 +514,7 @@ async function scenario5() {
 const only = process.argv.includes("--only") ? Number(process.argv[process.argv.indexOf("--only") + 1]) : 0;
 const all = { 1: scenario1, 2: scenario2, 3: scenario3, 4: scenario4, 5: scenario5 };
 // Each scenario holds a machine-wide lane slot for its whole life (session +
-// clearbot cycles + cleanup). Scenarios were already sequential WITH EACH
+// autopilot cycles + cleanup). Scenarios were already sequential WITH EACH
 // OTHER; the slot is what stops a proof run from overlapping the slice-runner
 // or any other automated launch — the concurrent-stream jam behind the
 // econnreset bursts. The NOTE the lane logs while waiting says who holds it.

@@ -43,7 +43,7 @@ test("buildArgs pins settings, session id and the tool allowlist; prompt never i
     "--tools", "Read,Bash",
     "--session-id", "11111111-2222-3333-4444-555555555555",
   ]);
-  assert.ok(!args.some((a) => /prompt|goal/i.test(a)), "the prompt goes over stdin, never argv");
+  assert.ok(!args.some((a) => /prompt|standing/i.test(a)), "the prompt goes over stdin, never argv");
 });
 
 test("send_step continues the SAME session via --resume (AC-A7)", () => {

@@ -18,7 +18,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const COVGATE = path.join(HERE, "covgate.mjs");
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-covgate-test-"));
 
-// Unlike clearbot.test.mjs's/runner.test.mjs's spawns, this file's `gate()`
+// Unlike autopilot.test.mjs's/runner.test.mjs's spawns, this file's `gate()`
 // subprocess IS covgate.mjs itself (a gated file) — its main() only ever
 // runs via this exact subprocess call, so it must keep inheriting a live
 // NODE_V8_COVERAGE (when one exists) rather than have it stripped: that is

@@ -16,7 +16,7 @@ import { resolve, repoRoot } from "../core/paths.mjs";
 // these other names as belonging to the same repo - it would duplicate
 // instead of re-point. Append the new canonical root here when Task 12
 // actually renames the folder.
-const KNOWN_ROOTS = ["C:/code/guards"];
+const KNOWN_ROOTS = ["C:/code/guards"]; // pathgate-ok: the literal past root IS the data — deriving it would defeat the purpose
 
 export function ownedRoots() {
   return [...KNOWN_ROOTS, repoRoot()];

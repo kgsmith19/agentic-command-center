@@ -9,7 +9,7 @@
 //
 // The pipe server mirrors sendconsole.ps1's self-defense (guards OI-004): it
 // refuses control characters and absurd length. It does not judge content -
-// that stays in clearbot, one layer up.
+// that stays in autopilot, one layer up.
 using System;
 using System.IO;
 using System.IO.Pipes;

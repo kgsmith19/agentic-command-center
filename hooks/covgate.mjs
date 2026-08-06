@@ -57,7 +57,7 @@ const POLICY = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.jso
 // their own test files deliberately clear NODE_V8_COVERAGE before every spawn
 // (see e.g. hooks/budget.test.mjs's own comment) to stop that nested process
 // writing into — and corrupting — this run's own coverage directory
-// (reproduced 2026-08-02, hooks/clearbot.test.mjs's matching fix). The tests
+// (reproduced 2026-08-02, hooks/autopilot.test.mjs's matching fix). The tests
 // are real and thorough; V8's coverage merge is structurally blind to them.
 // Floor 0 here means "unmeasurable", not "untested" — listing a file here is
 // not a way to duck a real gap, so a file only belongs on this list when its

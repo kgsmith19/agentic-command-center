@@ -3,18 +3,18 @@
 // a piece of work across a /clear instead of losing it.
 //
 // THE PROBLEM IT SOLVES: the auto-clear chain (Stop hook -> clear-request ->
-// clearbot -> WriteConsoleInput types "/clear") worked, but it stopped there.
+// autopilot -> WriteConsoleInput types "/clear") worked, but it stopped there.
 // The fresh session came up with an empty prompt and no idea what it had been
 // doing, so a human had to retype the task. A standing survives the clear because it
 // lives in a FILE, not in context.
 //
 // THE THREAD OF CONTINUITY IS THE CONSOLE PID, not the session id. A /clear ends
 // the session id and starts a new one, but the terminal window - and therefore
-// the console pid that clearbot types into - is the same process throughout. So
+// the console pid that autopilot types into - is the same process throughout. So
 // a standing binds to a console, and every session that starts in that console
 // adopts it.
 //
-// WHY THE TEXT NEVER TRAVELS AS KEYSTROKES: clearbot turns text into real key
+// WHY THE TEXT NEVER TRAVELS AS KEYSTROKES: autopilot turns text into real key
 // events, so a newline in a task would submit a fragment (this is OI-004). The
 // standing text goes in this file; the only thing ever typed is a constant. That is
 // also what lets a multi-line task work at all.
@@ -46,11 +46,11 @@ function doneDir() {
 // A kick is only sent once the binding has had time to settle. SessionStart runs
 // before the TUI is ready to accept input, so firing the instant a standing binds
 // types into a console that is still starting up. Policy-overridable
-// (`tui.readySettleMs`) and reused verbatim by watcher/clearbot.ps1's
+// (`tui.readySettleMs`) and reused verbatim by watcher/autopilot.ps1's
 // Get-TuiReadyMs for the /cd settle (guards OI-003) -- one proven number for
 // "is this session's TUI ready for injected input yet" instead of two
 // independently-guessed ones. Was `KICK_DELAY_MS = 4000` hardcoded here only;
-// clearbot's own /cd settle separately guessed 1200 and that guess failed a
+// autopilot's own /cd settle separately guessed 1200 and that guess failed a
 // real-token repro (OI-003, 2026-08-04) after already failing once with zero
 // settle at all -- so this value now has exactly one source of truth.
 const TUI_READY_MS_DEFAULT = 4000;
@@ -334,7 +334,7 @@ export function setStatus(id, status, why) {
 // guards OI-031. Nothing used to mark a standing dead when its console died, so the
 // store only ever grew: six standing orders sat "active" from 2026-07-31 onward, every one
 // bound to a console gone for days, and pendingKicks kept considering work
-// nobody was doing. clearbot even LOGGED the deaths ("GUI-DEAD ... hosting GUI
+// nobody was doing. autopilot even LOGGED the deaths ("GUI-DEAD ... hosting GUI
 // (pid 1620) is gone") and left the standing orders active - detection without reaping.
 //
 // "abandoned" is deliberately a third status, not done/blocked: the console went
@@ -363,7 +363,7 @@ export function reapDeadStanding({ now = Date.now(), graceMs = REAP_GRACE_MS_DEF
   return reaped;
 }
 
-// What clearbot asks for every cycle. Everything that makes a kick unsafe is
+// What autopilot asks for every cycle. Everything that makes a kick unsafe is
 // decided HERE, in one place, so the watcher stays a dumb executor:
 //   - standing must be active
 //   - its console must still exist

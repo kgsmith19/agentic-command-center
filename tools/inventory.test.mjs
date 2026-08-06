@@ -13,7 +13,7 @@ const ONE_ENTRY = `# Open issues
 ## OI-034 A console PID is treated as a console IDENTITY
 - opened: 2026-08-04
 - rank: reliability
-- where: hooks/goal.mjs
+- where: core/standing.mjs
 - what: liveness is a bare process.kill(pid, 0) existence test.
 `;
 
