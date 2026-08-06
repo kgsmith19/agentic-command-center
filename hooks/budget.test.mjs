@@ -288,15 +288,18 @@ function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// ensureAutopilot spawns detached, so the marker lands a moment later.
-function appears(file, ms = 6000) {
+// ensureAutopilot spawns detached, so the marker lands a moment later — and a
+// killed process disappears a moment later for the same reason. One poll.
+function waitUntil(pred, ms) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
-    if (fs.existsSync(file)) return true;
+    if (pred()) return true;
     sleepMs(200);
   }
   return false;
 }
+
+const appears = (file, ms = 6000) => waitUntil(() => fs.existsSync(file), ms);
 
 // ensureAutopilot() spawns cmd.exe directly (hooks/budget.mjs:80) — genuinely
 // Windows-only functionality, not a portability gap. Same pattern already used
@@ -326,8 +329,6 @@ test("a fresh heartbeat leaves the watcher alone", () => {
 // frozen eleven hours earlier, re-declining the restart at every turn boundary.
 // The stub sleeps and never writes a heartbeat, which is exactly what a wedged
 // watcher looks like from the outside.
-const EOL = String.fromCharCode(13, 10);
-
 function wedgedWatcher(sb) {
   const dir = path.join(sb.root, "watcher");
   fs.mkdirSync(dir, { recursive: true });
@@ -336,7 +337,7 @@ function wedgedWatcher(sb) {
   // gets no console and exits 0 immediately, so a detached stub would be gone
   // before the assertion ran and every case below would pass for the wrong
   // reason (confirmed by measuring it, after the first draft did exactly that).
-  fs.writeFileSync(script, `Start-Sleep -Seconds 300${EOL}`);
+  fs.writeFileSync(script, `Start-Sleep -Seconds 300${os.EOL}`);
   const child = spawn(
     "powershell",
     ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
@@ -350,14 +351,7 @@ function alive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-function gone(pid, ms = 8000) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (!alive(pid)) return true;
-    sleepMs(200);
-  }
-  return false;
-}
+const gone = (pid, ms = 8000) => waitUntil(() => !alive(pid), ms);
 
 test("a WEDGED watcher is cleared out, not mistaken for a live one", { skip: process.platform !== "win32" }, () => {
   const sb = sandbox();

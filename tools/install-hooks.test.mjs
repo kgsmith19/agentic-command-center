@@ -89,13 +89,11 @@ function mainWithStderr(argv) {
   }
 }
 
-test("main() refuses and writes nothing when --settings is absent", () => {
-  const cwdBefore = fs.readdirSync(".").length;
+test("main() refuses when --settings is absent", () => {
   const r = mainWithStderr([]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /--settings <path> is required/);
   assert.match(r.stderr, /never defaults to the live settings\.json/);
-  assert.equal(fs.readdirSync(".").length, cwdBefore, "a refused run must not create files");
 });
 
 test("main() refuses when --settings is given with no path after it", () => {

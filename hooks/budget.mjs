@@ -71,6 +71,13 @@ function captureWindow(sid) {
 // fails SILENTLY (the request file just sits there). So every interactive session
 // start makes sure it is running. Fire-and-forget: detached, never waited on, so
 // it cannot slow the session down or wedge it if PowerShell is unhappy.
+//
+// ONE deliberate exception, and it is not fire-and-forget: killWedgedAutopilot()
+// below blocks, because the kill has to land BEFORE the start or the start just
+// declines again. Measured at ~500ms, capped at 5s, and only reachable when the
+// heartbeat is ALREADY stale — i.e. autonomy is already broken, which is worth
+// half a second at a turn boundary. Saying so here rather than leaving the
+// sentence above quietly false.
 // A deliberate stop must STICK. start-autopilot.cmd removes the stop file, so
 // without this check every new session would silently re-arm a watcher Kyle had
 // turned off on purpose. One definition, read by everything that acts on the
@@ -144,7 +151,10 @@ function killWedgedAutopilot() {
         `Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -and ` +
         `$_.CommandLine.Contains('-File') -and $_.CommandLine.Contains($t) } | ` +
         `ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`],
-      { stdio: "ignore", windowsHide: true, timeout: 15000 },
+      // 5s, not 15: this blocks a turn boundary, and a WMI query that has not
+      // answered in five seconds is not going to answer usefully. Giving up
+      // costs one more stale cycle; hanging costs the user fifteen seconds.
+      { stdio: "ignore", windowsHide: true, timeout: 5000 },
     );
   } catch {}
 }

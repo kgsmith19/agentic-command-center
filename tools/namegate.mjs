@@ -20,7 +20,12 @@ import { fileURLToPath } from "node:url";
 // is followed by whitespace or punctuation, not a path character.
 const GOALID_RE = /\bgoalId\b/i;
 const GOAL_PATH_RE = /\bgoals?(?=[./\\_])/i;
-const CLEARBOT_RE = /\bclearbot\b/i;
+// No word boundaries, deliberately. `clearbot` is not an English word and is
+// not a substring of one, so any occurrence is the retired name — including
+// one buried in camelCase, which `\bclearbot\b` cannot see because there is no
+// boundary between `revive` and `Clearbot`. That exact miss left
+// `reviveClearbotIfDead` in AGENTS.md through a rename this gate reported clean.
+const CLEARBOT_RE = /clearbot/i;
 const KERNEL_RE = /\bkernel(?=[/\\])/i;
 // The escape hatch has to speak every comment syntax this gate scans, not just
 // JavaScript's. It scans .ps1 and .cmd too, and the one place a retired name is

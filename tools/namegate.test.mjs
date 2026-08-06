@@ -62,6 +62,15 @@ test("the justification is honoured in PowerShell and batch comment syntax too",
   assert.deepEqual(cmd, []);
 });
 
+// Found by a documentation review, not by this gate: AGENTS.md still named
+// `budget.mjs reviveClearbotIfDead` after the rename, and the gate reported the
+// tree clean, because `\bclearbot\b` needs a word boundary and camelCase has
+// none between `revive` and `Clearbot`.
+test("the retired name is caught inside a camelCase identifier", () => {
+  const f = m.findRetired(["a.mjs"], () => "budget.mjs reviveClearbotIfDead restarts it\n");
+  assert.equal(f.length, 1);
+});
+
 test("a comment marker without the namegate-ok token is still a finding", () => {
   const f = m.findRetired(["a.ps1"], () => "Remove-Item 'ACC clearbot.cmd'  # just a normal comment\n");
   assert.equal(f.length, 1);
