@@ -113,9 +113,58 @@ line under `## Resolved`.
   explicit, ledgered reason none is needed. No test may be added or loosened
   just to turn red green — every test must be able to fail against a genuine
   regression, never tuned to the current implementation's behavior.
-  Progress: 1/12 modules done (`kernel/guard.mjs`). Remaining, in rough
-  risk order: `kernel/guardhook.mjs`, `kernel/run.mjs`, `kernel/ledger.mjs`,
-  `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
+  UPDATE 2026-08-06: second module done, `kernel/guardhook.mjs` (and, as a
+  direct consequence, `kernel/ledger.mjs` pulled forward from the remaining
+  list since the fix lives there). Pass covered the "overlapping/concurrent
+  runs" scenario class Kyle's original intent named as largely untested. Found
+  a REAL, live bypass, not a hypothetical: the tool-call ceiling check was a
+  classic TOCTOU race — `guardhook.mjs` read `decisionCounts(runId).total`
+  (one process, one syscall), decided allow/deny, then separately called
+  `appendDecision()`. A real Claude Code turn fires several tool calls at
+  once, each its own guardhook.mjs process, so N concurrent fires can all
+  read the same "attempts so far" before any of them has appended and all N
+  pass a ceiling meant to allow only one more. Reproduced live: 60 concurrent
+  fires against a contract ceiling of 3 let 6-14 through, repeatably (not a
+  one-off timing fluke). Fixed: `kernel/ledger.mjs` gained
+  `withDecisionLock(runId, fn)`, a synchronous cross-process mutex built from
+  `fs` primitives only (no new runtime dependency) — an exclusive-create
+  (`wx`) lock file, `Atomics.wait`-based synchronous backoff (a real sleep,
+  not a CPU-spinning busy loop) while contended, and a stale-lock reap
+  (mtime-based) so a process that dies mid-hold cannot wedge the run shut
+  forever; the wait itself times out and throws rather than hanging a tool
+  call indefinitely, consistent with AC-G11 (every unreadable/unwritable
+  state fails closed). `guardhook.mjs` now performs the attempts-read,
+  `decide()`, and `appendDecision()` as one unit inside that lock, so the
+  next waiter always sees a count that reflects every prior fire. New tests:
+  `kernel/guardhook.test.mjs` fires 60 concurrent real subprocess hook
+  invocations against a ceiling of 3 and asserts exactly 3 are allowed and
+  all 60 are recorded exactly once (flaky-red without the fix — 2 of 3 local
+  runs failed pre-fix, reliably green across 5+ runs post-fix);
+  `kernel/ledger.test.mjs` unit-tests `withDecisionLock` directly: serialized
+  ordering, lock release on both normal return and a thrown error, stale-lock
+  reap vs. a fresh lock blocking until timeout, and an end-to-end real-process
+  variant (15 concurrent OS processes each getting a distinct, gap-free
+  attempts count). Also hit OI-017's known tooling artifact on the new code:
+  the OI-028 stdin re-entrancy guard (`if (stdinOversized) return;`, a branch
+  only reachable on a second 'data' event after the byte cap already tripped)
+  measured 100% branches in isolation but 87.5% once merged with sibling
+  suites in one covgate invocation — added `kernel/guardhook.mjs` to
+  `policy.json`'s `branchFloorOverrides` at 85%, same pattern and same
+  documented reason as `hooks/lane.mjs` and `kernel/run.mjs`, not a real gap.
+  Verified: `node --test kernel/guardhook.test.mjs kernel/ledger.test.mjs`
+  (5 repeated runs, all green), full `npm test` (429/430 excluding known
+  skips, the 1 failure is the pre-existing root-permissions artifact in
+  `hooks/lane.test.mjs` unrelated to this change — see that test's own
+  "can't be written" premise, which a root user's write permissions
+  invalidate), `node hooks/covgate.mjs` scoped to the touched files
+  (`kernel/guardhook.mjs` 100%/100%/87.5% at its override, `kernel/ledger.mjs`
+  100%/100%/98.8%, both PASS).
+  Progress: 2/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`;
+  `kernel/ledger.mjs`'s new lock primitive is now also covered by its own
+  dedicated tests above, though a full scenario pass on the REST of
+  ledger.mjs — the run-record/query surface — is still open). Remaining, in
+  rough risk order: `kernel/run.mjs`, `kernel/ledger.mjs` (run-record/query
+  surface), `kernel/verifier.mjs`, `kernel/autonomy.mjs`, `kernel/policy.mjs`,
   `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 

@@ -70,6 +70,69 @@ export function decisionCounts(runId) {
   return { allow, deny: rows.length - allow, total: rows.length };
 }
 
+// OI-019: a real Claude Code turn fires several tool calls at once, each as
+// its own guardhook.mjs process. Reading decisionCounts() then later calling
+// appendDecision() — two separate syscalls, in two separate processes — is a
+// classic TOCTOU race: N concurrent fires can all read the same "attempts"
+// value before any of them has appended, so all N pass a ceiling check meant
+// to allow only one more. Found live: 60 concurrent fires against a ceiling
+// of 3 let 6-14 through. withDecisionLock() closes the window by making the
+// read-decide-append sequence a single atomic unit, serialized by an
+// exclusive-create lock file — no runtime dependency, just fs primitives.
+// Read per-call, not frozen at module load: guardhook.mjs is a fresh process
+// per fire so it would not matter there, but withDecisionLock is also called
+// repeatedly within one long-lived process (this suite, run.mjs's
+// supervisor) where a test must be able to shrink the timeout at runtime.
+const lockStaleMs = () => Number(process.env.ACC_LEDGER_LOCK_STALE_MS) || 5000;
+const lockWaitTimeoutMs = () => Number(process.env.ACC_LEDGER_LOCK_TIMEOUT_MS) || 4000;
+const lockFile = (runId) => path.join(ledgerDir(), `${runId}.decisions.lock`);
+
+// Atomics.wait blocks the calling thread synchronously (Node's main thread
+// supports this, unlike a browser main thread) — a real sleep, not a busy
+// spin that pins a CPU core while a sibling process holds the lock.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireDecisionLock(runId) {
+  const file = lockFile(runId);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const deadline = Date.now() + lockWaitTimeoutMs();
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(file, "wx"));
+      return () => { try { fs.unlinkSync(file); } catch { /* already released */ } };
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      // A lock left behind by a process that died mid-hold must not wedge
+      // every future fire shut forever — reap it once it is clearly stale
+      // rather than merely old (a legitimate holder's own hold is short).
+      try {
+        if (Date.now() - fs.statSync(file).mtimeMs > lockStaleMs()) {
+          fs.rmSync(file, { force: true });
+          continue;
+        }
+      } catch { /* lock vanished between the check and here — retry immediately */ }
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for the decision lock on run ${runId}`);
+      }
+      sleepSync(5);
+    }
+  }
+}
+
+// fn receives the attempt count read UNDER the lock and must itself perform
+// any appendDecision() for this fire before returning, so the count the next
+// waiter reads already reflects this one. Whatever fn returns is returned.
+export function withDecisionLock(runId, fn) {
+  const release = acquireDecisionLock(runId);
+  try {
+    return fn(decisionCounts(runId).total);
+  } finally {
+    release();
+  }
+}
+
 // Queryable by status, harness identity, and date range (AC-L3). No dashboard:
 // the spec's out-of-scope list rules presentation out, and JSONL + this filter
 // is the whole "queryable" requirement.
