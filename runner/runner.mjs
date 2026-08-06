@@ -165,7 +165,11 @@ export function runClaudeOnce(job, goalId) {
     let out = "";
     let err = "";
     const timer = setTimeout(() => {
-      log(job, `run timed out after ${job.runTimeoutMin} min — killing (tree)`);
+      // Lean review (2026-08-06): every other exceptional runLoop condition
+      // (stuck board, blocked/paused goal, maxRuns exhausted) alerts; a
+      // killed hang only logged, invisible to alerts/ until it repeated
+      // maxStuck times. A hang worth killing is worth alerting on its own.
+      alert(job, `run timed out after ${job.runTimeoutMin} min — killing (tree)`);
       killTree(child);
     }, job.runTimeoutMin * 60 * 1000);
     child.stdout.on("data", (d) => (out += d));

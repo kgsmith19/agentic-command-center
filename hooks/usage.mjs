@@ -64,6 +64,15 @@ const DEFAULT_POLICY = {
   },
 };
 
+// Lean review (2026-08-06): softK/hardK gate budget.mjs's Stop/PostToolUse
+// comparisons directly (`ctx < hardK*1000` etc). A non-numeric or non-finite
+// value there produces NaN, and BOTH `ctx < NaN` and `ctx >= NaN` are always
+// false in JS -- silently flipping "fails OPEN on any internal error" (this
+// file's own documented contract) into a fail-closed spurious block on one
+// side and a never-enforced ceiling on the other. A dial this consequential
+// must fail closed to the safe default, not propagate a typo into NaN.
+const finiteOr = (v, dflt) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : dflt);
+
 export function loadPolicy() {
   try {
     const raw = fs.readFileSync(POLICY_PATH(), "utf8").replace(/^\uFEFF/, "");
@@ -71,7 +80,12 @@ export function loadPolicy() {
     return {
       ...DEFAULT_POLICY,
       ...p,
-      context: { ...DEFAULT_POLICY.context, ...(p.context || {}) },
+      context: {
+        ...DEFAULT_POLICY.context,
+        ...(p.context || {}),
+        softK: finiteOr(p.context?.softK, DEFAULT_POLICY.context.softK),
+        hardK: finiteOr(p.context?.hardK, DEFAULT_POLICY.context.hardK),
+      },
       week: { ...DEFAULT_POLICY.week, ...(p.week || {}) },
       runner: { ...DEFAULT_POLICY.runner, ...(p.runner || {}) },
       subagents: { ...DEFAULT_POLICY.subagents, ...(p.subagents || {}) },

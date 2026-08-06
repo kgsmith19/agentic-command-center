@@ -14,7 +14,7 @@
 // Run: node --test hooks/budget.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -497,4 +497,54 @@ test("ptyAnchorPid anchors at the immediate parent when it is not a shell", () =
 
 test("ptyAnchorPid falls back to the first ancestor when all are shells", () => {
   assert.equal(ptyAnchorPid([{ pid: 888, name: "cmd.exe" }]), 888);
+});
+
+// Lean-review finding (2026-08-06): the per-session subagent spawn cap
+// (onPreToolUseAgent's reserveAgentSlot) was a plain read-modify-write on the
+// ".agents" state file with nothing serializing it across PROCESSES -- the
+// exact class of bug goal.mjs's withGoalLock already exists to close for
+// appendCycle (see "concurrent appendCycle calls... never lose an update"
+// above, same technique used here: separate node PROCESSES, since
+// synchronous JS in one process cannot race itself). Two Agent tool calls
+// dispatched in the same turn fire two separate budget.mjs processes; both
+// could read the same stale n, both pass a cap check that should only pass
+// once, and the persisted counter itself under-reports afterward, silently
+// weakening every later check in the session too.
+test("Phase: concurrent reserveAgentSlot calls against the SAME session, from separate PROCESSES, never over-grant the cap", async () => {
+  const sb = sandbox();
+  const sid = "s-agent-race";
+  const cap = 3;
+  const N = 30;
+  // A bare "spawn N, race" gives no reliable overlap here: reserveAgentSlot's
+  // whole critical section (read a tiny JSON file, compare, write it back) is
+  // microseconds, dwarfed by each process's own spawn/import jitter (tens of
+  // ms) -- true simultaneity in that narrow a window is rare by chance alone.
+  // A barrier makes it deterministic: every child imports budget.mjs, THEN
+  // busy-waits on a go-file this test writes only once all N have had time to
+  // reach that wait, so all N actually call reserveAgentSlot within the same
+  // few milliseconds -- proving the LOCK, not process-spawn luck, is what
+  // keeps the count correct.
+  const goFile = path.join(sb.root, "go-signal");
+  const fireAsync = () => new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-e", `
+      import(${JSON.stringify("file://" + HOOK)}).then((m) => {
+        const fs = require("fs");
+        while (!fs.existsSync(${JSON.stringify(goFile)})) {}
+        const r = m.reserveAgentSlot(${JSON.stringify(sid)}, ${cap});
+        process.exit(r.allowed ? 0 : 1);
+      });
+    `], { env: { ...process.env, ACC_ROOT: sb.root } });
+    child.on("close", (code) => resolve(code));
+  });
+  const promises = Array.from({ length: N }, fireAsync);
+  await new Promise((r) => setTimeout(r, 400)); // let all N reach the busy-wait
+  fs.writeFileSync(goFile, "go");
+  const codes = await Promise.all(promises);
+  const allowedCount = codes.filter((c) => c === 0).length;
+  assert.equal(
+    allowedCount, cap,
+    `expected exactly cap (${cap}) of ${N} truly-concurrent reservations to be allowed, got ${allowedCount} -- the race over- or under-granted`
+  );
+  const persisted = JSON.parse(fs.readFileSync(statePath(sb, sid, "agents"), "utf8")).n;
+  assert.equal(persisted, allowedCount, "the persisted counter must match how many were actually allowed, not undercount from a lost update");
 });

@@ -75,6 +75,29 @@ test("a vault key the contract does not list is denied even inside an allowed co
   assert.ok(!d.reason.includes("ALLOWED_KEY=") , "a reason must never carry a value");
 });
 
+// Lean-review finding (2026-08-06): NTFS resolves filenames case-insensitively,
+// so a case-varied "engine.mjs" still runs the real apply subcommand on
+// Windows (this repo's target platform) as long as "apply" itself stays
+// lowercase (hooks/engine.mjs's own dispatch is a case-sensitive `case
+// "apply":`). vaultViolation's regex had no /i, unlike norm() elsewhere in
+// this same file, which deliberately lowercases for exactly this reason.
+// Chained onto ANY granted bashPatterns prefix (the AC-G8 fixture above
+// proves chaining via && is the expected, already-supported shape for real
+// vault-apply usage), the case-varied call skipped the vault-key gate
+// entirely and fell through to the ordinary bashPatterns allow.
+test("a case-varied engine.mjs filename cannot dodge the vault-key gate (Windows filesystem is case-insensitive)", () => {
+  const smuggled = 'npm test && node C:/code/guards/hooks/ENGINE.MJS apply .env STRIPE_SECRET';
+  const d = decide(ev("Bash", { command: smuggled }), ctx());
+  assert.equal(d.allow, false);
+  assert.equal(d.rule, "vaultKeys");
+  assert.match(d.reason, /STRIPE_SECRET/);
+
+  const mixedCase = 'npm test && node C:/code/guards/hooks/Engine.Mjs APPLY .env STRIPE_SECRET';
+  const d2 = decide(ev("Bash", { command: mixedCase }), ctx());
+  assert.equal(d2.allow, false);
+  assert.equal(d2.rule, "vaultKeys");
+});
+
 test("network and subagent grants come from the contract", () => {
   assert.equal(decide(ev("WebFetch", { url: "https://registry.npmjs.org/x" }), ctx()).allow, true);
   assert.equal(decide(ev("WebFetch", { url: "https://evil.example/x" }), ctx()).allow, false);

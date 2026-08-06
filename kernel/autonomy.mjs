@@ -70,8 +70,59 @@ function windowOutcomes(size) {
   return finals.slice(-size).map((r) => r.outcome);
 }
 
+// Lean review (2026-08-06): updateAfterRun's whole read-modify-write was
+// unserialized across PROCESSES. The launch-lane slot a harness run holds is
+// released on the child's `close` event, which fires BEFORE kernel/run.mjs's
+// own finalize()/updateAfterRun() runs -- so a second run.mjs can acquire the
+// slot and reach its own updateAfterRun() while the first's is still in
+// flight. Two such calls can read the same stale {factor, runsLeft, log},
+// and whichever writes last silently discards the other's transition -- the
+// same class of lost-update race kernel/ledger.mjs's withDecisionLock
+// already exists to close for guardhook's attempts counter. Duplicated
+// locally (same primitive, same shape) rather than imported, since
+// withDecisionLock is keyed by runId against decisionsFile(runId), not a
+// generic path -- autonomy.json has exactly one lock to hold, not one per run.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+const LOCK_TIMEOUT_MS = Number(process.env.ACC_AUTONOMY_LOCK_TIMEOUT_MS) || 3000;
+const LOCK_STALE_MS = Number(process.env.ACC_AUTONOMY_LOCK_STALE_MS) || 5000;
+
+function withAutonomyLock(fn) {
+  const lockPath = autonomyFile() + ".lock";
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const start = Date.now();
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lockPath, "wx"));
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try {
+        if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+          fs.rmSync(lockPath, { force: true });
+          continue;
+        }
+      } catch { /* lock vanished between the stat and here — fine, loop retries */ }
+      if (Date.now() - start > LOCK_TIMEOUT_MS) {
+        throw new Error(`autonomy lock still held after ${LOCK_TIMEOUT_MS}ms`);
+      }
+      sleepSync(5 + Math.floor(Math.random() * 10));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lockPath, { force: true });
+  }
+}
+
 // Call once after every finalized run.
 export function updateAfterRun(policy = null) {
+  return withAutonomyLock(() => updateAfterRunLocked(policy));
+}
+
+function updateAfterRunLocked(policy) {
   const cfg = (policy || loadKernelPolicy()).autonomy;
   const state = readAutonomy();
   const window = windowOutcomes(cfg.window);

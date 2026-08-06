@@ -155,6 +155,65 @@ export function atomicWrite(file, text) {
   fs.renameSync(tmp, file);
 }
 
+// Lean review (2026-08-06): reserveAgentSlot's read-modify-write was
+// unserialized across PROCESSES -- two PreToolUse/Agent hook fires from the
+// same turn's parallel Agent tool calls could both read the same stale n and
+// both pass a cap check that should only pass once, silently over-granting
+// the subagent cap and under-reporting the persisted counter afterward. Same
+// cross-process exclusive-file-create mutex hooks/goal.mjs's withGoalLock
+// uses (itself closing the identical class of bug for appendCycle) --
+// duplicated locally rather than imported, matching this file's existing
+// convention of its own statePath/readJson/atomicWrite rather than reaching
+// into goal.mjs for file-IO primitives goal.mjs happens to also have.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+const LOCK_TIMEOUT_MS = Number(process.env.ACC_AGENTS_LOCK_TIMEOUT_MS) || 3000;
+const LOCK_STALE_MS = Number(process.env.ACC_AGENTS_LOCK_STALE_MS) || 5000;
+
+function withStateLock(lockPath, fn) {
+  const start = Date.now();
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lockPath, "wx"));
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try {
+        if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+          fs.rmSync(lockPath, { force: true });
+          continue;
+        }
+      } catch { /* lock vanished between the stat and here — fine, loop retries */ }
+      if (Date.now() - start > LOCK_TIMEOUT_MS) {
+        throw new Error(`agents-slot lock for ${lockPath} still held after ${LOCK_TIMEOUT_MS}ms`);
+      }
+      sleepSync(5 + Math.floor(Math.random() * 10));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lockPath, { force: true });
+  }
+}
+
+// The per-session subagent spawn cap's whole critical section: read the
+// current count, decide against cap, persist if granted. Exported so it can
+// be exercised directly (goal.test.mjs's own technique for proving a lock
+// closes a race: many separate node PROCESSES, not in-process concurrency,
+// since synchronous JS in one process cannot race itself).
+export function reserveAgentSlot(sessionId, cap) {
+  ensureDirs();
+  const cnt = statePath(sessionId, "agents");
+  return withStateLock(`${cnt}.lock`, () => {
+    const n = Number(readJson(cnt, { n: 0 }).n || 0) + 1;
+    if (n > cap) return { allowed: false, n: n - 1 };
+    fs.writeFileSync(cnt, JSON.stringify({ n }));
+    return { allowed: true, n };
+  });
+}
+
 // ------------------------------------------------------------- hook output
 
 // UserPromptSubmit / SessionStart: inject text into the session.
@@ -710,20 +769,25 @@ function onPreToolUseAgent(p, policy) {
     );
   }
 
-  // Per-session spawn cap.
-  const cnt = statePath(p.session_id, "agents");
-  const n = Number(readJson(cnt, { n: 0 }).n || 0) + 1;
+  // Per-session spawn cap. Locked (reserveAgentSlot) so two concurrent Agent
+  // tool calls in the same turn can never both read the same stale count and
+  // both pass a cap check meant to only pass once. A lock failure (timeout,
+  // disk error) falls open to allow — same "never wedge a session" contract
+  // as every other internal error in this file — rather than denying on an
+  // unrelated I/O problem.
   const cap = granted ? policy.review.maxFinders : policy.subagents.maxPerSession;
-  if (n > cap) {
+  let reservation;
+  try {
+    reservation = reserveAgentSlot(p.session_id, cap);
+  } catch {
+    allow();
+  }
+  if (!reservation.allowed) {
     deny(
       `[ACC] Subagent cap reached for this session (${cap}). ` +
         `${granted ? "Fan-out grants are capped at review.maxFinders." : "Continue in the main thread, or clear context and start fresh."}`
     );
   }
-  try {
-    ensureDirs();
-    fs.writeFileSync(cnt, JSON.stringify({ n }));
-  } catch {}
   allow();
 }
 

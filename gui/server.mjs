@@ -31,13 +31,26 @@ function send(res, code, body, type = "application/json") {
   res.end(type === "application/json" ? JSON.stringify(body) : body);
 }
 
+// Lean review (2026-08-06): `body += c` coerced each raw Buffer chunk to a
+// string independently -- a multi-byte UTF-8 character split across a chunk
+// boundary decodes each half as an invalid sequence (replacement chars)
+// instead of the one real character, silently corrupting data before it
+// reaches any business logic (vault-import's payload IS a secret value).
+// The same bug also made the cap a soft "after the fact" check: a single
+// oversized chunk fully materialized (as a string) before its length was
+// ever compared to BODY_CAP. Buffering as Buffer objects and decoding once,
+// after the byte-length cap check, fixes both: the cap is checked on raw
+// byte length before any decode, and decode happens exactly once against
+// the complete, correctly-ordered byte stream.
 function readBody(req, done) {
-  let body = "";
+  const chunks = [];
+  let total = 0;
   req.on("data", (c) => {
-    body += c;
-    if (body.length > BODY_CAP) req.destroy(); // over-cap is dropped, never parsed
+    total += c.length;
+    if (total > BODY_CAP) return req.destroy(); // over-cap is dropped, never buffered further or decoded
+    chunks.push(c);
   });
-  req.on("end", () => done(body));
+  req.on("end", () => done(Buffer.concat(chunks).toString("utf8")));
 }
 
 // Shared shape for every mutating route: X-ACC required, body is JSON, `fn`

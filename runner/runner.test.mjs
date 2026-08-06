@@ -565,6 +565,27 @@ test("integration: a hung run is killed PROMPTLY at its timeout, not merely even
   assert.equal(alive, false, `fake claude pid ${pid} is still alive — orphaned, not killed`);
 });
 
+// Lean-review finding (2026-08-06): every OTHER exceptional runLoop
+// condition (stuck board, blocked/paused goal, maxRuns exhausted) calls
+// alert() -- the channel README.md and status() both frame as the
+// notification surface. A killed hang only ever called log(), so a single
+// runTimeoutMin timeout was invisible to anything polling alerts/ until it
+// repeated maxStuck times and tripped the unrelated stuck-alert (or someone
+// happened to read the log). A hang worth killing is worth alerting on its
+// own, the same as every sibling exceptional path.
+test("integration: a hung, killed run raises an alert, the same as every other exceptional runLoop condition", async () => {
+  fakeClaudeDir("hang");
+  process.env.FAKE_CLAUDE_MODE = "hang";
+  const j = job({ runTimeoutMin: 0.005 }); // 300ms timeout
+  await runClaudeOnce(j);
+  const alerts = fs.readdirSync(path.join(process.env.ACC_RUNNER_ROOT, "alerts")).filter((f) => f.startsWith(j.name));
+  assert.equal(alerts.length, 1, "a killed hang must raise exactly one alert");
+  assert.match(
+    fs.readFileSync(path.join(process.env.ACC_RUNNER_ROOT, "alerts", alerts[0]), "utf8"),
+    /timed out after/
+  );
+});
+
 test("integration: runOnce retries a transport failure through the real lane and recovers", async () => {
   fakeClaudeDir("transport");
   process.env.FAKE_CLAUDE_MODE = "transport-then-ok";

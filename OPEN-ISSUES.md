@@ -53,6 +53,72 @@ line under `## Resolved`.
   or this gap is formally accepted as permanent and this entry closes on
   that decision alone.
 
+## OI-035 runner.mjs's kill is single-shot: no SIGKILL escalation, no verification the tree actually died
+- opened: 2026-08-06, found by the lean-review sweep (kernel/hooks/gui/
+  runner+watcher, 4-way parallel pass before wrapping up tonight's session).
+- where: `runner/runner.mjs` `killTreePosix`/`killTreeWin32` (~lines 115-124)
+- what: `killTreePosix` sends `SIGTERM` once with a silent double-`catch{}`
+  and never escalates to `SIGKILL` if the process group ignores or traps it.
+  `killTreeWin32` runs `taskkill /t /f` once, also with a silent `catch{}`.
+  Neither confirms the tree actually died. If the kill genuinely fails (an
+  uncooperative child, or a `taskkill` error), `runClaudeOnce`'s promise
+  never resolves — `close` never fires on the child — so `runOnce`'s
+  `await` in `runLoop` blocks forever past the very `runTimeoutMin` ceiling
+  that was supposed to bound it. `hooks/lane.mjs`'s slot `ttlMs` only lets
+  *other* processes reclaim the lane slot; it does nothing to unblock this
+  one. (The timeout-kill itself now alerts — see this same sweep's fix,
+  committed alongside this entry — so the FIRST kill attempt is visible;
+  this entry is about what happens when that attempt doesn't work.)
+- why open: a real fix needs the kill path restructured (SIGKILL fallback
+  after a bounded wait, a liveness check via the same `process.kill(pid,
+  0)` probe `runner.test.mjs`'s own "killed PROMPTLY" test already uses to
+  verify success, and a way to unstick `runOnce`'s await if verification
+  ever fails) — a materially bigger change to the one mechanism every
+  other timeout/ceiling in this codebase ultimately depends on working,
+  not something to rush through as a side effect of a lean-review pass.
+  POSIX-testable from this sandbox; the Windows `taskkill` escalation path
+  needs Kyle's own machine to verify for real, same as every other
+  Windows-only claim in this repo.
+- done when: `killTreePosix`/`killTreeWin32` escalate on a failed first
+  attempt and verify the tree is actually gone before returning, with a
+  test proving an uncooperative child (traps SIGTERM, or a taskkill that
+  errors) still ends up dead and `runOnce`'s await still resolves.
+
+## OI-036 clearbot.ps1/sendconsole.ps1: a dead console's recycled PID could be attached-to and typed into by a stale clear/cd request
+- opened: 2026-08-06, found by the same lean-review sweep as OI-035.
+- where: `watcher/clearbot.ps1` `Test-Binding`, `watcher/sendconsole.ps1`
+  `AttachConsole($TargetPid)`
+- what: `Test-Binding` only proves a request's `consolePid` matches the
+  value stored in `runner/state/<sid>.window`; it never re-verifies that
+  PID is still the *original* console process (no start-time or image-name
+  cross-check). No code path ever deletes a `.window` file. If a console
+  dies, Windows can recycle its PID for another console-owning process
+  (`cmd.exe`/`powershell.exe`/`node.exe` are common on this machine), the
+  stale `.window` file still agrees with a stale request, `Get-Process -Id
+  $cpid` succeeds (some process, not necessarily the right one), and
+  `sendconsole.ps1` would attach to the *wrong* console and type `/clear`,
+  a goal-kick constant, or Esc into it. This is about PID *identity*, a gap
+  the existing "no wrong window" focus-theft protection doesn't cover
+  (that's about focus, not which process ID a request still trusts).
+- why open: for goal kicks, exposure is largely already closed in practice
+  by `reapDeadGoals()` (`hooks/goal.mjs`), which runs on a ~2s cycle and
+  marks a goal `dead` the moment `consoleAlive()` is false, before a kick
+  can fire on a stale binding. Plain clear/cd requests (from `budget.mjs`)
+  have no equivalent reaping, though the requesting session's own PID is
+  virtually always fresh at request time, keeping the real-world window
+  tight — narrow enough that the reviewing agent's own assessment was "not
+  urgent given the narrow timing required." Hardening it for real (a
+  process start-time or session-id cross-check at bind time and at every
+  attach) is real, scoped work, and this sandbox has no Windows console
+  session to verify a fix against, the same reason several other
+  console/ConPTY items in this file stay spec-only until Kyle can check
+  them on his own machine.
+- done when: `Test-Binding` (or the `.window` record itself) carries enough
+  identity beyond a bare PID — a process start-time, or an explicit
+  liveness handshake at bind time — that a recycled PID cannot silently
+  satisfy a stale request, verified against a real reboot/recycle on
+  Kyle's machine.
+
 ## OI-033 usage.mjs/budget.mjs/statusline.mjs/engine.mjs cannot clear covgate's floor today
 - opened: 2026-08-06, found while shipping Phase 1 (docs/2026-08-03-full-
   remediation-prompt.md) — NOT introduced by that work, pre-existing.

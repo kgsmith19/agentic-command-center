@@ -262,6 +262,37 @@ test("Phase 4 D1: DEFAULT_POLICY's runner/subagents/review are conservative, not
   delete process.env.ACC_POLICY;
 });
 
+// Lean-review finding (2026-08-06): a malformed context.softK/hardK (e.g. a
+// typo'd non-numeric value) silently produced NaN once multiplied by 1000 in
+// budget.mjs's Stop/PostToolUse checks. `ctx < NaN` and `ctx >= NaN` are BOTH
+// always false in JS, so a bad dial flips budget.mjs's documented "fails
+// OPEN on any internal error" contract on its head: the under-budget allow
+// branch is never taken (every session's first Stop spuriously blocks) while
+// the over-budget enforcement branch also never fires (an agent burning 10x
+// the real ceiling is never caught). loadPolicy must fail closed to the safe
+// DEFAULT_POLICY.context dial on a non-finite value, the same class of fix
+// already applied to kernel/contract.mjs's budget.wallClockMin tonight.
+test("loadPolicy falls back to the default context dial when softK/hardK is non-numeric", async () => {
+  const sb = sandbox();
+  process.env.ACC_POLICY = path.join(sb.dir, "policy.json");
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ context: { softK: "unlimited", hardK: 600 } }));
+  const u = await loadUsage(sb);
+  const p = u.loadPolicy();
+  assert.equal(p.context.softK, 400, "a non-numeric softK falls back to the default rather than becoming NaN");
+  assert.equal(p.context.hardK, 600, "a validly-set sibling field is unaffected");
+  delete process.env.ACC_POLICY;
+});
+
+test("loadPolicy falls back to the default context dial when hardK is missing/non-finite (Infinity, negative)", async () => {
+  const sb = sandbox();
+  process.env.ACC_POLICY = path.join(sb.dir, "policy.json");
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ context: { hardK: -1 } }));
+  const u = await loadUsage(sb);
+  const p = u.loadPolicy();
+  assert.equal(p.context.hardK, 600, "a negative hardK is not a real ceiling — falls back to the default");
+  delete process.env.ACC_POLICY;
+});
+
 test("Phase 5: weekTier short-circuits to green with NO scan when both thresholds are 0 (disabled)", async () => {
   const sb = sandbox();
   process.env.ACC_POLICY = path.join(sb.dir, "policy.json");

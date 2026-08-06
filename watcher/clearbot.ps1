@@ -171,6 +171,14 @@ function Send-Pipe([string]$PipeName, [string[]]$Ops) {
     foreach ($op in $Ops) {
         try {
             $c = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
+            # Lean review (2026-08-06): $c.Dispose() below only ran on the
+            # success path -- a Connect() failure or the read-timeout throw
+            # (both real, expected outcomes for a wedged PtyHost, exactly what
+            # the comment below worries about) skipped past it entirely,
+            # leaking the NamedPipeClientStream handle instead of releasing it
+            # deterministically. try/finally disposes on every exit, success
+            # or not.
+            try {
             $c.Connect(2000)
             # Phase 6 (full-remediation-prompt.md): Connect() had a timeout,
             # ReadLine() below did not -- a pipe that accepts the connection
@@ -196,8 +204,8 @@ function Send-Pipe([string]$PipeName, [string[]]$Ops) {
             $readTask = $r.ReadLineAsync()
             if (-not $readTask.Wait(5000)) { throw "pipe read timed out" }
             $resp = $readTask.Result
-            $c.Dispose()
             if ($resp -ne 'OK') { return @{ ok = $false; out = "$op -> $resp" } }
+            } finally { $c.Dispose() }
         } catch { return @{ ok = $false; out = "$op -> $($_.Exception.Message)" } }
         # The paste heuristic is exactly what broke injection: give the TUI a
         # beat between the text and the Enter so the CR is its own keypress.

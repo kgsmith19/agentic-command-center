@@ -4,6 +4,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const MODULE_PATH = fileURLToPath(import.meta.url).replace(/\.test\.mjs$/, ".mjs");
 
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-kernel-autonomy-"));
 process.env.ACC_ROOT = path.join(BASE, "root");
@@ -162,4 +166,47 @@ test("writeAutonomy writes atomically -- content round-trips, no leftover .tmp- 
   assert.deepEqual(A.readAutonomy(), { factor: 0.5, runsLeft: 3, log: [{ direction: "tighten" }] });
   const leftovers = fs.readdirSync(path.dirname(L.autonomyFile())).filter((f) => f.includes(".tmp-"));
   assert.deepEqual(leftovers, []);
+});
+
+// Lean-review finding (2026-08-06): updateAfterRun's read-modify-write was
+// unserialized across PROCESSES -- the lane slot a harness run holds is
+// released on the child's `close`, which fires BEFORE run.mjs's own
+// finalize()/updateAfterRun() runs, so a second run can start and finalize
+// while the first's updateAfterRun() is still in flight. Same class of
+// lost-update race kernel/ledger.mjs's withDecisionLock already closes for
+// guardhook's attempts counter (see that file's own comment: "40 truly-
+// concurrent fires... let 4-8 through before this lock existed"). Same
+// proof technique: separate node PROCESSES (synchronous JS in one process
+// cannot race itself), barrier-synchronized so they genuinely overlap.
+// autonomy.runs: 0 makes every call independently re-evaluate from
+// runsLeft===0 (never takes the runsLeft>0 branch, which doesn't log) --
+// so with a `rejected`-heavy window, EVERY concurrent call should append
+// its own "tighten" log entry, deterministically, regardless of order.
+test("concurrent updateAfterRun calls, from separate PROCESSES, never lose a log entry", async () => {
+  for (let i = 0; i < 10; i++) {
+    L.appendStarted({ runId: `race${i}`, startedAt: new Date(2026, 7, 3, 1, i).toISOString(), contract: {}, settingsSha256: "x" });
+    L.appendFinalized({ runId: `race${i}`, finishedAt: new Date(2026, 7, 3, 1, i, 30).toISOString(),
+      outcome: "rejected", harness: { name: "fake", version: "1" }, criteria: [], decisions: {}, tokens: 0, wallClockMs: 1 });
+  }
+  const racePolicy = JSON.stringify({ autonomy: { window: 10, rejectRate: 0.1, factor: 0.5, runs: 0 } });
+  const goFile = path.join(BASE, "go-signal-autonomy");
+  fs.rmSync(goFile, { force: true });
+  const N = 20;
+  const fireAsync = () => new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-e", `
+      import(${JSON.stringify("file://" + MODULE_PATH)}).then((m) => {
+        const fs = require("fs");
+        while (!fs.existsSync(${JSON.stringify(goFile)})) {}
+        m.updateAfterRun(${racePolicy});
+        process.exit(0);
+      });
+    `], { env: { ...process.env } });
+    child.on("close", (code) => resolve(code));
+  });
+  const promises = Array.from({ length: N }, fireAsync);
+  await new Promise((r) => setTimeout(r, 400));
+  fs.writeFileSync(goFile, "go");
+  await Promise.all(promises);
+  const finalState = A.readAutonomy();
+  assert.equal(finalState.log.length, N, `expected all ${N} concurrent tighten entries logged, none lost to the race`);
 });

@@ -37,8 +37,19 @@ const verdict = (allow, rule, reason, tool, target = null) => ({ allow, rule, re
 // `engine.mjs apply <targetFile> <KEY...>` is the sanctioned way a harness
 // receives secrets. The contract says which key NAMES it may use; anything
 // else is denied before any pattern allow can reach it.
+//
+// Case-insensitive match (lean review, 2026-08-06): NTFS resolves filenames
+// case-insensitively, so `ENGINE.MJS`/`Engine.Mjs` still runs the real apply
+// subcommand on this repo's target platform (Windows) — hooks/engine.mjs's
+// own dispatch requires "apply" lowercase, but the filename segment doesn't.
+// A case-sensitive regex here missed that variant entirely, letting a
+// case-varied apply call fall through to the ordinary bashPatterns check
+// (which the AC-G8 fixture below shows is routinely satisfied by a broader
+// prefix like "npm test" chained via &&) and skip vault-key scoping outright
+// — a full allowedActions.vaultKeys bypass. `norm()` below already
+// lowercases for this exact reason; this regex now matches that discipline.
 function vaultViolation(command, allowedKeys) {
-  const m = command.match(/engine\.mjs["']?\s+apply\s+(\S+)((?:\s+[A-Za-z_][A-Za-z0-9_]*)+)/);
+  const m = command.match(/engine\.mjs["']?\s+apply\s+(\S+)((?:\s+[A-Za-z_][A-Za-z0-9_]*)+)/i);
   if (!m) return null;
   const requested = m[2].trim().split(/\s+/);
   const notGranted = requested.filter((k) => !allowedKeys.includes(k));

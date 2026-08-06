@@ -233,6 +233,34 @@ test("vault-import without X-ACC is refused, same CSRF rule as the JSON routes",
   assert.equal(r.status, 403);
 });
 
+// Lean-review finding (2026-08-06): readBody accumulated raw Buffer chunks
+// via `body += c`, which coerces each chunk to a string (UTF-8 decode)
+// INDEPENDENTLY. A multi-byte character split across a chunk boundary --
+// entirely possible on a real socket, not a contrived edge case -- decodes
+// each half as an invalid/incomplete sequence (U+FFFD replacement chars)
+// instead of the one real character, corrupting the body before any
+// business logic (including vault-import, where the payload IS the secret
+// value) ever sees it. Two raw writes with a real gap between them force
+// separate TCP segments / "data" events on the server, splitting "é"
+// (0xC3 0xA9 in UTF-8) across the boundary.
+test("vault-import: a multi-byte UTF-8 character split across a TCP chunk boundary is not corrupted", async () => {
+  const port = Number(new URL(base).port);
+  const chunk1 = Buffer.concat([Buffer.from("K=caf", "utf8"), Buffer.from([0xc3])]);
+  const chunk2 = Buffer.concat([Buffer.from([0xa9]), Buffer.from("\n", "utf8")]);
+  await new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: "127.0.0.1", port, path: "/api/engine/vault-import", method: "POST", headers: { "X-ACC": "1" } },
+      (res) => { res.resume(); res.on("end", resolve); }
+    );
+    req.on("error", reject);
+    req.write(chunk1, () => {
+      setTimeout(() => req.end(chunk2), 50); // real gap -> separate segments, not one coalesced write
+    });
+  });
+  const vault = JSON.parse(fs.readFileSync(path.join(process.env.ACC_ROOT, "vault.json"), "utf8"));
+  assert.equal(vault.K, "café", "the stored value must be the real character, not replacement-char mojibake");
+});
+
 test("runbox list/preview/run/trash/restore/flush all work over HTTP end to end", async () => {
   const runbox = path.join(process.env.ACC_ROOT, "runbox");
   fs.mkdirSync(runbox, { recursive: true });
