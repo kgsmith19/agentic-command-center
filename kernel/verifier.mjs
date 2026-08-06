@@ -28,7 +28,9 @@ export async function verifyCriterion(criterion, { cwd, execFn } = {}) {
     case "file_contains": {
       let text;
       try { text = fs.readFileSync(v.path, "utf8"); } catch (e) { return result(criterion, "fail", `unreadable: ${e.message}`); }
-      return result(criterion, new RegExp(v.pattern).test(text) ? "pass" : "fail", `${v.path} =~ /${v.pattern}/`);
+      let re;
+      try { re = new RegExp(v.pattern); } catch (e) { return result(criterion, "fail", `invalid pattern: ${e.message}`); }
+      return result(criterion, re.test(text) ? "pass" : "fail", `${v.path} =~ /${v.pattern}/`);
     }
     case "git_clean": {
       const r = run(execFn, "git", ["status", "--porcelain"], v.cwd || cwd);

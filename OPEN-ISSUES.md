@@ -291,8 +291,28 @@ line under `## Resolved`.
   (run.mjs 100%/100%/90.9%), full `npm test` (428/429, the 1 fail is the
   same pre-existing unrelated `lane.test.mjs` flake noted throughout this
   ledger).
-  Progress: 3/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
-  `kernel/run.mjs`). Remaining, in rough risk order: `kernel/verifier.mjs`,
+  Progress: 4/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  `kernel/run.mjs`, `kernel/ledger.mjs` — this count previously read 3/12
+  with an 8-item remaining list that only summed to 11; `ledger.mjs` earned
+  its place in the "done" column during the guardhook.mjs pass above
+  (the new `withDecisionLock` cross-process mutex, verified 39/39
+  alongside guardhook.mjs), it just hadn't been added to either list).
+  `kernel/verifier.mjs` pass (2026-08-06): found a REAL, live bug —
+  `file_contains`'s `new RegExp(v.pattern)` was unguarded, so a malformed
+  pattern (e.g. an unterminated group) threw a SyntaxError straight out of
+  `verifyCriterion`. `kernel/run.mjs`'s only call site (`await
+  verifyAll(...)`) has no try/catch, and neither does its own CLI entry
+  point around `runTask()` — one malformed criterion in a contract would
+  crash the entire kernel process AFTER the harness already finished its
+  work, discarding the run with no recorded outcome at all, instead of the
+  clean "criterion X: fail" this file exists to produce for every other
+  kind of bad criterion. Fixed: the `RegExp` construction is now wrapped
+  in its own try/catch, reporting `fail` with the parse error as detail —
+  same pattern the file already used for an unreadable target file.
+  Verified: `node --test kernel/verifier.test.mjs` (11/11, RED confirmed
+  first — the malformed-pattern tests threw uncaught pre-fix), `node
+  hooks/covgate.mjs` (verifier.mjs 100%/100%/100%).
+  Progress: 5/12 modules done. Remaining, in rough risk order:
   `kernel/autonomy.mjs`, `kernel/policy.mjs`, `kernel/contract.mjs`,
   `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
@@ -309,9 +329,12 @@ line under `## Resolved`.
   (over-budget clear/adopt/resume) timed out waiting for "cycle logged" —
   first session cleared but no evidence a second session adopted/resumed.
   Scenario 3 (Esc escalation, labeled OI-011 in the test's own output —
-  note that label is stale/mismatched: the currently-open OI-011 is an
-  unrelated "re-verify guards self-protection" issue, so either the suite's
-  inline comment or its wait-message attribution needs a look separately)
+  note that label is stale/mismatched: at the time this was written OI-011
+  was an unrelated "re-verify guards self-protection" issue; OI-011 has
+  since been retired (2026-08-05), but `e2e/loop.e2e.mjs`'s own
+  scenario-3 comment still says "Esc escalation when the turn refuses to
+  end (OI-011)" — the label collision itself is still real and still
+  worth a separate look, only the "currently-open" framing is dated)
   showed "(no clearbot log)" and timed out. Scenario 4 (typed `/cd` changes
   session cwd) failed exactly as **already tracked in OI-003** (open since
   2026-07-31): cwd stayed at `C:\code`, never moved to `C:\code\guards`,
