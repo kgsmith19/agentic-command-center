@@ -113,7 +113,7 @@ function requestClear(p, policy, ctx) {
   try {
     const w = readJson(statePath(p.session_id, "window"), null);
     if (!w || !w.consolePid) return false;
-    fs.writeFileSync(
+    atomicWrite(
       path.join(CLEARREQ, `${String(p.session_id).slice(0, 40)}.json`),
       JSON.stringify({
         sessionId: p.session_id,
@@ -142,6 +142,17 @@ function readJson(p, dflt) {
   } catch {
     return dflt;
   }
+}
+
+// Phase 4 D2 (full-remediation-prompt.md): tmp+rename instead of a bare
+// writeFileSync -- a reader must never observe a half-written tier.json or
+// clear-request file (a crash mid-write, or a concurrent read) and silently
+// treat it as corrupt/missing. Same pattern hooks/goal.mjs's write() and
+// usage.mjs's scan cache already use.
+function atomicWrite(file, text) {
+  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
 }
 
 // ------------------------------------------------------------- hook output
@@ -196,7 +207,7 @@ function weekTier(policy) {
   const tier = red && weekTokens >= red ? "red" : amber && weekTokens >= amber ? "amber" : "green";
   const out = { tier, weekTokens, pct: red ? (weekTokens / red) * 100 : 0, ts: Date.now() };
   try {
-    fs.writeFileSync(cacheFile, JSON.stringify(out));
+    atomicWrite(cacheFile, JSON.stringify(out));
   } catch {}
   return out;
 }
@@ -759,7 +770,7 @@ function main() {
     const sid = wins[0].f.replace(/\.window$/, "");
     const w = readJson(path.join(STATE, wins[0].f), {});
     if (!w.consolePid) return console.log(`${sid}: no consolePid - restart the session to re-capture`);
-    fs.writeFileSync(
+    atomicWrite(
       path.join(CLEARREQ, `${sid}.json`),
       JSON.stringify({
         sessionId: sid, hwnd: w.hwnd, consolePid: w.consolePid, title: w.title || "",

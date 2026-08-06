@@ -394,6 +394,20 @@ function Invoke-Kicks {
     foreach ($g in @($pend)) {
         $cpid = [int]$g.consolePid
         if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) { continue }
+        # Phase 4 D4 (full-remediation-prompt.md): consoleAlive()'s EPERM-means-
+        # alive assumption (hooks/goal.mjs) is the weakest link in kick delivery
+        # -- a dead console's pid can be reused by an unrelated Windows process,
+        # and Get-Process alone (above) only proves SOME process with this pid
+        # exists, not that it is still the session's own console. cd/clear
+        # requests already cross-check via Test-Binding; kicks had none at all.
+        # goal.mjs's `pending` output already carries the same sessionId +
+        # consolePid shape Test-Binding expects (pendingKicks()'s own map), so
+        # this reuses the identical, already-proven check rather than a
+        # parallel implementation.
+        if (-not (Test-Binding $g)) {
+            Log "WARN kick refused for goal $($g.id): consolePid=$cpid does not match its own recorded window (stale/reused pid)"
+            continue
+        }
         $r = Send-Keys $cpid $KICK -ClearLineFirst
         if ($r.ok) {
             & node (Join-Path $Root 'hooks\goal.mjs') 'kicked' $g.id 2>$null | Out-Null

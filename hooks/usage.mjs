@@ -13,23 +13,45 @@ import { fileURLToPath } from "node:url";
 
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 const PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
-const POLICY_PATH = process.env.ACC_POLICY || "C:/code/guards/policy.json";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Phase 4 D1 (full-remediation-prompt.md): was a hardcoded absolute
+// "C:/code/guards/policy.json" -- a relocated repo (or this repo, running
+// anywhere but Kyle's exact machine path) would silently diverge onto stale
+// defaults instead of the real live policy. Lazy function, resolved on
+// every call, matching hooks/lane.mjs and hooks/covgate.mjs's own POLICY().
+const POLICY_PATH = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
 const CACHE_PATH =
   process.env.ACC_SCAN_CACHE || path.join(HERE, "..", "runner", "state", "scan-cache.json");
 
 // ---------------------------------------------------------------- policy
 
-// Used ONLY when policy.json is missing or unparseable. Context matches the
-// standing 400/600 (Kyle, 2026-07-31, set via the ACC dials; SUPERSEDES the
-// 2026-07-30 100/150 standing) so a broken policy file cannot silently change
-// the budget.
+// Used ONLY when policy.json is missing or unparseable, OR (Phase 4 D1,
+// full-remediation-prompt.md) to fill in a block a genuinely-parseable but
+// INCOMPLETE policy.json omits -- the real crash-open bug this was covering
+// for: a valid-JSON policy missing e.g. `runner` entirely used to reach
+// `policy.runner.statusFile` deep in budget.mjs's Stop handler and throw
+// there, AFTER the one-shot checkpoint latch had already been written --
+// main()'s top-level catch then failed the turn open SILENTLY (empty
+// output, no block), permanently losing the checkpoint instruction with no
+// trace but an error log line. Every block below is deep-merged in
+// loadPolicy() (same treatment context/week/rates already got), so a
+// partial policy.json is filled in field-by-field, not all-or-nothing.
+//
+// Context matches the standing 400/600 (Kyle, 2026-07-31, set via the ACC
+// dials; SUPERSEDES the 2026-07-30 100/150 standing) so a broken policy file
+// cannot silently change the budget.
 // week thresholds stay 0 = disabled ON PURPOSE: if we cannot read policy.json we
 // do not know the real limits, and a guessed kill switch fails silently and
 // expensively, while a disabled one fails visibly.
+// runner/subagents/review defaults are deliberately CONSERVATIVE, not a
+// copy of the live policy.json's generous values -- a fallback must never
+// grant more than Kyle explicitly configured.
 const DEFAULT_POLICY = {
   context: { softK: 400, hardK: 600 },
-  week: { amberTokens: 0, redTokens: 0 },
+  week: { amberTokens: 0, redTokens: 0, effectiveFrom: "" },
+  runner: { stopOnRed: true, statusFile: "SLICE-RUNNER.md", waitingGuard: true },
+  subagents: { mode: "allowlist", allow: [], maxPerSession: 1, exploreMaxReportLines: 80 },
+  review: { fullLeanReview: "manual-only", localFullSuiteInReview: false, maxFinders: 1 },
   // Rates are $ per million tokens, applied to the model families below.
   // These are ESTIMATES for relative attribution, not billing truth - correct
   // them in policy.json and every report follows.
@@ -44,13 +66,16 @@ const DEFAULT_POLICY = {
 
 export function loadPolicy() {
   try {
-    const raw = fs.readFileSync(POLICY_PATH, "utf8").replace(/^\uFEFF/, "");
+    const raw = fs.readFileSync(POLICY_PATH(), "utf8").replace(/^\uFEFF/, "");
     const p = JSON.parse(raw);
     return {
       ...DEFAULT_POLICY,
       ...p,
       context: { ...DEFAULT_POLICY.context, ...(p.context || {}) },
       week: { ...DEFAULT_POLICY.week, ...(p.week || {}) },
+      runner: { ...DEFAULT_POLICY.runner, ...(p.runner || {}) },
+      subagents: { ...DEFAULT_POLICY.subagents, ...(p.subagents || {}) },
+      review: { ...DEFAULT_POLICY.review, ...(p.review || {}) },
       rates: { ...DEFAULT_POLICY.rates, ...(p.rates || {}) },
     };
   } catch {

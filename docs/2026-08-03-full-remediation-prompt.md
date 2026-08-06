@@ -272,7 +272,65 @@ set, behavior is byte-identical to today. Fast tier + covgate green.
 
 ## Phase 4 — Fix the crash-open and the unlocked writes
 
-**Status: not started**
+**Status: DONE — commit (see next commit in this branch)**
+
+Shipped 2026-08-06, all four sub-fixes:
+
+- **D1 (crash-open policy).** `usage.mjs`'s `DEFAULT_POLICY` now covers
+  `runner`/`subagents`/`review` (conservative defaults — empty subagent
+  allowlist, `maxFinders:1` — never more generous than an operator
+  explicitly configured), deep-merged field-by-field like `context`/`week`/
+  `rates` already were. The REAL bug found wasn't a raw crash: `main()`'s
+  top-level catch already fails open silently, but the budget latch is
+  written BEFORE the throw, so a genuinely incomplete policy.json silently
+  ate the checkpoint instruction forever (empty Stop output, latch
+  permanently blocking any future re-block for that session) — confirmed
+  red first, fixed, confirmed the block now actually reaches the model.
+  `usage.mjs`'s hardcoded `C:/code/guards/policy.json` fallback now resolves
+  relative to `HERE`, matching `lane.mjs`/`covgate.mjs`'s own `POLICY()`.
+- **D2 (unlocked writes).** `goal.mjs`'s `write()` is tmp+rename now, and
+  every read-modify-write sequence (`bindSession`, `appendCycle`,
+  `setStatus`, `recordTurnEnd`, `markKicked`, `resumeGoal`) is wrapped in a
+  new `withGoalLock` — same cross-process exclusive-file-create mutex
+  `kernel/ledger.mjs`'s `withDecisionLock` uses (OI-019), keyed per goal id.
+  Reproduced directly before fixing: 30 truly-concurrent `appendCycle`
+  calls against the same goal from separate processes landed 24/30 and
+  27/30 (real lost updates); 30/30 after. Same tmp+rename treatment for
+  `budget.mjs`'s `tier.json` cache and clear-request files, and separately
+  for `engine.mjs`'s vault/config reads and writes — a corrupt `vault.json`
+  used to hard-crash every engine command (confirmed red first, no
+  `engine.test.mjs` existed before this); it now reads as empty instead.
+- **D4 (PID-reuse-as-alive).** `watcher/clearbot.ps1`'s `Invoke-Kicks` had
+  no binding cross-check at all (only `Get-Process -Id $cpid`, which proves
+  SOME process holds that pid, not that it's still the session's own
+  console). Now reuses the exact same `Test-Binding` function cd/clear
+  requests already use — `goal.mjs pending`'s output already carries the
+  matching `sessionId`+`consolePid` shape, so this is the identical,
+  already-proven check, not a parallel implementation. **Not verified on
+  Windows** (this session has no Windows machine) — written and reasoned
+  through carefully, consistent with this repo's own established precedent
+  for POSIX/Windows-only changes made without local verification (see
+  OI-010's note); flag for a real smoke test.
+- **D3 (swallowed-kick stall).** New `reapStaleKicks` in `goal.mjs`: a kick
+  clearbot believes it delivered but with no sign of life (a turn-end
+  recorded AFTER the kick) within `goals.kickStaleMinutes` (default 5) gets
+  re-armed automatically instead of stranding the goal until a human
+  notices. Wired into the `pending` CLI before `pendingKicks`, same
+  same-call-picks-it-up ordering as Phase 1's `reapCeilings`.
+
+`OI-033` (guards ledger) extended to include `engine.mjs`, which joined the
+same "can't clear covgate's floor today" category — pre-existing (zero
+tests existed before this session), not introduced here; Phase 4 added 3
+tests proving its own specific fix, not comprehensive coverage (that's
+Phase 7's job, and `engine.mjs`'s hardcoded, non-`ACC_ROOT`-overridable
+`ROOT` is a second gap noted for that pass).
+
+Verified: `node --test hooks/goal.test.mjs` (62/62, red-first throughout —
+the D1 latch-eaten-silently bug, the D2 cross-process race, and every D3
+scenario were all confirmed failing against the pre-fix code before being
+fixed), `node --test hooks/engine.test.mjs` (3/3, red-first for the
+corrupt-vault case). `node hooks/covgate.mjs`: `goal.mjs` 100%/100%/94.2%.
+Full `npm test`: 458/459 (1 pre-existing unrelated `lane.test.mjs` flake).
 
 The reliability regressions that reintroduce the exact silent-stall class
 this system exists to prevent.

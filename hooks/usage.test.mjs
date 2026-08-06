@@ -234,6 +234,34 @@ test("costOfTranscript defaults to the live policy's rates when none are passed"
   delete process.env.ACC_POLICY;
 });
 
+test("Phase 4 D1: loadPolicy deep-merges runner/subagents/review field-by-field, same treatment as context/week/rates", async () => {
+  const sb = sandbox();
+  process.env.ACC_POLICY = path.join(sb.dir, "policy.json");
+  // A REALISTIC partial policy: runner.statusFile is customized, everything
+  // else in that block (and subagents/review entirely) is left unset --
+  // exactly the shape a hand-edit or a stale file produces.
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ runner: { statusFile: "CUSTOM.md" } }));
+  const u = await loadUsage(sb);
+  const p = u.loadPolicy();
+  assert.equal(p.runner.statusFile, "CUSTOM.md", "the field actually set in policy.json wins");
+  assert.equal(p.runner.stopOnRed, true, "a field NOT set falls back to the default rather than being undefined");
+  assert.equal(p.runner.waitingGuard, true, "same for a second omitted field in the same partially-set block");
+  assert.deepEqual(p.subagents.allow, [], "a block entirely absent from policy.json still gets its full default");
+  assert.equal(p.review.maxFinders, 1);
+  delete process.env.ACC_POLICY;
+});
+
+test("Phase 4 D1: DEFAULT_POLICY's runner/subagents/review are conservative, not a copy of a real policy.json's generous grants", async () => {
+  const sb = sandbox();
+  process.env.ACC_POLICY = path.join(sb.dir, "does-not-exist.json"); // forces the catch -> DEFAULT_POLICY
+  const u = await loadUsage(sb);
+  const p = u.loadPolicy();
+  assert.deepEqual(p.subagents.allow, [], "no subagent is pre-granted by a fallback the operator never configured");
+  assert.equal(p.subagents.maxPerSession, 1);
+  assert.equal(p.review.maxFinders, 1);
+  delete process.env.ACC_POLICY;
+});
+
 test("Phase 3: accActive() is true when ANY of ACC_SESSION/ACC_GOAL/ACC_PROFILE/ACC_PTY is set, false when none are", async () => {
   const sb = sandbox();
   const u = await loadUsage(sb);

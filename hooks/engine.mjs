@@ -28,8 +28,27 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG = path.join(ROOT, "config.json");
 const VAULT = path.join(ROOT, "vault.json");
 
-const readJson = (p, fallback) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : fallback);
-const writeJson = (p, j) => writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+// Phase 4 D2 (full-remediation-prompt.md): a corrupt vault.json (or
+// config.json) used to hard-crash with a raw JSON.parse stack trace on
+// EVERY engine command, since nothing here caught it -- the fallback
+// existed for the missing-file case but not the exists-but-corrupt one.
+// Same treatment as hooks/goal.mjs's readJson.
+const readJson = (p, fallback) => {
+  if (!existsSync(p)) return fallback;
+  try {
+    return JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    return fallback;
+  }
+};
+// tmp+rename instead of a bare writeFileSync -- a reader (another engine
+// invocation, or a hand-inspection) must never observe a half-written
+// vault.json or config.json.
+const writeJson = (p, j) => {
+  const tmp = `${p}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  writeFileSync(tmp, JSON.stringify(j, null, 2) + "\n");
+  renameSync(tmp, p);
+};
 const vault = () => readJson(VAULT, {});
 const fail = (m) => { console.error(m); process.exit(1); };
 const config = () => readJson(CONFIG, null) ?? fail(`no config.json at ${CONFIG}`);

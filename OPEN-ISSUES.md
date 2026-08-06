@@ -23,10 +23,19 @@ line under `## Resolved`.
 
 ## Open
 
-## OI-033 usage.mjs/budget.mjs/statusline.mjs cannot clear covgate's floor today
+## OI-033 usage.mjs/budget.mjs/statusline.mjs/engine.mjs cannot clear covgate's floor today
 - opened: 2026-08-06, found while shipping Phase 1 (docs/2026-08-03-full-
   remediation-prompt.md) — NOT introduced by that work, pre-existing.
-- where: `hooks/usage.mjs`, `hooks/budget.mjs`, `hooks/statusline.mjs`
+  `engine.mjs` joined this entry 2026-08-06 during Phase 4 D2: it had ZERO
+  tests before this session (confirmed: no `engine.test.mjs` existed) and
+  its `ROOT` is hardcoded relative to its own file location, not
+  `ACC_ROOT`-overridable the way every other hooks/ file is — a second,
+  smaller structural gap Phase 7's broader pass should also close. Phase 4
+  added exactly 3 focused tests proving its own D2 fix (corrupt-vault
+  handling, atomic writes) — genuine coverage of that specific change, not
+  a claim the file is comprehensively tested.
+- where: `hooks/usage.mjs`, `hooks/budget.mjs`, `hooks/statusline.mjs`,
+  `hooks/engine.mjs`
 - what: `budget.mjs`/`statusline.mjs` measure 0% ("no test imports it") —
   both are single-dispatch hook binaries only ever exercised via
   `execFileSync` subprocess spawns (their own test files' own comments

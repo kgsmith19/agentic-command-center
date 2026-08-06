@@ -12,6 +12,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 // goal.mjs captures ACC_GOALS_DIR into a module-load-time const, so isolating
 // every test used to mean a fresh tmpdir + a cache-busted re-import
@@ -712,5 +714,112 @@ test("a goal persists correctly after its directory is moved to a new location",
     process.env.ACC_GOALS_DIR = savedGoalsDir;
   } finally {
     fs.rmSync(newDir, { recursive: true, force: true });
+  }
+});
+
+test("Phase 4 D2: concurrent appendCycle calls against the SAME goal from separate PROCESSES never lose an update", async () => {
+  // Reproduced directly before this lock existed: 30 truly-concurrent
+  // appendCycle calls (each its own process, since in-process concurrency
+  // can't race synchronous code) landed 24/30 and 27/30 cycles -- read
+  // (goal.cycles) / modify / write with nothing serializing it across
+  // processes silently lost updates.
+  const g = m.createGoal({ text: "race probe" });
+  const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "goal.mjs");
+  const N = 30;
+  const fireAsync = () => new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-e", `
+      import(${JSON.stringify("file://" + HOOK)}).then((mm) => {
+        mm.appendCycle(${JSON.stringify(g.id)}, { sessionId: "s", ctx: 1, text: "x" });
+      });
+    `], { env: { ...process.env, ACC_GOALS_DIR: GOALS_DIR } });
+    child.on("close", resolve);
+  });
+  await Promise.all(Array.from({ length: N }, fireAsync));
+  assert.equal(m.readGoal(g.id).cycles, N, `expected all ${N} concurrent cycles counted, none lost to the race`);
+});
+
+// ------------------------------------------------------ Phase 4 D3: stale kicks
+
+test("reapStaleKicks re-arms a kick with no sign of life past the stale window", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(60), consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id); // needsKick -> false, lastKickAt -> now
+  assert.equal(m.readGoal(g.id).needsKick, false);
+
+  const farFuture = Date.now() + 10 * 60_000; // 10 min later, past a 5-min default window
+  const rearmed = m.reapStaleKicks(farFuture, {});
+  assert.deepEqual(rearmed, [g.id]);
+  assert.equal(m.readGoal(g.id).needsKick, true, "re-armed so clearbot tries the kick again");
+});
+
+test("reapStaleKicks leaves a kick alone when a turn-end (sign of life) landed after it", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(61), consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id);
+  m.recordTurnEnd(g.id, {}); // the kick worked -- a turn ended afterward
+
+  const farFuture = Date.now() + 10 * 60_000;
+  assert.deepEqual(m.reapStaleKicks(farFuture, {}), [], "a real turn-end after the kick means it landed -- nothing to re-arm");
+  assert.equal(m.readGoal(g.id).needsKick, true, "recordTurnEnd itself already re-arms needsKick for the NEXT kick -- untouched by reapStaleKicks");
+});
+
+test("reapStaleKicks does nothing before the stale window has elapsed", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(62), consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id);
+  assert.deepEqual(m.reapStaleKicks(Date.now() + 1000, {}), [], "1 second later is well inside the default 5-minute window");
+  assert.equal(m.readGoal(g.id).needsKick, false);
+});
+
+test("reapStaleKicks does nothing for a goal that was never kicked, or already needs one", async () => {
+  const { m } = await loadGoal();
+  const neverKicked = m.createGoal({ text: "t1" });
+  m.bindSession({ sessionId: SID(63), consolePid: LIVE, goalId: neverKicked.id }); // needsKick already true from binding
+  const alreadyPending = m.createGoal({ text: "t2" });
+  m.bindSession({ sessionId: SID(64), consolePid: LIVE, goalId: alreadyPending.id });
+  m.markKicked(alreadyPending.id);
+  m.recordTurnEnd(alreadyPending.id, {}); // re-arms needsKick=true for a NEW kick
+
+  const farFuture = Date.now() + 10 * 60_000;
+  assert.deepEqual(m.reapStaleKicks(farFuture, {}), []);
+});
+
+test("reapStaleKicks honors a policy-configured kickStaleMinutes dial", async () => {
+  const { m } = await loadGoal();
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(65), consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id);
+  const twoMinLater = Date.now() + 2 * 60_000;
+  assert.deepEqual(m.reapStaleKicks(twoMinLater, { kickStaleMinutes: 5 }), [], "still under a 5-minute configured window");
+  assert.deepEqual(m.reapStaleKicks(twoMinLater, { kickStaleMinutes: 1 }), [g.id], "past a tighter 1-minute configured window");
+});
+
+test("CLI: main() 'pending' calls reapStaleKicks before pendingKicks, re-arming and kicking in the SAME call", () => {
+  const g = m.createGoal({ text: "t" });
+  m.bindSession({ sessionId: SID(66), consolePid: LIVE, goalId: g.id });
+  m.markKicked(g.id);
+
+  const savedPolicy = process.env.ACC_POLICY;
+  const polPath = path.join(GOALS_DIR, "stale-kick-policy.json");
+  process.env.ACC_POLICY = polPath;
+  fs.writeFileSync(polPath, JSON.stringify({ goals: { kickStaleMinutes: 1 } }));
+  try {
+    // Simulate "well past stale" without waiting for real time to pass: back-date
+    // lastKickAt AND boundAt directly, the same shape a real stale kick would
+    // have on disk -- pendingKicks' own tuiReadySettleMs filter would otherwise
+    // reject a goal bound only milliseconds ago (real Date.now() inside main(),
+    // not test-controlled).
+    const raw = JSON.parse(fs.readFileSync(path.join(GOALS_DIR, `${g.id}.json`), "utf8"));
+    raw.lastKickAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    raw.boundAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    fs.writeFileSync(path.join(GOALS_DIR, `${g.id}.json`), JSON.stringify(raw, null, 2) + "\n");
+
+    const printed = JSON.parse(runMain(["pending"]));
+    assert.ok(printed.some((k) => k.id === g.id), "the re-armed goal is kickable in the SAME pending call, not the next poll");
+  } finally {
+    if (savedPolicy === undefined) delete process.env.ACC_POLICY; else process.env.ACC_POLICY = savedPolicy;
   }
 });

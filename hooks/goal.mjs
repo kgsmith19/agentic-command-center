@@ -73,6 +73,14 @@ const KICK_SETTLE_MS_DEFAULT = 90_000;
 // While Kyle is actively prompting this console, stay out of his way. The hold
 // EXPIRES, so walking away mid-conversation still self-heals into autonomy.
 const HUMAN_HOLD_MS_DEFAULT = 10 * 60_000;
+// Phase 4 D3 (full-remediation-prompt.md): a kick clearbot BELIEVES it
+// delivered (Send-Keys reported ok, markKicked ran) can still miss --
+// TUI not actually ready despite the settle window, a dropped keystroke.
+// Today nothing notices: needsKick stays false forever, no new cycle or
+// turn-end ever arrives, and the goal silently strands until a human
+// happens to look. If no sign of life (a turn-end AFTER the kick) shows up
+// within this window, re-arm and let clearbot try again.
+const KICK_STALE_MS_DEFAULT = 5 * 60_000;
 
 const nowIso = () => new Date().toISOString();
 
@@ -103,10 +111,72 @@ function safeId(id) {
   return String(id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
 }
 
+// Phase 4 D2 (full-remediation-prompt.md): tmp+rename instead of a bare
+// writeFileSync -- a reader (readGoal, listGoals, or another process) must
+// never be able to observe a half-written file (a crash or a concurrent
+// read mid-write) and silently treat it as "no goal" or corrupt JSON. The
+// rename is the atomic step; same pattern usage.mjs's scan cache already
+// uses, now the second atomic write in the codebase rather than the only
+// one.
+function atomicWrite(file, text) {
+  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
 function write(goal) {
   goal.updatedAt = nowIso();
-  fs.writeFileSync(goalPath(goal.id), JSON.stringify(goal, null, 2) + "\n");
+  atomicWrite(goalPath(goal.id), JSON.stringify(goal, null, 2) + "\n");
   return goal;
+}
+
+// Phase 4 D2: every read-modify-write sequence below (bindSession,
+// appendCycle, setStatus, recordTurnEnd, markKicked, resumeGoal) was
+// read-then-mutate-then-write with nothing serializing it across
+// PROCESSES -- a concurrent write (clearbot's poll loop and a hook fire
+// landing close together, or two hook fires) could read the same stale
+// goal and one write's changes (lastKickAt, needsKick, turnEndedAt) would
+// silently overwrite the other's. Same cross-process exclusive-file-create
+// mutex kernel/ledger.mjs's withDecisionLock uses (OI-019), keyed per goal
+// id rather than per run.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+const LOCK_TIMEOUT_MS = Number(process.env.ACC_GOAL_LOCK_TIMEOUT_MS) || 3000;
+const LOCK_STALE_MS = Number(process.env.ACC_GOAL_LOCK_STALE_MS) || 5000;
+
+function withGoalLock(id, fn, { timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_STALE_MS } = {}) {
+  // Only the goals dir, not ensureDirs()'s full pair -- the lock file lives
+  // alongside goal-<id>.json, and setStatus's own archive step (which DOES
+  // need doneDir) already has its own try/catch for exactly a blocked/
+  // unwritable done dir. Calling the broader ensureDirs() here would throw
+  // BEFORE that established handling ever runs.
+  fs.mkdirSync(goalsDir(), { recursive: true });
+  const lockPath = goalPath(id) + ".lock";
+  const start = Date.now();
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lockPath, "wx"));
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try {
+        if (Date.now() - fs.statSync(lockPath).mtimeMs > staleMs) {
+          fs.rmSync(lockPath, { force: true });
+          continue;
+        }
+      } catch { /* lock vanished between the stat and here -- fine, loop retries */ }
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(`goal lock for ${id} still held after ${timeoutMs}ms`);
+      }
+      sleepSync(5 + Math.floor(Math.random() * 10));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lockPath, { force: true });
+  }
 }
 
 export function readGoal(id) {
@@ -225,51 +295,61 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // same way an auto-clear does.
 export function bindSession({ sessionId, consolePid, cwd, goalId }) {
   ensureDirs();
-  let goal = goalId ? readGoal(goalId) : null;
-  if (goal && goal.status !== "active") goal = null;
-  if (!goal && consolePid) {
-    goal = activeGoals().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
+  // Discovery read, outside the lock: which goal (if any) this call is even
+  // about. The mutation below re-reads INSIDE the lock rather than trusting
+  // this snapshot, since another process could have changed it in between.
+  let found = goalId ? readGoal(goalId) : null;
+  if (found && found.status !== "active") found = null;
+  if (!found && consolePid) {
+    found = activeGoals().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
   }
-  if (!goal) return null;
+  if (!found) return null;
 
-  // A non-UUID id (garbage, or simply absent) never touches sessionId/
-  // needsKick/boundAt below -- it is inert, not "no-op with side effects".
-  const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
-  const fresh = validId !== null && goal.sessionId !== validId;
-  if (validId !== null) goal.sessionId = validId;
-  if (consolePid) goal.consolePid = Number(consolePid);
-  if (!goal.cwd && cwd) goal.cwd = cwd;
-  if (fresh) {
-    // A new session for a live goal is exactly the state that needs a prompt
-    // typed into it - whether this is the launch or the 4th resume.
-    goal.needsKick = true;
-    goal.boundAt = nowIso();
-  }
-  return write(goal);
+  return withGoalLock(found.id, () => {
+    const goal = readGoal(found.id);
+    if (!goal || goal.status !== "active") return null;
+
+    // A non-UUID id (garbage, or simply absent) never touches sessionId/
+    // needsKick/boundAt below -- it is inert, not "no-op with side effects".
+    const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
+    const fresh = validId !== null && goal.sessionId !== validId;
+    if (validId !== null) goal.sessionId = validId;
+    if (consolePid) goal.consolePid = Number(consolePid);
+    if (!goal.cwd && cwd) goal.cwd = cwd;
+    if (fresh) {
+      // A new session for a live goal is exactly the state that needs a prompt
+      // typed into it - whether this is the launch or the 4th resume.
+      goal.needsKick = true;
+      goal.boundAt = nowIso();
+    }
+    return write(goal);
+  });
 }
 
 export function appendCycle(id, { sessionId, ctx, text, costUsd }) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.cycles = Number(goal.cycles || 0) + 1;
-  // Phase 1: real per-cycle cost (budget.mjs computes it via usage.mjs's
-  // costOfTranscript before calling this), accumulated for the dollar
-  // ceiling. Omitted/non-finite is treated as 0 -- an unpriced cycle must
-  // never corrupt the running total into NaN.
-  const add = Number.isFinite(costUsd) ? costUsd : 0;
-  goal.totalCostUsd = Number(goal.totalCostUsd || 0) + add;
-  write(goal);
-  const body = String(text || "").trim().slice(0, 4000);
-  try {
-    fs.appendFileSync(
-      logPath(id),
-      `\n### Cycle ${goal.cycles} - ${nowIso()}\n` +
-        `_session ${sessionId || "?"} ended at ${Math.round(Number(ctx || 0) / 1000)}k_\n\n` +
-        (body || "_(no closing summary captured)_") +
-        "\n"
-    );
-  } catch {}
-  return goal;
+  return withGoalLock(id, () => {
+    const goal = readGoal(id);
+    if (!goal) return null;
+    goal.cycles = Number(goal.cycles || 0) + 1;
+    // Phase 1: real per-cycle cost (budget.mjs computes it via usage.mjs's
+    // costOfTranscript before calling this), accumulated for the dollar
+    // ceiling. Omitted/non-finite is treated as 0 -- an unpriced cycle must
+    // never corrupt the running total into NaN.
+    const add = Number.isFinite(costUsd) ? costUsd : 0;
+    goal.totalCostUsd = Number(goal.totalCostUsd || 0) + add;
+    write(goal);
+    const body = String(text || "").trim().slice(0, 4000);
+    try {
+      fs.appendFileSync(
+        logPath(id),
+        `\n### Cycle ${goal.cycles} - ${nowIso()}\n` +
+          `_session ${sessionId || "?"} ended at ${Math.round(Number(ctx || 0) / 1000)}k_\n\n` +
+          (body || "_(no closing summary captured)_") +
+          "\n"
+      );
+    } catch {}
+    return goal;
+  });
 }
 
 // The tail is what gets injected into the next session, so it is bounded here
@@ -286,24 +366,26 @@ export function logTail(id, maxChars = 3000) {
 }
 
 export function setStatus(id, status, why) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.status = status;
-  goal.needsKick = false;
-  if (why) goal.why = String(why).slice(0, 500);
-  write(goal);
-  if (status === "done" || status === "blocked" || status === "dead") {
-    try {
-      fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
-    } catch {}
-    // Archive so the live directory only ever holds work in flight.
-    try {
-      ensureDirs();
-      fs.renameSync(goalPath(id), path.join(doneDir(), `${safeId(id)}.json`));
-      fs.renameSync(logPath(id), path.join(doneDir(), `${safeId(id)}.log.md`));
-    } catch {}
-  }
-  return goal;
+  return withGoalLock(id, () => {
+    const goal = readGoal(id);
+    if (!goal) return null;
+    goal.status = status;
+    goal.needsKick = false;
+    if (why) goal.why = String(why).slice(0, 500);
+    write(goal);
+    if (status === "done" || status === "blocked" || status === "dead") {
+      try {
+        fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
+      } catch {}
+      // Archive so the live directory only ever holds work in flight.
+      try {
+        ensureDirs();
+        fs.renameSync(goalPath(id), path.join(doneDir(), `${safeId(id)}.json`));
+        fs.renameSync(logPath(id), path.join(doneDir(), `${safeId(id)}.log.md`));
+      } catch {}
+    }
+    return goal;
+  });
 }
 
 // What clearbot asks for every cycle. Everything that makes a kick unsafe is
@@ -379,21 +461,54 @@ export function reapCeilings(now = Date.now(), dials = {}) {
   return paused;
 }
 
+// Phase 4 D3: a kick clearbot believes it delivered but the TUI silently
+// missed. "Sign of life" is a turn-end recorded AFTER the kick was sent --
+// recordTurnEnd fires on every under-budget Stop, so if the kick actually
+// landed, one should show up well within the stale window. No sign of life
+// past that window means the kick missed; re-arm rather than strand the
+// goal until a human notices.
+export function reapStaleKicks(now = Date.now(), dials = {}) {
+  const staleMs = (Number(dials.kickStaleMinutes) || 0) * 60000 || KICK_STALE_MS_DEFAULT;
+  const rearmed = [];
+  for (const g of activeGoals()) {
+    if (g.needsKick || !g.lastKickAt) continue;
+    if (now - Date.parse(g.lastKickAt) < staleMs) continue;
+    const sawLifeSinceKick = g.turnEndedAt && Date.parse(g.turnEndedAt) > Date.parse(g.lastKickAt);
+    if (sawLifeSinceKick) continue;
+    withGoalLock(g.id, () => {
+      // Re-verify inside the lock: another process may have already
+      // re-armed it, recorded a fresh turn-end, or moved it off "active"
+      // in the time between the scan above and acquiring this lock.
+      const fresh = readGoal(g.id);
+      if (!fresh || fresh.status !== "active" || fresh.needsKick || !fresh.lastKickAt) return;
+      if (now - Date.parse(fresh.lastKickAt) < staleMs) return;
+      const freshSawLife = fresh.turnEndedAt && Date.parse(fresh.turnEndedAt) > Date.parse(fresh.lastKickAt);
+      if (freshSawLife) return;
+      fresh.needsKick = true;
+      write(fresh);
+      rearmed.push(fresh.id);
+    });
+  }
+  return rearmed;
+}
+
 // The `resume`/`unpause` CLI verb's implementation. Only a genuinely paused
 // goal can be resumed -- resuming an active goal (or a nonexistent id) is
 // refused rather than silently no-op'd, so a caller can tell success from
 // "there was nothing to do".
 export function resumeGoal(id) {
-  const goal = readGoal(id);
-  if (!goal || goal.status !== "paused") return null;
-  goal.status = "active";
-  goal.needsKick = true;
-  goal.why = "";
-  write(goal);
-  try {
-    fs.rmSync(path.join(alertsDir(), `${safeId(id)}.ceiling.json`), { force: true });
-  } catch {}
-  return goal;
+  return withGoalLock(id, () => {
+    const goal = readGoal(id);
+    if (!goal || goal.status !== "paused") return null;
+    goal.status = "active";
+    goal.needsKick = true;
+    goal.why = "";
+    write(goal);
+    try {
+      fs.rmSync(path.join(alertsDir(), `${safeId(id)}.ceiling.json`), { force: true });
+    } catch {}
+    return goal;
+  });
 }
 
 // Called from the Stop hook on every turn end of a goal session that did NOT go
@@ -402,20 +517,24 @@ export function resumeGoal(id) {
 // firing it is safe. `human` marks a turn Kyle prompted, which backs the kick
 // off - see HUMAN_HOLD_MS_DEFAULT.
 export function recordTurnEnd(id, { human } = {}) {
-  const goal = readGoal(id);
-  if (!goal || goal.status !== "active") return null;
-  goal.needsKick = true;
-  goal.turnEndedAt = nowIso();
-  if (human) goal.humanPromptAt = nowIso();
-  return write(goal);
+  return withGoalLock(id, () => {
+    const goal = readGoal(id);
+    if (!goal || goal.status !== "active") return null;
+    goal.needsKick = true;
+    goal.turnEndedAt = nowIso();
+    if (human) goal.humanPromptAt = nowIso();
+    return write(goal);
+  });
 }
 
 export function markKicked(id) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.needsKick = false;
-  goal.lastKickAt = nowIso();
-  return write(goal);
+  return withGoalLock(id, () => {
+    const goal = readGoal(id);
+    if (!goal) return null;
+    goal.needsKick = false;
+    goal.lastKickAt = nowIso();
+    return write(goal);
+  });
 }
 
 // ------------------------------------------------------------- CLI
@@ -479,6 +598,7 @@ export function main() {
         kickSettleSeconds: pol?.goals?.kickSettleSeconds,
         humanHoldMinutes: pol?.goals?.humanHoldMinutes,
         tuiReadySettleMs: pol?.tui?.readySettleMs,
+        kickStaleMinutes: pol?.goals?.kickStaleMinutes,
       };
       ceilingDials = {
         maxCycles: pol?.goals?.maxCycles,
@@ -489,6 +609,9 @@ export function main() {
     // Phase 1: a goal THIS SAME call just paused must not be kicked below --
     // reap runs first, so pendingKicks's activeGoals() read never sees it.
     reapCeilings(Date.now(), ceilingDials);
+    // Phase 4 D3: same ordering logic -- a goal re-armed THIS call must be
+    // picked up by pendingKicks below, not wait for the next poll.
+    reapStaleKicks(Date.now(), dials);
     console.log(JSON.stringify(pendingKicks(Date.now(), dials)));
     return;
   }

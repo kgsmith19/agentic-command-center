@@ -230,6 +230,30 @@ test("Phase 1: SessionStart warns instead of saying nothing when the adopted goa
   assert.match(out, new RegExp(`resume ${g.id}`));
 });
 
+test("Phase 4 D1: a valid-JSON-but-incomplete policy.json (missing runner/subagents/review) still delivers the checkpoint block, not a silently-consumed latch", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acc-budget-crash-"));
+  fs.mkdirSync(path.join(root, "runner", "state"), { recursive: true });
+  fs.mkdirSync(path.join(root, "cfg"), { recursive: true });
+  const policyPath = path.join(root, "policy.json");
+  // A REALISTIC incomplete policy: valid JSON, only the context block present
+  // -- e.g. a hand-edit that dropped a section, not a parse failure loadPolicy
+  // already catches.
+  fs.writeFileSync(policyPath, JSON.stringify({ context: { softK: 40, hardK: 50 } }));
+  const sb = { root, policyPath };
+  const sid = "s-incomplete-policy";
+  seedWindow(sb, sid);
+  const t = writeTranscript(sb, sid, 60000); // over hardK 50 -- reaches the block message, which dereferences policy.runner.statusFile
+  // The REAL bug here is not a crash: main()'s top-level catch fails open
+  // silently (empty stdout, exit 0) -- but the budget latch is written
+  // BEFORE the throw, so the checkpoint instruction is lost FOREVER (the
+  // latch guard skips re-blocking on every future Stop for this session).
+  // "doesn't throw" alone would prove nothing; the hook must actually
+  // deliver its intended block.
+  const out = runStop(sb, { sid, transcript: t, active: false });
+  assert.match(out, /"decision":"block"/, "the checkpoint instruction must still reach the model, not be silently eaten");
+  assert.doesNotMatch(out, /^$/, "empty output means the turn ended with NO checkpoint guidance at all");
+});
+
 test("under hard: stop passes silently", () => {
   const sb = sandbox();
   const sid = "s-under";
