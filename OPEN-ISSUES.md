@@ -264,9 +264,46 @@ line under `## Resolved`.
   `npm test` (432/433 excluding known skips, same pre-existing unrelated
   root-permissions artifact as above), `node hooks/covgate.mjs` scoped to
   the touched file (`kernel/verifier.mjs` 100%/100%/100%, PASS).
-  Progress: 5/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
-  `kernel/run.mjs`, `kernel/ledger.mjs`, `kernel/verifier.mjs`). Remaining, in
-  rough risk order: `kernel/autonomy.mjs`, `kernel/policy.mjs`,
+  UPDATE 2026-08-06 (same cycle): sixth module done, `kernel/autonomy.mjs`.
+  Found a fifth REAL, live bug — a third instance of this session's recurring
+  TOCTOU shape: `updateAfterRun`'s `readAutonomy()` -> mutate ->
+  `writeAutonomy()` is a read-modify-write with no synchronization. Nothing
+  in this module or `run.mjs` guarantees only one kernel process is ever
+  mid-run at once — that is an ADAPTER-level property of
+  `kernel/adapters/claude-code.mjs`'s launch lane, not a `run.mjs`/
+  `autonomy.mjs` invariant, and this file's own header advertises "swapping
+  harnesses is one value in policy.json plus one new file," so a future or
+  third-party adapter need not serialize at all. Reproduced live: 15
+  concurrent callers against a state that should transition "tighten" exactly
+  once produced 3-4 duplicate log entries; one run showed literal data loss —
+  4 processes each believed they logged a decision while only 3 actually
+  landed on `autonomy.json`. Fixed by reusing the same `withLock` primitive a
+  third time: the whole `updateAfterRun` body now runs under
+  `withLock("autonomy", ...)`. `ledger.mjs`'s `sleepSync` helper (already
+  private to its own lock implementation) is now exported so this module (and
+  its test) can reuse it rather than duplicating the `Atomics.wait` pattern.
+  New test in `kernel/autonomy.test.mjs`, same test-seam approach as the
+  `ledger.mjs` fix (`ACC_AUTONOMY_UPDATE_DELAY_MS`, widening the natural
+  microseconds-wide race window on demand for a deterministic regression test
+  rather than a timing coin flip): 5 concurrent real processes against a
+  state that should tighten exactly once. First attempt at the assertion was
+  itself wrong, worth recording — it expected `runsLeft` to stay at 5 after
+  the fix, but that misunderstood the module's own correct semantics: with
+  proper serialization only the FIRST of the 5 calls trips "tighten"
+  (`runsLeft: 0 -> 5`), and each of the other 4, correctly serialized in turn,
+  decrements it by one — deterministically `5 - 4 = 1`, the exact behavior
+  the existing sequential "mid-tightening runs are decremented" test already
+  documents. Corrected before verifying green, so the checked-in test asserts
+  the right invariant (exactly one log entry, no lost writes) rather than a
+  bent one. Verified: `node --test kernel/autonomy.test.mjs` (5 repeated
+  runs, all green, 13/13), full `npm test` (433/434 excluding known skips,
+  same pre-existing unrelated root-permissions artifact as above), `node
+  hooks/covgate.mjs` scoped to the touched files (`kernel/autonomy.mjs`
+  100%/100%/97.6%, `kernel/ledger.mjs` 100%/100%/98.8% for the `sleepSync`
+  export, neither needs an override, both PASS).
+  Progress: 6/12 modules done (`kernel/guard.mjs`, `kernel/guardhook.mjs`,
+  `kernel/run.mjs`, `kernel/ledger.mjs`, `kernel/verifier.mjs`,
+  `kernel/autonomy.mjs`). Remaining, in rough risk order: `kernel/policy.mjs`,
   `kernel/contract.mjs`, `kernel/credentials.mjs`, `kernel/adapter.mjs`,
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 

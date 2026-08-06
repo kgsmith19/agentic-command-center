@@ -113,7 +113,7 @@ const lockFile = (name) => path.join(ledgerDir(), `${name}.lock`);
 // Atomics.wait blocks the calling thread synchronously (Node's main thread
 // supports this, unlike a browser main thread) — a real sleep, not a busy
 // spin that pins a CPU core while a sibling process holds the lock.
-function sleepSync(ms) {
+export function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
