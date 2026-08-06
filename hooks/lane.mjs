@@ -119,15 +119,32 @@ function ownerOf(slotDir) {
   try { return JSON.parse(fs.readFileSync(path.join(slotDir, "owner.json"), "utf8")); } catch { return null; }
 }
 
+// Grace window for a "provisional" reservation (see tryTake/tryAcquireOnce)
+// whose owner pid is dead. The two-step try-acquire/reown handshake
+// legitimately reserves a slot under a SHORT-LIVED CLI invocation's own pid
+// first, which exits almost immediately BY DESIGN, well before reownSlot
+// ever swaps in the real long-lived pid. Full-repo review (2026-08-06):
+// without this, "the reserving CLI process already exited" (expected,
+// happens on every handshake) read identically to "the slot was abandoned"
+// (a real crash), letting a competing acquirer steal a slot that was still
+// legitimately in the middle of being claimed. Same grace-beat duration as
+// the existing missing-owner.json case below, for consistency.
+const REOWN_GRACE_MS = 10000;
+
 // Stale = reclaimable. An unreadable owner.json counts once it is older than a
 // grace beat (the writer may be mid-write); a dead pid or an expired ttl
-// counts immediately.
+// counts immediately -- UNLESS the record is still provisional (mid
+// try-acquire/reown handshake), in which case a dead pid gets the same
+// grace beat instead of instant reclaim.
 function isStale(slotDir) {
   const o = ownerOf(slotDir);
   if (!o) {
     try { return Date.now() - fs.statSync(slotDir).mtimeMs > 10000; } catch { return true; }
   }
-  if (!pidAlive(o.pid)) return true;
+  if (!pidAlive(o.pid)) {
+    if (o.provisional) return Date.now() - Date.parse(o.at || 0) > REOWN_GRACE_MS;
+    return true;
+  }
   const ttl = Number(o.ttlMs) > 0 ? Number(o.ttlMs) : DEFAULTS.slotTtlMs;
   return Date.now() - Date.parse(o.at || 0) > ttl;
 }
@@ -136,8 +153,9 @@ function isStale(slotDir) {
 // The CLI (bottom of file) passes an explicit pid so a short-lived `node
 // hooks/lane.mjs try-acquire` invocation can hand a slot to a LONG-LIVED
 // process it doesn't own (a GUI-spawned claude session) without holding the
-// slot open itself.
-function tryTake(slotDir, label, ttlMs, pid = process.pid) {
+// slot open itself -- `provisional: true` (CLI-only, see tryAcquireOnce)
+// marks that handshake as still in flight, until reownSlot clears it.
+function tryTake(slotDir, label, ttlMs, pid = process.pid, provisional = false) {
   try {
     fs.mkdirSync(slotDir);
   } catch {
@@ -145,10 +163,9 @@ function tryTake(slotDir, label, ttlMs, pid = process.pid) {
     // Reclaim, then race for it again — losing the race is fine, someone won.
     try { fs.rmSync(slotDir, { recursive: true, force: true }); fs.mkdirSync(slotDir); } catch { return false; }
   }
-  fs.writeFileSync(
-    path.join(slotDir, "owner.json"),
-    JSON.stringify({ pid, label, at: new Date().toISOString(), ttlMs })
-  );
+  const record = { pid, label, at: new Date().toISOString(), ttlMs };
+  if (provisional) record.provisional = true;
+  fs.writeFileSync(path.join(slotDir, "owner.json"), JSON.stringify(record));
   return true;
 }
 
@@ -451,7 +468,7 @@ export function tryAcquireOnce(category, label, pid, ttlMs) {
   const ttl = Number(ttlMs) > 0 ? Number(ttlMs) : cfg.slotTtlMs;
   for (let i = 0; i < Math.max(1, cfg.slots); i++) {
     const slotDir = path.join(root, `slot-${i}`);
-    if (tryTake(slotDir, label, ttl, Number(pid) || process.pid)) return { ok: true, slot: i };
+    if (tryTake(slotDir, label, ttl, Number(pid) || process.pid, true)) return { ok: true, slot: i };
   }
   return { ok: false, slot: null, held: laneStatus(cat) };
 }
@@ -462,6 +479,9 @@ export function reownSlot(category, slotIndex, newPid) {
   const o = ownerOf(slotDir);
   if (!o) return { ok: false, reason: "no such slot/owner" };
   o.pid = Number(newPid) || o.pid;
+  // The handshake has landed -- from here the slot behaves normally
+  // (immediate reclaim on a dead owner pid), not on the reown-grace window.
+  delete o.provisional;
   try {
     fs.writeFileSync(path.join(slotDir, "owner.json"), JSON.stringify(o));
     return { ok: true };

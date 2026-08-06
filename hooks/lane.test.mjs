@@ -561,6 +561,29 @@ test("reownSlot hands an existing slot to a new pid; releaseSlot frees it", () =
   assert.equal(fs.existsSync(slotDir(r.slot, "interactive")), false);
 });
 
+test("Full-repo review (2026-08-06) regression: a slot just reserved via the two-step try-acquire/reown handshake survives its own (short-lived, now-dead) pid for a grace window, so reown can land", () => {
+  // tryAcquireOnce's own doc comment: the two-step try-acquire/reown
+  // handshake exists because at the moment a GUI launch reserves a slot it
+  // doesn't yet know the real child pid -- it reserves under its own
+  // SHORT-LIVED pid first, then re-owns to the real long-lived pid once
+  // spawned. That short-lived CLI invocation exits almost immediately by
+  // design -- its pid is dead within milliseconds of the reservation
+  // landing, well before reownSlot ever runs. Without a grace window, a
+  // competing acquirer sees a dead owner pid and reclaims the slot as
+  // abandoned, even though the handshake is still legitimately in flight.
+  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20, interactive: { slots: 1, minGapMs: 0 } });
+  const r = tryAcquireOnce("interactive", "gui-cli", 999999999, 60000); // pid already dead
+  assert.equal(r.ok, true, "sanity: the initial reservation succeeds");
+  const stolen = tryAcquireOnce("interactive", "thief", 424242, 60000);
+  assert.equal(stolen.ok, false, "a freshly-reserved handshake slot must not be reclaimable before reown has a chance to land");
+  const reowned = reownSlot("interactive", r.slot, 424243);
+  assert.equal(reowned.ok, true, "reown still lands normally once it runs");
+  const owner = JSON.parse(fs.readFileSync(path.join(slotDir(r.slot, "interactive"), "owner.json"), "utf8"));
+  assert.equal(owner.pid, 424243);
+  releaseSlot("interactive", r.slot);
+  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+});
+
 test("reownSlot on a slot that doesn't exist reports ok:false, not a throw", () => {
   const r = reownSlot("interactive", 99, 111);
   assert.equal(r.ok, false);
