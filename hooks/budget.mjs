@@ -132,8 +132,20 @@ function requestClear(p, policy, ctx) {
   }
 }
 
+// Full-repo review (2026-08-06): the only defense here used to be a bare
+// .slice(0, 40) -- no character filtering, unlike hooks/mission.mjs's own
+// safeId() (allowlists [A-Za-z0-9_-]) for the structurally identical problem
+// of turning an untrusted id into a filename. p.session_id is a Claude
+// Code-generated UUID under normal operation, but this hook trusts whatever
+// JSON arrives on stdin -- defense-in-depth means this file must not assume
+// that boundary always holds. path.join does NOT stop ".." segments from
+// escaping the intended directory (path.join("/a/b", "../../etc/passwd") ->
+// "/etc/passwd"), so an id containing ".." could previously reach
+// fs.writeFileSync with a target entirely outside runner/state. Same
+// allowlist as mission.mjs's safeId, for the same reason.
 export function statePath(sid, suffix) {
-  return path.join(STATE, `${String(sid || "unknown").slice(0, 40)}.${suffix}`);
+  const safe = String(sid || "unknown").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) || "unknown";
+  return path.join(STATE, `${safe}.${suffix}`);
 }
 
 export function readJson(p, dflt) {

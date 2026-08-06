@@ -51,6 +51,26 @@ test("statePath joins under runner/state, truncating a session id to 40 chars, a
   assert.ok(statePath(undefined, "window").endsWith("unknown.window"));
 });
 
+test("Full-repo review (2026-08-06) regression: statePath sanitizes session_id, refusing to let a path-traversal id escape runner/state", () => {
+  // Corroborated MEDIUM finding: statePath's only defense was a bare
+  // .slice(0, 40) -- no character filtering, unlike hooks/mission.mjs's own
+  // safeId() (which allowlists [A-Za-z0-9_-]) for the structurally identical
+  // problem of turning an untrusted id into a filename. p.session_id is a
+  // Claude Code-generated UUID under normal operation, but the hook trusts
+  // whatever JSON arrives on stdin -- defense-in-depth means this file must
+  // not assume that boundary always holds. path.join does NOT stop ".."
+  // segments from escaping the intended directory (path.join("/a/b",
+  // "../../etc/passwd") -> "/etc/passwd"), so an id like
+  // "../../../../etc/evil" reached fs.writeFileSync with a target entirely
+  // outside runner/state before this fix.
+  const traversal = statePath("../../../../etc/evil", "window");
+  assert.ok(
+    traversal.startsWith(path.join(BASE, "runner", "state")),
+    `statePath must stay confined to runner/state, got: ${traversal}`
+  );
+  assert.ok(!traversal.includes(".."), `the sanitized path must not carry a literal ".." segment: ${traversal}`);
+});
+
 test("readJson returns the parsed file, or the default on missing/corrupt", () => {
   const f = path.join(BASE, "runner", "state", "rj-test.json");
   fs.writeFileSync(f, JSON.stringify({ a: 1 }));
