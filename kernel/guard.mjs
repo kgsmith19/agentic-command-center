@@ -48,11 +48,30 @@ const verdict = (allow, rule, reason, tool, target = null) => ({ allow, rule, re
 // prefix like "npm test" chained via &&) and skip vault-key scoping outright
 // — a full allowedActions.vaultKeys bypass. `norm()` below already
 // lowercases for this exact reason; this regex now matches that discipline.
+// Full-repo review (2026-08-06): this regex used to require the whole
+// "apply <file> <KEY...>" shape to match in one piece, so any key spelling
+// the shell would treat specially (quoted, escaped, split by empty-string
+// concatenation like `OPENAI""_KEY`) made the WHOLE match fail — and a
+// failed match returned null, "no smuggled key found", letting the command
+// fall through to the ordinary bashPatterns check and be ALLOWED. This
+// guard parses a command STRING; only the real shell does real word-
+// splitting and quote-removal, so a command whose apply arguments don't
+// parse as plain bare tokens must be treated as UNPARSEABLE and denied
+// outright — never as "no smuggling here", which is the wrong default for
+// something this guard cannot fully see through.
 function vaultViolation(command, allowedKeys) {
-  const m = command.match(/engine\.mjs["']?\s+apply\s+(\S+)((?:\s+[A-Za-z_][A-Za-z0-9_]*)+)/i);
-  if (!m) return null;
-  const requested = m[2].trim().split(/\s+/);
-  const notGranted = requested.filter((k) => !allowedKeys.includes(k));
+  const shape = /engine\.mjs["']?\s+apply\s+(\S+)/i.exec(command);
+  if (!shape) return null; // no apply invocation of any shape — not this rule's concern
+  // Everything after "apply <file>" up to the next shell metacharacter (the
+  // real shell's own command separators) is the args region.
+  const afterFile = command.slice(shape.index + shape[0].length);
+  const argsRegion = afterFile.split(/&&|;|\|/)[0].trim();
+  const tokens = argsRegion ? argsRegion.split(/\s+/) : [];
+  const allBare = tokens.every((t) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(t));
+  if (!allBare) {
+    return ["(unparseable apply arguments — refused rather than risk a smuggled key the shell would see differently)"];
+  }
+  const notGranted = tokens.filter((k) => !allowedKeys.includes(k));
   return notGranted.length ? notGranted : null;
 }
 

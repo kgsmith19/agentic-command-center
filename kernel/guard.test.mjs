@@ -129,6 +129,36 @@ test("a case-varied engine.mjs filename cannot dodge the vault-key gate (Windows
   assert.equal(d2.rule, "vaultKeys");
 });
 
+// Full-repo review (2026-08-06): vaultViolation parsed the COMMAND STRING
+// with a regex requiring each key to be a bare `[A-Za-z_][A-Za-z0-9_]*`
+// token -- but the real shell does word-splitting and quote-removal, not
+// this guard. Any key spelling that isn't a bare token (quoted, escaped,
+// split by empty-string concatenation) made the regex fail to match AT
+// ALL, and vaultViolation returned null -- "no smuggled key found" -- which
+// let the command fall through to the ordinary bashPatterns check and be
+// ALLOWED. The nastiest form: `OPENAI""_KEY` -- the regex's own capture
+// group stops at the first `"`, so the guard believes it validated key
+// "OPENAI" while the real shell (which drops empty-string concatenation)
+// applies "OPENAI_KEY".
+test("a quoted or otherwise-non-bare vault key cannot dodge the gate by making the regex simply not match", () => {
+  const base = 'npm test && node C:/code/guards/hooks/engine.mjs apply .env ';
+  for (const smuggled of [
+    base + '"STRIPE_SECRET"',
+    base + "'STRIPE_SECRET'",
+    base + '$\'STRIPE_SECRET\'',
+    base + 'OPENAI""_KEY', // the regex's own capture stops at the quote; the real shell applies OPENAI_KEY
+  ]) {
+    const d = decide(ev("Bash", { command: smuggled }), ctx());
+    assert.equal(d.allow, false, `must be denied: ${smuggled}`);
+    assert.equal(d.rule, "vaultKeys", `must be denied specifically as a vault-key violation, not fall through to bashPatterns: ${smuggled}`);
+  }
+});
+
+test("a genuinely bare, unquoted vault key still works exactly as before (no regression from the stricter parse)", () => {
+  const allowed = 'npm test && node C:/code/guards/hooks/engine.mjs apply .env ALLOWED_KEY';
+  assert.equal(decide(ev("Bash", { command: allowed }), ctx()).allow, true);
+});
+
 test("network and subagent grants come from the contract", () => {
   assert.equal(decide(ev("WebFetch", { url: "https://registry.npmjs.org/x" }), ctx()).allow, true);
   assert.equal(decide(ev("WebFetch", { url: "https://evil.example/x" }), ctx()).allow, false);
