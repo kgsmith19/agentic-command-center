@@ -247,6 +247,38 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-040 [RESOLVED 2026-08-06] runner.mjs had no spawn() error handler; a bad PATH crashed the whole loop, not just the one job
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (LOW-MEDIUM).
+- where: `runner/runner.mjs`'s `runClaudeOnce()`.
+- what: `child_process.spawn()` does not throw synchronously on a launch
+  failure (bad `PATH`, a missing/typo'd binary, `EMFILE`) — it emits an
+  async `"error"` event on the returned `ChildProcess`. `runClaudeOnce`
+  only ever listened for `"close"`, so an unhandled `"error"` event
+  re-threw per Node's `EventEmitter` contract and crashed the entire
+  `runner.mjs` process — every job in the loop, not just the one that
+  failed to launch. Reproduced directly against this repo's Node version:
+  a bare `spawn(nonexistentBinary)` with no `"error"` listener crashes
+  with `"Unhandled 'error' event"` and exit code 1, even though `"close"`
+  fires right after with a real (if useless) exit code — the crash wins
+  the race.
+- fix: added a `child.on("error", ...)` handler that resolves the run
+  with a clear `code: -1` / `err: "spawn failed: ..."` pair, guarded
+  against double-resolution against `"close"` (both events can fire for
+  the same underlying failure).
+- verified: a new integration test in `runner/runner.test.mjs` spawns a
+  real Node subprocess (same pattern as the file's existing DEP0190 test)
+  with `PATH` pointed at an empty directory so `"claude"` genuinely
+  resolves to `ENOENT`. RED against the unfixed code (the subprocess
+  crashed exactly as described, stderr showed `"Unhandled 'error' event"`
+  and a real `ENOENT` stack), GREEN after the fix (52/52 in the file's
+  own suite, subprocess now exits cleanly with a `code`/`err` pair). Full
+  `npm test`: 535 pass, 1 pre-existing unrelated failure
+  (`hooks/lane.test.mjs`'s chmod-based test, root-sandbox limitation, not
+  a regression). `runner/runner.mjs` isolated coverage: 100% lines, 100%
+  funcs, 93.1% branches — clears the 100/100/90 floor.
+
 ## OI-038 [RESOLVED 2026-08-06] four duplicated cross-process locks only tolerated EEXIST, not a real Windows CI EPERM
 
 - opened and resolved 2026-08-06, found by a real Windows CI failure on PR
