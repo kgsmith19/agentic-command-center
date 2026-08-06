@@ -574,7 +574,70 @@ Phase 5` rather than doing speculative work on code that's gone.
 
 ## Phase 7 — Coverage-gate honesty
 
-**Status: not started**
+**Status: DONE (all 4 items) — commit (see next commit in this branch)**
+
+1. **`parseLcov` merge fix** — shipped, but not the bug the phase guessed.
+   Fixed a real bug: node emits one `SF:` block per SUBPROCESS, so a file
+   imported by N different test files gets N blocks in one combined lcov
+   report (confirmed: `hooks/usage.mjs` alone produced 19 in one fast-tier
+   run); the old parser kept only the LAST block, so whichever test parsed
+   last silently became a file's entire reported coverage (`usage.mjs` read
+   `funcs 2.78%` purely from this artifact, `67.3%` once merged honestly by
+   code-point identity — covered in ANY block, counted once either way, not
+   summed). But this was never `hooks/lane.mjs`'s or `kernel/run.mjs`'s
+   actual problem: neither file ever produces more than one `SF:` block, so
+   the fix changes neither one's number — their instability is exactly
+   OI-017's original 2026-08-02 finding, genuine node instrumentation
+   nondeterminism, unrelated to this parser. Both `branchFloorOverrides`
+   entries stay, now documented with that distinction (OI-017, OI-033).
+2. **`budget.mjs` un-blinded** — `main()` guarded behind the same
+   entrypoint check `covgate.mjs`/`kernel/run.mjs` already use (previously
+   ran unconditionally at import, so an import would `process.exit()`
+   before a test could assert anything); 11 pure/file-only helpers exported
+   (tier calc, transcript parsing, context building, small file I/O); new
+   `hooks/budget.unit.test.mjs`, 17 tests. Real result: lines 39.8%, funcs
+   50%, branches 78.4% — genuine progress over an opaque 0%, still under
+   the floor. The dispatch handlers (`onSessionStart`/`onStop`/etc, each
+   ending in `process.exit()`) still need `budget.test.mjs`'s existing 20
+   subprocess tests and the process boundary they give — closing that gap
+   for real needs a bigger dependency-injection refactor of the single
+   highest-branch-count, most incident-prone file in the hooks layer,
+   deliberately left open and tracked in OI-033 rather than forced through
+   tonight.
+3. **`engine.mjs` un-blinded** — `ROOT` now reads `ACC_ROOT` like every
+   sibling hooks/ file (was hardcoded to the file's own location, so a test
+   could only ever exercise the real repo's own gitignored vault.json).
+   `hooks/engine.test.mjs` rewritten from 3 narrow regression-pin tests to
+   31, all sandboxed: vault round-trip, corrupt/missing vault and config
+   (fail closed with a message, not a crash), every config-side command,
+   and the full runbox lifecycle. Real result: lines 100%, funcs 89.7%,
+   branches 71.1% — up from 0%, genuinely gated per the phase's own
+   definition of done though still short of the floor. What's left is
+   named in OI-033: the `.ps1`/`.cmd`/`.bat` `RUNNERS` entries (need
+   binaries this Linux sandbox doesn't have), the `ACC_ROOT`-unset fallback
+   branch (untestable without touching the real repo).
+4. **Coverage-shaped code removed** — 2 of 3 already fixed in an earlier
+   session (2026-08-01, both still carry their own explanatory comments):
+   `lane.mjs`'s `for (;;)` (unbounded on purpose — a bounded condition
+   would give V8 an unreachable "loop exhausted" branch to instrument), the
+   try/catch dropped from `testplan.mjs` (`fs.existsSync` is documented to
+   never throw). The third was genuinely still open:
+   `lane.test.mjs`'s "529 uses overloadBaseMs" test's own comment described
+   asserting >=50ms of delay to prove the right backoff base was picked,
+   but the code only checked the call count, which can't tell the two
+   bases apart. Added the timing assertion; confirmed red against a broken
+   `retryTransport` that ignores `overload`, green against the real code.
+
+**Definition of done, re-checked:** `node hooks/covgate.mjs` now genuinely
+measures `budget.mjs` and `engine.mjs` on every diff that touches them —
+real percentages instead of an opaque 0%/"no test imports it" — for the
+first time. Neither file clears the 100/100/90 floor yet; both gaps are
+named precisely in OI-033 rather than hidden behind a new
+`branchFloorOverrides` entry, which the phase's own instructions warn
+against using to duck a real gap. `branchFloorOverrides` itself carries
+exactly 2 entries, both re-verified this phase and confirmed still needed
+for the reason already on file (OI-017's node instrumentation instability),
+not the parser bug this phase actually found and fixed.
 
 1. **Fix `parseLcov`** to merge repeated `SF:` records instead of
    overwriting (`cur = blank(); files.set(...)` on every `SF:` line drops
