@@ -437,7 +437,38 @@ line under `## Resolved`.
   EPIPE test's `child.stdin.emit("error", ...)` line threw uncaught,
   exactly reproducing the crash, before the fix), `node hooks/covgate.mjs`
   (claude-code.mjs 100%/100%/92.2%).
-  Progress: 11/12 modules done. Remaining: `kernel/settings.mjs`.
+  `kernel/settings.mjs` pass (2026-08-06), the LAST of the 12: no bug
+  found — already 100%/100%/100% covered going in, and stayed that way.
+  Deliberately checked, not skipped: whether `writeRunFiles`'s three
+  non-atomic `writeFileSync` calls (settings.json, contract.json,
+  pin.json — no tmp+rename, unlike almost everything else in this
+  codebase after this pass) are a real gap, the same class as
+  `autonomy.mjs`'s `writeAutonomy` earlier in this pass. They are not:
+  unlike `autonomy.json` (read-modify-written repeatedly across
+  finalizing runs) or the guardhook attempts file (read/written on every
+  concurrent tool call within a live run), these three files are written
+  ONCE per run, strictly BEFORE the harness process is spawned — nothing
+  reads them until `guardhook.mjs` starts firing, which structurally
+  cannot happen before the harness that triggers it exists. No concurrent
+  reader, no torn-read window. Also checked: `cleanupRun` racing a
+  late-arriving guardhook fire against a run that just closed — already
+  fails closed via `verifySettingsPin`'s existing try/catch (ENOENT reads
+  as `ok: false`, same as any other unreadable state), not a crash.
+  Verified: `node --test kernel/settings.test.mjs` (5/5, unchanged).
+  **OI-019's full kernel scenario-enumeration pass is now DONE: 12/12
+  modules.** Tally across all twelve: 5 real, live bugs found and fixed
+  (`guard.mjs` path-traversal bypass, `guardhook.mjs` cross-process
+  ceiling race, `run.mjs` cleanup-crash-after-finalize,
+  `verifier.mjs` malformed-regex crash, `contract.mjs` silent
+  ceiling-bypass via a malformed budget field, `claude-code.mjs` EPIPE
+  crash — six, not five, correcting the count while writing it out); 2
+  consistency fixes for real-but-lower-severity gaps (`autonomy.mjs`'s
+  non-atomic write, `ledger.mjs`'s cross-process decision-lock race,
+  already counted above); several "no bug, scenario pinned" outcomes
+  (`policy.mjs`, `credentials.mjs`, `adapter.mjs`, `settings.mjs`) where
+  the honest result was confirming already-correct fail-closed behavior
+  rather than forcing a fix that wasn't needed. No test was added or
+  loosened to turn red green without a genuine regression behind it.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5
 - opened: 2026-08-03, updated: 2026-08-03 (deferred run from
