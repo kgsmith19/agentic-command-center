@@ -247,6 +247,41 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-047 [RESOLVED 2026-08-06] the shared lock primitive's stale-reclaim path had its own double-acquisition race, distinct from OI-038's EPERM fix
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (LOW, but a real structural race).
+- where: the same duplicated cross-process lock primitive across all four
+  files OI-038 already fixed for EPERM: `kernel/ledger.mjs`
+  (`withDecisionLock`), `kernel/autonomy.mjs` (`withAutonomyLock`),
+  `hooks/budget.mjs` (`withStateLock`), `hooks/mission.mjs`
+  (`withMissionLock`).
+- what: the stale-reclaim path (`rmSync` + retry once the lock file's
+  mtime exceeds `staleMs`) exists to recover from a CRASHED holder — but
+  a holder that is merely SLOW, not crashed, can have its lock look
+  "stale" to an observer purely from wall-clock elapsed time under real
+  load. A second process then legitimately reclaims it (`rmSync` + its
+  own fresh create) and enters its own critical section. Without a
+  fencing token, the ORIGINAL holder's own release
+  (`finally { fs.rmSync(lockPath) }`) deletes whatever file is at that
+  path NOW — the second holder's lock, not its own — letting a THIRD
+  process acquire while the second is still inside its critical section:
+  a genuine double-acquisition, even though the atomic `"wx"` create
+  itself was never bypassed.
+- fix: each acquisition now writes a unique token
+  (`pid-timestamp-random`) into the lock file; release only deletes the
+  lock if it still contains that exact token, otherwise it assumes
+  another holder has since reclaimed it and leaves it alone. `withStateLock`, `withAutonomyLock`, and `withMissionLock` are now
+  exported (matching `withDecisionLock`, already exported) so each could
+  be tested directly.
+- verified: one new test per file, each confirmed RED against the
+  unfixed code first (in `ledger.mjs`/`mission.mjs`, the token comparison
+  failed because the file was fully gone — unconditional delete; in
+  `autonomy.mjs`/`budget.mjs`, RED because the lock function wasn't
+  exported yet), GREEN after the fix. Full `npm test`: 542 pass, 1
+  pre-existing unrelated failure (`hooks/lane.test.mjs`'s chmod-based
+  test, root-sandbox limitation, not a regression).
+
 ## OI-046 [RESOLVED 2026-08-06] statePath let an unsanitized session_id escape runner/state via path traversal
 
 - opened and resolved 2026-08-06, found by one of the three parallel
