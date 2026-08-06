@@ -247,6 +247,59 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-050 [RESOLVED 2026-08-06] the mission alert files were the one shared JSON state left non-atomic, and a dead-mission alert could be destroyed by a parse race
+
+- opened and resolved 2026-08-06, found by the same fresh adversarial
+  review pass as OI-049 (a second, independent review agent focused on
+  security/correctness across all 8 files this session touched).
+- where: `hooks/mission.mjs`'s `writeDeadAlert()`, `reapCeilings()`'s
+  ceiling-alert write, and `consumeDeadMissionAlerts()`.
+- what: both alert writes used a bare `fs.writeFileSync` — the one shared
+  JSON state file this session left non-atomic, unlike every other one
+  (mission records, `budget.mjs`'s `tier.json`/clear-requests,
+  `kernel/autonomy.mjs`'s `autonomy.json`). Worse:
+  `consumeDeadMissionAlerts()` deleted every alert file BEFORE checking
+  whether it parsed. A dead-mission alert is explicitly one-shot with no
+  "resume" command to re-trigger it, so a reader racing a half-written
+  file (or any other on-disk corruption) got a parse failure and the
+  alert was gone forever, silently — defeating OI-034's entire purpose
+  in that race. (The ceiling-alert file was lower risk in practice —
+  `statusline.mjs` only checks its existence via `readdir`, never its
+  content — but was fixed the same way for consistency.)
+- fix: both writes now use the file's own existing `atomicWrite()`
+  helper. `consumeDeadMissionAlerts()` now only deletes what it actually
+  parsed successfully; an unparseable file survives for the next call to
+  retry, self-healing the same way every other JSON state file in this
+  codebase already does.
+- verified: new test in `hooks/mission.test.mjs` RED against the unfixed
+  code (a torn alert file was destroyed instead of surviving for retry),
+  GREEN after the fix (74/74 in the file's own suite). Full `npm test`:
+  545 pass, 1 pre-existing unrelated failure
+  (`hooks/lane.test.mjs`'s chmod-based test, root-sandbox limitation).
+
+## OI-051 [RESOLVED 2026-08-06] hooks/budget.mjs's withStateLock was the one of the four duplicated lock functions that didn't self-create its lock directory
+
+- opened and resolved 2026-08-06, found by the same review agent as
+  OI-050.
+- where: `hooks/budget.mjs`'s `withStateLock`.
+- what: `kernel/ledger.mjs`'s `withDecisionLock`, `kernel/autonomy.mjs`'s
+  `withAutonomyLock`, and `hooks/mission.mjs`'s `withMissionLock` — the
+  three sibling lock functions fixed for OI-038/OI-047 — all
+  self-create their lock directory (`fs.mkdirSync(dir, {recursive:
+  true})`) before attempting to open the lock file. `withStateLock` did
+  not, relying on its sole current caller (`reserveAgentSlot`) having
+  already called `ensureDirs()`. A future direct caller against a
+  not-yet-created directory would get `ENOENT` immediately — not in the
+  `EEXIST`/`EPERM` retry set — instead of self-healing like its
+  siblings. Untested because every existing test happened to use a lock
+  path under an already-created directory.
+- fix: added the same `fs.mkdirSync(dir, { recursive: true })` the other
+  three already have.
+- verified: new test in `hooks/budget.unit.test.mjs` RED against the
+  unfixed code (`ENOENT` against a fresh, not-yet-created directory),
+  GREEN after the fix (21/21 in the file's own suite). Full `npm test`:
+  545 pass, 1 pre-existing unrelated failure (as above).
+
 ## OI-049 [RESOLVED 2026-08-06] appendCycle had no status guard of its own, unlike every other mutating function in the file
 
 - opened and resolved 2026-08-06, found by a fresh adversarial review pass
