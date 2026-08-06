@@ -397,8 +397,19 @@ line under `## Resolved`.
   the `ACC_VAULT`-unset fallback (production default) had no test.
   Verified: `node --test kernel/credentials.test.mjs` (5/5), `node
   hooks/covgate.mjs` (credentials.mjs 100%/100%/100%, up from 90%).
-  Progress: 9/12 modules done. Remaining, in rough risk order:
-  `kernel/adapter.mjs`,
+  `kernel/adapter.mjs` pass (2026-08-06): no bug found — already tight
+  (the harness-name regex is ASCII-lowercase-slug-only, no traversal or
+  homoglyph surface; injection attempts, missing-interface-members, and
+  unknown-but-present harnesses were all already tested individually; the
+  AC-A8 architectural test scanning every kernel/*.mjs file for a leaked
+  harness name is a nice belt). The one gap was the same class already
+  found in `policy.mjs`/`credentials.mjs` this pass: the first-time-setup
+  case (`policy.json` present, `kernel.harness` never configured at all)
+  was untested, though it already failed closed correctly (via the
+  invalid-name path, since `KERNEL_DEFAULTS.harness` is `null`). Verified:
+  `node --test kernel/adapter.test.mjs` (7/7), `node hooks/covgate.mjs`
+  (adapter.mjs 100%/100%/100%, unchanged — was already clean).
+  Progress: 10/12 modules done. Remaining:
   `kernel/adapters/claude-code.mjs`, `kernel/settings.mjs`.
 
 ## OI-025 e2e/loop.e2e.mjs re-run (2026-08-03) came back 1/5 PASS, not the expected 5/5

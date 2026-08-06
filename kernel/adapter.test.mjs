@@ -34,6 +34,16 @@ test("an unknown harness fails closed — no fallback to another adapter (AC-A3)
   await assert.rejects(() => A.resolveAdapter(), /is not available/);
 });
 
+// OI-019 scenario-enumeration pass: a policy.json that has never had
+// kernel.harness configured at all (first-time setup, or a policy.json
+// used only for non-kernel hooks) -- distinct from an unknown-but-present
+// harness name above. No bug found (already fails closed cleanly, via the
+// invalid-name path since KERNEL_DEFAULTS.harness is null), but untested.
+test("an unconfigured harness (policy.json present, kernel.harness never set) fails closed with a clear message", async () => {
+  fs.writeFileSync(process.env.ACC_POLICY, "{}");
+  await assert.rejects(() => A.resolveAdapter(), /invalid harness name/);
+});
+
 test("an adapter missing an interface member is refused by name", () => {
   const full = { id: "x", identity() {}, startTask() {}, sendStep() {}, readState() {}, stopTask() {} };
   assert.doesNotThrow(() => A.assertAdapterShape(full, "x"));
