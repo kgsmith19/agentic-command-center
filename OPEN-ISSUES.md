@@ -247,6 +247,37 @@ line under `## Resolved`.
   a regression). `hooks/mission.mjs` isolated coverage: 100% lines, 100%
   funcs, 93.8% branches — clears the 100/100/90 floor.
 
+## OI-042 [RESOLVED 2026-08-06] the persisted autonomy factor was never clamped, only the policy dial was
+
+- opened and resolved 2026-08-06, found by one of the three parallel
+  full-repo review agents (MEDIUM).
+- where: `kernel/autonomy.mjs`'s `readAutonomy()` / `readAutonomyStrict()`.
+- what: `kernel/policy.mjs`'s own validator already enforces
+  `autonomy.factor` in `(0, 1]` for the POLICY dial (the amount ceilings
+  shrink by when tightening) — but the PERSISTED, currently-active factor
+  in `autonomy.json` was read back with a bare object spread
+  (`{...FRESH, ...JSON.parse(raw)}`), letting a corrupted, tampered, or
+  buggy state file carry ANY value straight into `effectiveCeilings()`. A
+  factor `<= 0` makes every ceiling zero or negative (every
+  `checkpointVerdict` check trips instantly — broken, but at least
+  fail-closed). A factor above `1` WIDENS ceilings past normal, silently
+  defeating the whole tightening mechanism this file exists to run — the
+  more dangerous direction, since it fails OPEN exactly when the autonomy
+  system is supposed to be clamping down after a bad run record.
+- fix: both `readAutonomy` and `readAutonomyStrict` now clamp `factor`
+  back to `1` (the safe, neutral "no tightening" default) on anything
+  outside `(0, 1]`, matching `hooks/usage.mjs`'s own `finiteOr` pattern
+  for other policy-derived numbers. Clamped at the read boundary so every
+  consumer (`effectiveCeilings`, any future reader) gets a safe value
+  automatically.
+- verified: new test in `kernel/autonomy.test.mjs` RED against the
+  unfixed code (a persisted factor of `-1`, `0`, `1.5`, `999`, `NaN`,
+  `"not-a-number"`, or `null` all passed through raw), GREEN after the
+  fix (16/16 in the file's own suite; a genuinely valid factor like `0.5`
+  still passes through untouched). Full `npm test`: 537 pass, 1
+  pre-existing unrelated failure (`hooks/lane.test.mjs`'s chmod-based
+  test, root-sandbox limitation).
+
 ## OI-041 [RESOLVED 2026-08-06] a mission's dollar ceiling never saw subagent spend
 
 - opened and resolved 2026-08-06, found by one of the three parallel
