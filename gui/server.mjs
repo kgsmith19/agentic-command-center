@@ -15,11 +15,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadKernelPolicy, saveKernelPolicy } from "../kernel/policy.mjs";
+import * as engine from "./engineClient.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Exact-match route map — request input never touches a filesystem path, so
 // there is no traversal surface to defend.
-const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html" };
+const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/engine.html": "engine.html" };
 const BODY_CAP = 64 * 1024;
 
 const localHost = (h) => /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(String(h || ""));
@@ -29,6 +30,56 @@ function send(res, code, body, type = "application/json") {
   res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
   res.end(type === "application/json" ? JSON.stringify(body) : body);
 }
+
+function readBody(req, done) {
+  let body = "";
+  req.on("data", (c) => {
+    body += c;
+    if (body.length > BODY_CAP) req.destroy(); // over-cap is dropped, never parsed
+  });
+  req.on("end", () => done(body));
+}
+
+// Shared shape for every mutating route: X-ACC required, body is JSON, `fn`
+// returns the success response body (defaulting to {ok:true}) or throws --
+// a thrown error becomes a 400 with the thrower's own message, matching
+// how every business-logic module here (kernel/policy.mjs, engineClient.mjs)
+// already raises a client-shaped rejection, never an unhandled crash.
+function postJson(req, res, fn) {
+  if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+  readBody(req, (raw) => {
+    let body;
+    try { body = JSON.parse(raw); }
+    catch { return send(res, 400, { error: "body is not JSON" }); }
+    try { return send(res, 200, fn(body) ?? { ok: true }); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  });
+}
+
+// vault-import's body is the KEY=VALUE payload itself, not JSON (matches
+// engine.mjs's own stdin contract) -- same X-ACC/error-shape discipline,
+// no JSON.parse step.
+function postRaw(req, res, fn) {
+  if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+  readBody(req, (raw) => {
+    try { return send(res, 200, fn(raw)); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  });
+}
+
+const ENGINE_MUTATIONS = {
+  "/api/engine/secret": (b) => engine.secretOp(b.op, b.pattern),
+  "/api/engine/protected": (b) => engine.protectedOp(b.op, b.path),
+  "/api/engine/project": (b) => engine.projectOp(b.op, b.path),
+  "/api/engine/vault-rm": (b) => engine.vaultRm(b.key),
+  "/api/engine/runbox/run": (b) => engine.runboxRun(b.ref),
+  "/api/engine/runbox/trash": (b) => engine.runboxTrash(b.ref),
+  "/api/engine/runbox/restore": (b) => engine.runboxRestore(b.ref),
+  "/api/engine/runbox/flush": (b) => {
+    if (b.confirm !== true) throw new Error("flush is permanent — confirm required");
+    engine.runboxFlush();
+  },
+};
 
 export function handler(req, res) {
   if (!localHost(req.headers.host)) return send(res, 403, { error: "non-local Host" });
@@ -42,23 +93,24 @@ export function handler(req, res) {
       try { return send(res, 200, { kernel: loadKernelPolicy() }); }
       catch (e) { return send(res, 500, { error: e.message }); }
     }
-    if (req.method === "POST") {
-      if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
-      let body = "";
-      req.on("data", (c) => {
-        body += c;
-        if (body.length > BODY_CAP) req.destroy(); // over-cap is dropped, never parsed
-      });
-      req.on("end", () => {
-        let block;
-        try { block = JSON.parse(body); }
-        catch { return send(res, 400, { error: "body is not JSON" }); }
-        try { return send(res, 200, { ok: true, kernel: saveKernelPolicy(block) }); }
-        catch (e) { return send(res, 400, { error: e.message }); }
-      });
-      return;
-    }
+    if (req.method === "POST") return postJson(req, res, (block) => ({ ok: true, kernel: saveKernelPolicy(block) }));
   }
+  if (route === "/api/engine/status" && req.method === "GET") {
+    try { return send(res, 200, engine.status()); }
+    catch (e) { return send(res, 500, { error: e.message }); }
+  }
+  if (route === "/api/engine/runbox" && req.method === "GET") {
+    const query = new URLSearchParams(req.url.split("?")[1] || "");
+    try { return send(res, 200, engine.runboxList(query.get("trash") === "1")); }
+    catch (e) { return send(res, 500, { error: e.message }); }
+  }
+  if (route === "/api/engine/runbox/preview" && req.method === "GET") {
+    const query = new URLSearchParams(req.url.split("?")[1] || "");
+    try { return send(res, 200, { content: engine.runboxPreview(query.get("ref") || "") }); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (route === "/api/engine/vault-import" && req.method === "POST") return postRaw(req, res, (text) => engine.vaultImport(text));
+  if (ENGINE_MUTATIONS[route] && req.method === "POST") return postJson(req, res, ENGINE_MUTATIONS[route]);
   send(res, 404, { error: "not found" });
 }
 

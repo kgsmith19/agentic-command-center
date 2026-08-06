@@ -19,11 +19,17 @@ const KERNEL = {
   checkpointMin: 20, alwaysAllowTools: ["TodoWrite"], extraDenyWriteRoots: [],
 };
 const resetPolicy = () => fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ kernel: { ...KERNEL, _note: "fixture" } }, null, 2));
+const resetEngine = () => {
+  fs.mkdirSync(process.env.ACC_ROOT, { recursive: true });
+  fs.writeFileSync(path.join(process.env.ACC_ROOT, "config.json"), JSON.stringify({ enabled: true, secrets: [], protected: [], projects: [] }));
+  fs.rmSync(path.join(process.env.ACC_ROOT, "vault.json"), { force: true });
+  fs.rmSync(path.join(process.env.ACC_ROOT, "runbox"), { recursive: true, force: true });
+};
 
 const { startServer, handler, cli } = await import("./server.mjs");
 let srv, base;
 before(async () => { const s = await startServer({ port: 0 }); srv = s.server; base = `http://127.0.0.1:${s.port}`; });
-beforeEach(resetPolicy);
+beforeEach(() => { resetPolicy(); resetEngine(); });
 after(() => { srv.close(); fs.rmSync(BASE, { recursive: true, force: true }); });
 
 const good = () => ({ ...KERNEL, budget: { ...KERNEL.budget, toolCalls: 150 } });
@@ -150,4 +156,117 @@ test("CLI: prints LISTENING <port> and serves on it", async () => {
   const r = await fetch(`http://127.0.0.1:${m[1]}/api/kernel-policy`);
   assert.equal(r.status, 200);
   child.kill();
+});
+
+// ================================================================
+// gui/engine.html routes (Protected paths, Vault, Runbox) — design spec
+// docs/superpowers/specs/2026-08-06-acc-gui-remaining-tabs-design.md §4.
+// Same CSRF/loopback/error-shape discipline as /api/kernel-policy above;
+// business logic lives in gui/engineClient.mjs (already unit-tested on its
+// own), so these tests focus on the HTTP contract, not re-proving
+// engine.mjs's behavior.
+// ================================================================
+
+const postEngine = (route, body, headers = {}) => fetch(`${base}${route}`, {
+  method: "POST", body: JSON.stringify(body ?? {}),
+  headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
+});
+
+test("GET /engine.html serves the page", async () => {
+  const r = await fetch(`${base}/engine.html`);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /id="secretList"/);
+});
+
+test("GET /api/engine/status returns the live block", async () => {
+  const r = await fetch(`${base}/api/engine/status`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { enabled: true, secrets: [], protected: [], projects: [], vaultKeys: [], pending: 0, trashed: 0 });
+});
+
+test("secret/protected/project add-then-remove round-trip through the real files", async () => {
+  assert.equal((await postEngine("/api/engine/secret", { op: "add", pattern: "*.pfx" })).status, 200);
+  assert.deepEqual((await (await fetch(`${base}/api/engine/status`)).json()).secrets, ["*.pfx"]);
+  assert.equal((await postEngine("/api/engine/secret", { op: "rm", pattern: "*.pfx" })).status, 200);
+
+  const p = path.join(process.env.ACC_ROOT, "important.yaml");
+  assert.equal((await postEngine("/api/engine/protected", { op: "add", path: p })).status, 200);
+  assert.deepEqual((await (await fetch(`${base}/api/engine/status`)).json()).protected, [p]);
+
+  const proj = path.join(process.env.ACC_ROOT, "myproj");
+  fs.mkdirSync(proj, { recursive: true });
+  assert.equal((await postEngine("/api/engine/project", { op: "add", path: proj })).status, 200);
+  assert.deepEqual((await (await fetch(`${base}/api/engine/status`)).json()).projects, [proj]);
+});
+
+test("an invalid engine mutation is a 400 with engine.mjs's own message, and CSRF applies the same as kernel-policy", async () => {
+  const bad = await postEngine("/api/engine/project", { op: "add", path: path.join(process.env.ACC_ROOT, "nope") });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /not a folder/);
+
+  const noHeader = await postEngine("/api/engine/secret", { op: "add", pattern: "*.pfx" }, { "X-ACC": "" });
+  assert.equal(noHeader.status, 403);
+  assert.deepEqual((await (await fetch(`${base}/api/engine/status`)).json()).secrets, []);
+});
+
+test("vault-import (raw body, not JSON) stores keys without ever returning values; vault-rm removes one", async () => {
+  const r = await fetch(`${base}/api/engine/vault-import`, {
+    method: "POST", headers: { "X-ACC": "1" }, body: "A=secretvalue\nB=2\n",
+  });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.deepEqual(j.imported.sort(), ["A", "B"]);
+  assert.equal(JSON.stringify(j).includes("secretvalue"), false);
+
+  const status = await (await fetch(`${base}/api/engine/status`)).json();
+  assert.deepEqual(status.vaultKeys.sort(), ["A", "B"]);
+
+  assert.equal((await postEngine("/api/engine/vault-rm", { key: "A" })).status, 200);
+  assert.deepEqual((await (await fetch(`${base}/api/engine/status`)).json()).vaultKeys, ["B"]);
+});
+
+test("vault-import without X-ACC is refused, same CSRF rule as the JSON routes", async () => {
+  const r = await fetch(`${base}/api/engine/vault-import`, { method: "POST", body: "A=1\n" });
+  assert.equal(r.status, 403);
+});
+
+test("runbox list/preview/run/trash/restore/flush all work over HTTP end to end", async () => {
+  const runbox = path.join(process.env.ACC_ROOT, "runbox");
+  fs.mkdirSync(runbox, { recursive: true });
+  fs.writeFileSync(path.join(runbox, "a.mjs"), "// hello there\nprocess.exit(0);\n");
+
+  const list = await (await fetch(`${base}/api/engine/runbox?trash=0`)).json();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].name, "a.mjs");
+
+  const preview = await (await fetch(`${base}/api/engine/runbox/preview?ref=${encodeURIComponent("central:a.mjs")}`)).json();
+  assert.match(preview.content, /hello there/);
+
+  fs.writeFileSync(path.join(runbox, "b.mjs"), "process.exit(0);\n");
+  const trashed = await postEngine("/api/engine/runbox/trash", { ref: "central:b.mjs" });
+  assert.equal(trashed.status, 200);
+  assert.equal((await (await fetch(`${base}/api/engine/runbox?trash=1`)).json()).length, 1);
+
+  const restored = await postEngine("/api/engine/runbox/restore", { ref: "central:b.mjs" });
+  assert.equal(restored.status, 200);
+  assert.equal((await (await fetch(`${base}/api/engine/runbox?trash=1`)).json()).length, 0);
+
+  const ran = await postEngine("/api/engine/runbox/run", { ref: "central:a.mjs" });
+  assert.equal(ran.status, 200);
+  const ranBody = await ran.json();
+  assert.equal(ranBody.ok, true);
+  assert.match(ranBody.out, /archived/);
+
+  await postEngine("/api/engine/runbox/trash", { ref: "central:b.mjs" });
+  const flushRefused = await postEngine("/api/engine/runbox/flush", {});
+  assert.equal(flushRefused.status, 400, "flush without confirm:true is refused");
+  const flushed = await postEngine("/api/engine/runbox/flush", { confirm: true });
+  assert.equal(flushed.status, 200);
+  assert.equal((await (await fetch(`${base}/api/engine/runbox?trash=1`)).json()).length, 0);
+});
+
+test("runbox/preview refuses a ref not in the current listing (400, not a filesystem error leak)", async () => {
+  const r = await fetch(`${base}/api/engine/runbox/preview?ref=${encodeURIComponent("../../../etc/passwd")}`);
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /not found/);
 });

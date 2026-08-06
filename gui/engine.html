@@ -1,0 +1,204 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>What Claude cannot touch / Passwords and keys / Claude's requests</title>
+<style>
+  body { font: 14px 'Segoe UI', sans-serif; margin: 16px; max-width: 820px; }
+  fieldset { margin: 0 0 14px; border: 1px solid #ccc; }
+  legend { font-weight: bold; }
+  ul { list-style: none; margin: 4px 0; padding: 0; max-height: 160px; overflow-y: auto; border: 1px solid #ddd; }
+  li { padding: 3px 6px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+  li button { font-size: 11px; }
+  .row { margin: 6px 0; }
+  input[type=text] { width: 360px; }
+  textarea { width: 100%; font-family: Consolas, monospace; }
+  #status, #vaultStatus, #runboxStatus { margin-left: 8px; }
+  .ok { color: #1a7a1a; }
+  .err { color: #b22222; }
+  .danger { color: #b22222; }
+  pre#preview { border: 1px solid #ccc; padding: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h3>What Claude cannot touch</h3>
+<fieldset><legend>Blocked file patterns (secrets)</legend>
+  <ul id="secretList"></ul>
+  <div class="row"><input type="text" id="secretInput" placeholder="example: *.pfx">
+    <button id="secretAdd">Block this pattern</button></div>
+</fieldset>
+<fieldset><legend>Locked paths (protected)</legend>
+  <ul id="protList"></ul>
+  <div class="row"><input type="text" id="protInput" placeholder="example: C:/code/myrepo/important-config.yaml">
+    <button id="protAdd">Lock this path</button></div>
+</fieldset>
+<fieldset><legend>Watched folders</legend>
+  <ul id="projList"></ul>
+  <div class="row"><input type="text" id="projInput" placeholder="folder path">
+    <button id="projAdd">Watch this folder</button></div>
+</fieldset>
+<button id="refreshG">Refresh</button><span id="status"></span>
+
+<h3>Passwords and keys</h3>
+<fieldset><legend>Add keys to the vault (KEY=VALUE, one per line)</legend>
+  <textarea id="vaultIn" rows="4" placeholder="MY_API_KEY=sk-..."></textarea>
+  <div class="row"><button id="vaultImport">Save to vault</button><span id="vaultStatus"></span></div>
+</fieldset>
+<fieldset><legend>Keys currently in the vault (values are never shown)</legend>
+  <ul id="vaultList"></ul>
+</fieldset>
+
+<h3>Claude's requests</h3>
+<div class="row">
+  <label><input type="checkbox" id="showTrash"> Show deleted (undo lives here)</label>
+  <button id="runboxRefresh">Refresh</button>
+</div>
+<ul id="runboxList"></ul>
+<pre id="preview"></pre>
+<div class="row">
+  <button id="runboxRun">Run selected</button>
+  <button id="runboxDel" class="danger">Delete</button>
+  <button id="runboxRestore" disabled>Restore</button>
+  <button id="runboxFlush" class="danger" disabled>Empty trash</button>
+  <span id="runboxStatus"></span>
+</div>
+<pre id="runOut"></pre>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const post = (url, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json", "X-ACC": "1" }, body: JSON.stringify(body ?? {}) });
+let selectedRef = null;
+
+function renderList(ul, items, onRemove) {
+  ul.innerHTML = "";
+  for (const item of items) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = item;
+    li.appendChild(label);
+    const btn = document.createElement("button");
+    btn.textContent = "Remove";
+    btn.onclick = () => onRemove(item);
+    li.appendChild(btn);
+    ul.appendChild(li);
+  }
+}
+
+async function loadStatus() {
+  const s = await (await fetch("/api/engine/status")).json();
+  renderList($("secretList"), s.secrets, async (pattern) => {
+    await post("/api/engine/secret", { op: "rm", pattern });
+    await loadStatus();
+  });
+  renderList($("protList"), s.protected, async (p) => {
+    await post("/api/engine/protected", { op: "rm", path: p });
+    await loadStatus();
+  });
+  renderList($("projList"), s.projects, async (p) => {
+    await post("/api/engine/project", { op: "rm", path: p });
+    await loadStatus();
+  });
+  renderList($("vaultList"), s.vaultKeys, async (key) => {
+    await post("/api/engine/vault-rm", { key });
+    await loadStatus();
+  });
+}
+
+$("secretAdd").onclick = async () => {
+  const pattern = $("secretInput").value.trim();
+  if (!pattern) return;
+  const r = await post("/api/engine/secret", { op: "add", pattern });
+  const j = await r.json();
+  $("status").textContent = r.ok ? "" : "Not saved: " + j.error;
+  $("status").className = r.ok ? "" : "err";
+  if (r.ok) { $("secretInput").value = ""; await loadStatus(); }
+};
+$("protAdd").onclick = async () => {
+  const p = $("protInput").value.trim();
+  if (!p) return;
+  const r = await post("/api/engine/protected", { op: "add", path: p });
+  const j = await r.json();
+  $("status").textContent = r.ok ? "" : "Not saved: " + j.error;
+  $("status").className = r.ok ? "" : "err";
+  if (r.ok) { $("protInput").value = ""; await loadStatus(); }
+};
+$("projAdd").onclick = async () => {
+  const p = $("projInput").value.trim();
+  if (!p) return;
+  const r = await post("/api/engine/project", { op: "add", path: p });
+  const j = await r.json();
+  $("status").textContent = r.ok ? "" : "Not saved: " + j.error;
+  $("status").className = r.ok ? "" : "err";
+  if (r.ok) { $("projInput").value = ""; await loadStatus(); }
+};
+$("refreshG").onclick = loadStatus;
+
+$("vaultImport").onclick = async () => {
+  const text = $("vaultIn").value;
+  const r = await fetch("/api/engine/vault-import", { method: "POST", headers: { "X-ACC": "1" }, body: text });
+  const j = await r.json();
+  if (!r.ok) { $("vaultStatus").textContent = "Not saved: " + j.error; $("vaultStatus").className = "err"; return; }
+  $("vaultStatus").textContent = "Saved: " + j.imported.join(", ");
+  $("vaultStatus").className = "ok";
+  $("vaultIn").value = "";
+  await loadStatus();
+};
+
+async function loadRunbox() {
+  const trash = $("showTrash").checked;
+  const items = await (await fetch(`/api/engine/runbox?trash=${trash ? "1" : "0"}`)).json();
+  const ul = $("runboxList");
+  ul.innerHTML = "";
+  selectedRef = null;
+  $("preview").textContent = "";
+  $("runboxRestore").disabled = !trash;
+  $("runboxFlush").disabled = !trash;
+  for (const item of items) {
+    const ref = `${item.label}:${item.name}`;
+    const li = document.createElement("li");
+    li.textContent = `${ref}${item.keep ? "  [keep]" : ""}`;
+    li.style.cursor = "pointer";
+    li.onclick = async () => {
+      selectedRef = ref;
+      const p = await (await fetch(`/api/engine/runbox/preview?ref=${encodeURIComponent(ref)}`)).json();
+      $("preview").textContent = p.content ?? p.error ?? "";
+    };
+    ul.appendChild(li);
+  }
+}
+$("runboxRefresh").onclick = loadRunbox;
+$("showTrash").onchange = loadRunbox;
+$("runboxRun").onclick = async () => {
+  if (!selectedRef) return;
+  const r = await post("/api/engine/runbox/run", { ref: selectedRef });
+  const j = await r.json();
+  $("runOut").textContent = j.out ?? j.error ?? "";
+  $("runboxStatus").textContent = j.ok ? "done" : "failed";
+  $("runboxStatus").className = j.ok ? "ok" : "err";
+  await loadRunbox();
+};
+$("runboxDel").onclick = async () => {
+  if (!selectedRef) return;
+  const r = await post("/api/engine/runbox/trash", { ref: selectedRef });
+  if (!r.ok) { $("runboxStatus").textContent = "Not deleted: " + (await r.json()).error; $("runboxStatus").className = "err"; return; }
+  await loadRunbox();
+};
+$("runboxRestore").onclick = async () => {
+  if (!selectedRef) return;
+  const r = await post("/api/engine/runbox/restore", { ref: selectedRef });
+  if (!r.ok) { $("runboxStatus").textContent = "Not restored: " + (await r.json()).error; $("runboxStatus").className = "err"; return; }
+  await loadRunbox();
+};
+$("runboxFlush").onclick = async () => {
+  const r = await post("/api/engine/runbox/flush", { confirm: true });
+  if (!r.ok) { $("runboxStatus").textContent = "Not flushed: " + (await r.json()).error; $("runboxStatus").className = "err"; return; }
+  $("runboxStatus").textContent = "Trash emptied";
+  $("runboxStatus").className = "ok";
+  await loadRunbox();
+};
+
+loadStatus().catch((e) => { $("status").textContent = "cannot read status: " + e; $("status").className = "err"; });
+loadRunbox().catch((e) => { $("runboxStatus").textContent = "cannot read runbox: " + e; $("runboxStatus").className = "err"; });
+</script>
+</body>
+</html>
