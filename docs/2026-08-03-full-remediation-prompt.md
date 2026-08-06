@@ -145,7 +145,36 @@ back to `0`/disabled reproduces today's behavior exactly.
 
 ## Phase 2 — Neutralize auto-approve and the self-protection gap
 
-**Status: not started**
+**Status: PARTIAL — step 1 addressed via OI-032, step 3 already done, step 2
+deliberately deferred (2026-08-06), step 4 confirmed correct**
+
+Step 1: not literally either (a) or (b) as framed here — Kyle explicitly
+chose a third option this session, recorded in `OPEN-ISSUES.md` `OI-032
+[RESOLVED, accepted risk]`: keep `autoApprove.enabled:true` exactly as is,
+with the tradeoff documented honestly rather than hidden. This is NOT the
+"half-measure dressed as a fix" this phase warns against — it's a
+deliberate, disclosed, non-deceptive choice, which is what step 1 actually
+cares about avoiding.
+
+Step 2 (re-add `C:/code/guards` to `config.protected` now that Phase 3
+landed): **deliberately NOT done.** AGENTS.md's own Self-protection section
+says re-protection happens "once the ACC goal closes" — it hasn't; Phases
+4-8 and 9 more `OI-019` kernel modules and the GUI web migration all still
+touch this repo's own code. Phase 3 landing removes the SESSION-SCOPING
+objection this step's rationale names, but the underlying reason
+protection was turned off in the first place (active build-out) still
+applies in full. Re-protecting mid-effort would immediately block the rest
+of this very work. Revisit once the remediation effort actually closes.
+
+Step 3 (AGENTS.md matches `config.json`, not the reverse): already done —
+`OI-032`'s fix added the honest ceiling note directly to AGENTS.md's guard
+section.
+
+Step 4 (resolve OI-005/OI-011 once the state changes): confirmed correct
+as-is — both are already `[RETIRED]` in `OPEN-ISSUES.md`, explicitly
+because re-enabling protection stayed Kyle's own timing call, not
+something to flip mechanically. Nothing to change here; re-open only if he
+actually re-enables it.
 
 The security composition the review flagged as self-nullifying: an agent can
 write a script into a runbox, and `autoApprove:true` executes it within ~2
