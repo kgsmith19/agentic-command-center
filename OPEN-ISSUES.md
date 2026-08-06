@@ -309,6 +309,31 @@ line under `## Resolved`.
   Not fixed tonight: confirming this precisely (vs. just pattern-matching
   it to OI-033/OI-017) needs reading node's own lcov emission for a multi-
   reimport case directly, out of scope for a GUI migration pass.
+- UPDATE 2026-08-06 (global-status widget): `gui/server.mjs` itself joined
+  this entry for the first time, for a THIRD, different, genuinely-
+  understood reason (not a tooling artifact this time): the `GET /api/
+  status/spending` and `GET /api/status/summary` routes each carry a
+  `try { ... } catch (e) { return send(res, 500, ...) }` guard, matching
+  the defensive-on-every-route convention this file already established
+  (and that this same session's own PAGES-route fix, above, proved matters
+  — an unguarded route can hang the client instead of erroring cleanly).
+  Their `catch` branches are unreachable under current guarantees: every
+  function in their call chain (`hooks/usage.mjs`'s `loadPolicy`,
+  `listProjects`, `listSessions`) wraps every `fs` call in its own bare
+  `catch {}` and falls back to a safe default, by design, all the way
+  down — confirmed by reading the full call chain, not assumed. Faking a
+  throw to hit 90% branches would either misrepresent behavior that can't
+  happen, or require monkey-patching `fs` in a way that tests something
+  synthetic rather than real. Removing the `try/catch` to "simplify away"
+  dead code — the choice already made once tonight for `gui/
+  engineClient.mjs`'s genuinely-dead `|| ""` fallbacks — is NOT the right
+  call here: unlike a redundant fallback expression, this guard is the
+  file's own established safety net against exactly the hang class its
+  own adversarial-review-flagged history warns about, and removing it
+  would reintroduce that risk the moment `hooks/status.mjs` ever grows a
+  path that CAN throw. Left in place, under-covered, honestly documented
+  — the same choice this entry already makes for `hooks/budget.mjs`'s
+  un-mockable dispatch layer.
 
 ## OI-015 [SHRUNK — needs Kyle for the rest] guards-gui.ps1 interactive-lane wiring: the handshake is now proven, the visible-GUI half still needs Kyle
 - opened: 2026-08-01, shrunk 2026-08-04: this environment now has a real

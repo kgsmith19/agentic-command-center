@@ -192,21 +192,37 @@ test("concurrent updateAfterRun calls, from separate PROCESSES, never lose a log
   const goFile = path.join(BASE, "go-signal-autonomy");
   fs.rmSync(goFile, { force: true });
   const N = 20;
+  // Real flake on Windows CI (2026-08-06, this exact test, 19/20): the
+  // production LOCK_TIMEOUT_MS default (3000ms) is tuned for realistic
+  // contention (a handful of concurrent finalizations, not this test's
+  // deliberately adversarial 20-way stress), and a slower/loaded CI runner
+  // pushed total queue time for the LAST waiter past it -- a lock TIMEOUT
+  // (updateAfterRun throwing, silently swallowed as an unhandled rejection
+  // inside the child, since the exit code was never checked), not a
+  // correctness bug in the lock itself (no torn read, no lost update WHILE
+  // holding it -- see the other assertions in this file). Generous headroom
+  // via the same env override kernel/ledger.mjs's own lock tests use, plus
+  // actually checking each child's exit code so a real failure is
+  // diagnosable instead of surfacing only as a confusing count mismatch.
   const fireAsync = () => new Promise((resolve) => {
+    let stderr = "";
     const child = spawn(process.execPath, ["-e", `
       import(${JSON.stringify("file://" + MODULE_PATH)}).then((m) => {
         const fs = require("fs");
         while (!fs.existsSync(${JSON.stringify(goFile)})) {}
         m.updateAfterRun(${racePolicy});
         process.exit(0);
-      });
-    `], { env: { ...process.env } });
-    child.on("close", (code) => resolve(code));
+      }).catch((e) => { console.error(e.stack || e); process.exit(1); });
+    `], { env: { ...process.env, ACC_AUTONOMY_LOCK_TIMEOUT_MS: "15000" } });
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", (code) => resolve({ code, stderr }));
   });
   const promises = Array.from({ length: N }, fireAsync);
   await new Promise((r) => setTimeout(r, 400));
   fs.writeFileSync(goFile, "go");
-  await Promise.all(promises);
+  const results = await Promise.all(promises);
+  const failed = results.filter((r) => r.code !== 0);
+  assert.equal(failed.length, 0, `expected all ${N} children to exit 0; failures:\n${failed.map((f) => f.stderr).join("\n")}`);
   const finalState = A.readAutonomy();
   assert.equal(finalState.log.length, N, `expected all ${N} concurrent tighten entries logged, none lost to the race`);
 });
