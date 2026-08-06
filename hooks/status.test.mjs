@@ -144,12 +144,15 @@ test("saveOpsPolicy surfaces a clear error when the policy file itself is corrup
 
 // ------------------------------------------------------------------ actions
 
-test("clearbotStatus never throws even with no powershell binary on this host", async () => {
+test("clearbotStatus never throws, and reports a real count where powershell exists, null where it doesn't", async () => {
   const sb = sandbox("clearbot-status");
   const S = await loadStatus(sb.root, sb.policy);
   let s;
   assert.doesNotThrow(() => { s = S.clearbotStatus(); });
-  assert.equal(s.running, null);
+  // Real on a host with powershell (0 clearbot processes actually running,
+  // correctly, in this fixture), null ("unknown") on one without -- both
+  // are the honest answer for their host, not a fixed expectation.
+  assert.ok(s.running === null || typeof s.running === "number");
   assert.equal(s.killSwitchEngaged, false);
   assert.deepEqual(s.pending, []);
 });

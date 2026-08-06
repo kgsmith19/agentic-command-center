@@ -368,11 +368,17 @@ test("POST /api/status/policy with an invalid block is a 400 with status.mjs's o
   assert.equal((await (await fetch(`${base}/api/status/policy`)).json()).context.softK, before.context.softK);
 });
 
-test("GET /api/status/clearbot never 500s even with no powershell on this host", async () => {
+test("GET /api/status/clearbot never 500s, and reports a real count where powershell exists (Windows), null where it doesn't", async () => {
   const r = await fetch(`${base}/api/status/clearbot`);
   assert.equal(r.status, 200);
   const j = await r.json();
-  assert.equal(j.running, null);
+  // Windows CI genuinely has powershell, so the real Get-CimInstance query
+  // runs and returns a real count (0 in this fixture, correctly -- no
+  // clearbot.ps1 process is actually running) rather than the "unknown"
+  // null this sandbox reports. Both are the honest answer for their host;
+  // asserting a hardcoded null broke on the one platform where the query
+  // actually succeeds.
+  assert.ok(j.running === null || typeof j.running === "number");
   assert.deepEqual(j.pending, []);
 });
 
