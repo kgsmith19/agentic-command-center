@@ -23,9 +23,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRoot } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
+const ROOT = resolveRoot(HERE);
 const STATE = path.join(ROOT, "runner", "state");
 
 // Planning kickoff, not chat. Verbs that start implementation work, plus the

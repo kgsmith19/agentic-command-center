@@ -15,13 +15,14 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, directiveForSession, recordTurnEnd } from "./directive.mjs";
+import { resolveRoot } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, directives, clear-requests) at a
 // throwaway tree. It exists so the tests can exercise THIS file instead of a
 // copy: a test that reset the live runner/state would delete the .window files
 // running sessions depend on, which is precisely how auto-clear died once.
-const ROOT = process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
+const ROOT = resolveRoot(HERE);
 const STATE = path.join(ROOT, "runner", "state");
 const LOGS = path.join(ROOT, "runner", "logs");
 const CLEARREQ = path.join(ROOT, "runner", "clear-requests");
