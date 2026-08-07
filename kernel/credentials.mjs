@@ -22,10 +22,6 @@ function readVault() {
   }
 }
 
-export function vaultNames() {
-  return Object.keys(readVault());
-}
-
 export function envForKeys(names = []) {
   const vault = readVault();
   const missing = names.filter((k) => !(k in vault));

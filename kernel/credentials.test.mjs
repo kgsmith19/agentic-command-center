@@ -17,15 +17,13 @@ fs.writeFileSync(process.env.ACC_VAULT, JSON.stringify({
 const C = await import("./credentials.mjs");
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
-test("vaultNames returns names and never values", () => {
-  const names = C.vaultNames();
-  assert.deepEqual(names.sort(), ["ALLOWED_KEY", "OTHER_KEY"]);
-  assert.equal(JSON.stringify(names).includes("SENTINEL"), false);
-});
-
 test("envForKeys returns only the requested keys, for the child env", () => {
   assert.deepEqual(C.envForKeys(["ALLOWED_KEY"]), { ALLOWED_KEY: "sk-live-SENTINEL-VALUE-1" });
   assert.deepEqual(C.envForKeys([]), {});
+});
+
+test("envForKeys called with no argument at all defaults to requesting nothing", () => {
+  assert.deepEqual(C.envForKeys(), {});
 });
 
 test("a key that is not in the vault fails by name, and never asks for a value in chat", () => {
@@ -36,6 +34,9 @@ test("a key that is not in the vault fails by name, and never asks for a value i
 test("a missing vault file yields no keys rather than throwing on first run", () => {
   const old = process.env.ACC_VAULT;
   process.env.ACC_VAULT = path.join(BASE, "absent.json");
-  assert.deepEqual(C.vaultNames(), []);
+  // requesting a real name against a missing file must fail cleanly by name
+  // (the fallback-to-{} path), never an uncaught ENOENT from a raw read
+  assert.throws(() => C.envForKeys(["ALLOWED_KEY"]), /ALLOWED_KEY/);
+  assert.deepEqual(C.envForKeys([]), {});
   process.env.ACC_VAULT = old;
 });

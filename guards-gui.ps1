@@ -449,8 +449,8 @@ $chkAutoApprove.Text = 'Also run Claude''s requested scripts automatically (no /
 # viewer; run history stays a `node kernel/ledger.mjs query` job (spec §15).
 $tabK = New-Tab 'Kernel'
 # The kernel settings UI is a WEB page now (gui/kernel.html served by
-# gui/server.mjs on 127.0.0.1) — the first tab migrated per spec
-# docs/superpowers/specs/2026-08-03-acc-oi-closure-design.md §5-§6. This tab
+# gui/server.mjs on 127.0.0.1) — the first tab migrated per
+# docs/adr/ADR-0002-web-gui-migrated-incrementally.md. This tab
 # only HOSTS it (WebView2 when the runtime exists; a browser button always).
 # The same page and API are what Playwright drives in CI (gui/e2e/).
 $pnlKTop = New-Object System.Windows.Forms.Panel

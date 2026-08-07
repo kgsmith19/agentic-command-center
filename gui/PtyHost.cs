@@ -1,5 +1,6 @@
-// ConPTY host for the ACC embedded terminal (spec: docs/superpowers/specs/
-// 2026-07-31-acc-embedded-terminal-design.md).
+// ConPTY host for the ACC embedded terminal. See
+// docs/adr/ADR-0001-retire-conpty-keystroke-channel.md for the open question
+// about this mechanism's future.
 //
 // Why a pty and not keystroke injection: WriteConsoleInputW delivers text+CR in
 // one batch, which the ink TUI reads as a PASTE, absorbing the CR - the kick

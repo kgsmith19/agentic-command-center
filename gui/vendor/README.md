@@ -1,7 +1,8 @@
 # Vendored assets — ACC embedded terminal
 
-Checked in pinned so the GUI needs no CDN, npm, or install step at runtime
-(spec: docs/superpowers/specs/2026-07-31-acc-embedded-terminal-design.md).
+Checked in pinned so the GUI needs no CDN, npm, or install step at runtime.
+See `docs/adr/ADR-0001-retire-conpty-keystroke-channel.md` for the open
+architecture question around the embedded ConPTY terminal this vendors for.
 
 | File | Package | Version | Source |
 |---|---|---|---|

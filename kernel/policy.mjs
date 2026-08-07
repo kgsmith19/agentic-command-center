@@ -17,6 +17,7 @@ const REPO = path.join(HERE, "..");
 export const policyPath = () => process.env.ACC_POLICY || path.join(REPO, "policy.json");
 export const kernelRoot = () => path.resolve(process.env.ACC_ROOT || REPO);
 export const norm = (p) => path.resolve(p).replaceAll("\\", "/").toLowerCase();
+export const stripBom = (text) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 
 // harness has no in-code default (null): naming one here would be a
 // harness-specific reference living outside kernel/adapters/, which AC-A8
@@ -38,8 +39,7 @@ export function loadKernelPolicy() {
   if (fs.existsSync(policyPath())) {
     let parsed;
     try {
-      let text = fs.readFileSync(policyPath(), "utf8");
-      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // strip a UTF-8 BOM
+      const text = stripBom(fs.readFileSync(policyPath(), "utf8"));
       parsed = JSON.parse(text);
     } catch (e) {
       throw new Error(`kernel policy unreadable: ${policyPath()} (${e.message})`);
@@ -93,8 +93,7 @@ export function saveKernelPolicy(block) {
   } catch (e) {
     throw new Error(`kernel policy: cannot edit ${file} (${e.message})`);
   }
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  const pol = JSON.parse(text);
+  const pol = JSON.parse(stripBom(text));
   pol.kernel = {
     ...(pol.kernel || {}), // _note and any future keys survive
     harness: block.harness.trim(),

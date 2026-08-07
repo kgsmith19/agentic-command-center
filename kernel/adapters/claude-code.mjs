@@ -118,7 +118,6 @@ export async function startTask({
   // orchestrator's ceiling checks read it while the run is still going, which
   // is the only way a token ceiling can stop a run instead of noticing after.
   const handle = { pid: child.pid, child, done, killFn, events };
-  handle.stop = () => stopTask(handle);
   return handle;
 }
 

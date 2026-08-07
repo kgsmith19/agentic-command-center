@@ -11,7 +11,7 @@
 // What this does NOT prove: the busy-refusal MessageBox actually appearing,
 // or the slot directory disappearing within a few seconds of a real Kyle
 // double-press on the real Go button. That half needs Kyle physically
-// watching the GUI (OPEN-ISSUES.md OI-015 stays open for exactly that).
+// watching the GUI (GitHub issue #11 stays open for exactly that).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

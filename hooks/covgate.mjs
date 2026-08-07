@@ -44,10 +44,11 @@ const POLICY = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.jso
 // `file` (gate-relative, forward slashes) is optional: when given, and
 // `tests.branchFloorOverrides[file]` is a finite number, it replaces the
 // branch floor for THAT file only. Escape hatch for a proven tooling
-// limitation, not a way to duck real gaps — see OPEN-ISSUES.md OI-017
-// (node's own --experimental-test-coverage merge under-reports a file's
-// branches once the full fast tier runs together; hooks/lane.mjs's true,
-// isolated coverage comfortably clears the default 90% floor).
+// limitation, not a way to duck real gaps — node's own
+// --experimental-test-coverage merge under-reports a file's branches once
+// the full fast tier runs together; hooks/lane.mjs's true, isolated coverage
+// comfortably clears the default 90% floor (see policy.json's
+// branchFloorOverrides note for the measured numbers per file).
 export function floors(file) {
   let t = {};
   try { t = JSON.parse(fs.readFileSync(POLICY(), "utf8").replace(/^﻿/, "")).tests || {}; } catch {}
