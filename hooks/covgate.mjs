@@ -62,7 +62,12 @@ export function floors(file) {
 }
 
 // Separator- and case-insensitive (Windows), so lcov SF paths and git paths
-// meet in the middle regardless of who emitted which slash.
+// meet in the middle regardless of who emitted which slash. Byte-identical
+// to kernel/policy.mjs's norm(), deliberately NOT imported from there: this
+// file gets copied standalone into isolated fixture trees by its own tests
+// (hooks/pre-push.test.mjs copies only hooks/, not kernel/) and by covgate's
+// own ACC_COVGATE_TESTS fixture-repo mode, so it must resolve with zero
+// sibling-directory dependencies.
 export const normPath = (p) => path.resolve(String(p)).replaceAll("\\", "/").toLowerCase();
 
 // Lib files only: .mjs directly under hooks/, runner/, kernel/, or gui/
