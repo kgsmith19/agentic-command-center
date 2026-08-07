@@ -324,7 +324,16 @@ holds all kicks. `directive.mjs pending` decides every condition that makes a ki
 unsafe (active? console alive? binding settled? cooldown?) so there is one place
 to audit, and `clearbot.ps1` stays a dumb executor.
 
-Tests: `node --test hooks/directive.test.mjs` (48).
+**Headless transport (SPEC-0001, the ADR-0001/0004 destination):** the same
+directive can instead run to completion with no console at all — `node
+runner\runner.mjs directive:<id>` relaunches `claude -p` per fresh context
+with `ACC_DIRECTIVE` set, so the SessionStart hook injects the identical
+context block; done/blocked/red-tier semantics are unchanged (runner/README.md
+has the full contract). Both transports coexist until SL-011 retires the
+keystroke half behind the F1 proof (issue #15).
+
+Tests: `node --test hooks/directive.test.mjs` (52), plus the directive-job
+group in `runner/runner.test.mjs`.
 
 Two things keep the loop from stalling, added 2026-07-31 after it stalled
 twice in one day. **Liveness:** a directive session that ends its turn UNDER the
