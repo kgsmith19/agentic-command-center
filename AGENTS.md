@@ -4,7 +4,9 @@ Independent guard rail + control panel for Claude Code sessions on this machine.
 `hooks/guard.mjs` is a PreToolUse hook (registered in `~/.claude/settings.json`
 for `Edit|Write|NotebookEdit|Read`, all projects); `hooks/engine.mjs` is the CLI
 engine that owns every state change; `guards-gui.ps1` (launch: `Guards
-Control.cmd`) is the user's GUI on top; the `/approve` skill
+Control.cmd`) is the user's GUI on top — its toggle/protections/requests tabs
+also exist in the web GUI (`node gui/server.mjs` → `/guards`, SPEC-0002, the
+SL-009 migration that eventually deletes the WinForms shell); the `/approve` skill
 (`~/.claude/skills/approve/`) is the user's in-chat Run button.
 
 ## What the guard enforces (in order)
@@ -186,8 +188,12 @@ powershell -File shim/claude.test.ps1
 powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
 powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
 npm run e2e:gui
-    -> GUI e2e. Playwright drives gui/kernel.html against gui/server.mjs in a
-       sandbox; runs headless in CI (gui-e2e job).
+    -> GUI e2e. Playwright drives gui/kernel.html AND gui/guards.html against
+       gui/server.mjs in a sandbox (the guards page talks to a fake engine via
+       ACC_ENGINE — e2e can never mutate the real config/runbox); runs
+       headless in CI (gui-e2e job). On a machine whose preinstalled browser
+       revision differs from the package pin, point ACC_PW_CHROMIUM at a
+       system Chromium.
 ```
 
 **Never run a hook by hand against live state.** `bindSession` adopts a directive by
