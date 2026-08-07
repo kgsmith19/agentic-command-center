@@ -94,7 +94,7 @@ Sole exception: a slice that net-deletes code may exceed `MAX_NET_LOC` in the ne
 
 ## Calibration
 
-`prompts/44-process-review.md` recalibrates these against real p90 values every `{{PROCESS_REVIEW_EVERY}}` slices.
+The periodic process review recalibrates these against real p90 values every `{{PROCESS_REVIEW_EVERY}}` slices.
 
 - Breached often -> slices are under-split. Raise a ceiling only with an argument that the work is irreducible.
 - Never approached (p90 under 40% of ceiling) -> the ceiling constrains nothing. Lower it to about p90.

@@ -1,6 +1,6 @@
 # RULE 00: CORE
 
-Always in effect. Every prompt in `prompts/` inherits this. Do not restate it; obey it.
+Always in effect across every phase of the SDD cycle. Do not restate it; obey it.
 
 ## Sources of truth, in order
 

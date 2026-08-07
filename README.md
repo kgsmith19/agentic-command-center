@@ -42,4 +42,4 @@ Windows-only suites (PowerShell, C#, the full GUI) and the real-token proof-tier
 
 ## Workflow
 
-New work follows the SDD cycle in `prompts/`: research (`10-research.md`) → PRD update (`12-prd-update.md`) → spec (`20-spec-write.md`) → red tests (`30-tests-red.md`) → green implementation (`31-implement-green.md`) → review (`40-lean-review.md`) → merge (`33-integrate-merge.md`). `prompts/91-cycle.md` is the one-slice-end-to-end shortcut. Most of this repo predates that cycle; it governs new work going forward.
+New work follows one SDD cycle: research → PRD update → spec → red tests → green implementation → review (lean + security) → merge, docs updated in the same commit. See `CLAUDE.md` for the phase-by-phase table. Most of this repo predates that cycle; it governs new work going forward.

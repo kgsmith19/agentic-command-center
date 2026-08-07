@@ -184,7 +184,7 @@ Rules: anything classified `PII` or `secret` must have a matching NFR — DR-001
 
 ## 13. Slice plan
 
-This system was built before this PRD existed. The slice plan below is historical record, not a forward plan — new work follows `prompts/91-cycle.md` from here on.
+This system was built before this PRD existed. The slice plan below is historical record, not a forward plan — new work follows the SDD cycle in `CLAUDE.md` from here on.
 
 | Slice | Name | What becomes true | Requirements delivered | Est. net LOC | Depends on |
 |---|---|---|---|---|---|
