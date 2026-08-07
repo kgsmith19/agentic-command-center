@@ -36,6 +36,14 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 function root() {
   return process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
 }
+
+// The one constant a transport ever delivers to resume a directive — typed by
+// clearbot into a console, or sent as the whole -p bootstrap by runner.mjs's
+// directive jobs (SPEC-0001). The real directive context (text, log tail,
+// done/blocked protocol) is injected by budget.mjs's SessionStart hook; this
+// string only wakes the session up. clearbot.ps1's $KICK is the same bytes on
+// the PowerShell side of the wire.
+export const KICK_TEXT = "Continue the active ACC directive.";
 export function directivesDir() {
   return process.env.ACC_DIRECTIVES_DIR || path.join(root(), "runner", "directives");
 }
@@ -305,6 +313,20 @@ export function appendCycle(id, { sessionId, ctx, text }) {
     );
   } catch {}
   return directive;
+}
+
+// The stuck signal for a headless run (runner.mjs's directiveState hashes
+// this): the BODY of the log's last section, with the header and _session_
+// lines dropped — their timestamps change on every append, so hashing them
+// would make every run read as progress and disarm the stuck brake entirely.
+export function lastCycleBody(id) {
+  let all = "";
+  try { all = fs.readFileSync(logPath(id), "utf8"); } catch { return ""; }
+  const i = all.lastIndexOf("### ");
+  if (i < 0) return "";
+  const lines = all.slice(i).split("\n").slice(1);
+  if (/^_session .*_\s*$/.test(lines[0] || "")) lines.shift();
+  return lines.join("\n").trim();
 }
 
 // The tail is what gets injected into the next session, so it is bounded here

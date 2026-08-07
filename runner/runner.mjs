@@ -11,6 +11,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { withLaunchSlot, retryTransport } from "../hooks/lane.mjs";
 import { spawnSpec } from "../hooks/cmdline.mjs";
+import { readDirective, appendCycle, lastCycleBody, KICK_TEXT } from "../hooks/directive.mjs";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync,
   renameSync, statSync, unlinkSync, writeFileSync,
@@ -26,7 +27,24 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ACC_RUNNER_ROOT ? resolve(process.env.ACC_RUNNER_ROOT) : HERE;
 const LOG_CAP = 1024 * 1024;
 
+// A directive-backed job (SPEC-0001, FR-011): the directive store supplies
+// workdir and identity; the bootstrap is only the kick constant because
+// budget.mjs's SessionStart hook injects the full directive context (text,
+// log tail, done/blocked protocol) into any child carrying ACC_DIRECTIVE.
+// Refusals are the contract: a non-active directive or one with no working
+// folder can never start a run.
+export function loadDirectiveJob(id) {
+  const d = readDirective(id);
+  if (!d || d.status !== "active") throw new Error(`directive "${id}" is not active — nothing to run`);
+  if (!d.cwd) throw new Error(`directive "${id}" has no working folder (cwd) — a headless run needs one`);
+  return {
+    name: `directive-${id}`, workdir: d.cwd, bootstrap: KICK_TEXT, directiveId: id,
+    maxStuck: 3, maxRuns: 100, runTimeoutMin: 180,
+  };
+}
+
 export function loadJob(name) {
+  if (name.startsWith("directive:")) return loadDirectiveJob(name.slice("directive:".length));
   const path = name.endsWith(".json") ? resolve(name) : join(ROOT, "jobs", name + ".json");
   const job = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
   for (const key of ["name", "workdir", "bootstrap", "statusFile", "doneMarker"]) {
@@ -51,7 +69,19 @@ export function alert(job, reason) {
   log(job, `ALERT: ${reason} (${file})`);
 }
 
+// A directive's "board" is its own store: done the moment its status leaves
+// `active` (setStatus archives it, so readDirective returns null); progress
+// is the BODY of the last log entry — a model repeating the same closing
+// summary verbatim is the headless stuck mode (see lastCycleBody for why
+// headers/timestamps are excluded).
+export function directiveState(id) {
+  const d = readDirective(id);
+  if (!d || d.status !== "active") return { done: true, hash: "" };
+  return { done: false, hash: createHash("sha256").update(lastCycleBody(id)).digest("hex") };
+}
+
 export function boardState(job) {
+  if (job.directiveId) return directiveState(job.directiveId);
   const file = join(job.workdir, job.statusFile);
   const text = existsSync(file) ? readFileSync(file, "utf8") : "";
   return {
@@ -121,7 +151,14 @@ export function runClaudeOnce(job) {
       // node process under `node hooks/covgate.mjs` — not that claude itself
       // is ever coverage-instrumented, but the fake stub runner.test.mjs
       // spawns through this exact path is).
-      env: { ...process.env, ACC_PTY: "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined },
+      // ACC_DIRECTIVE makes budget.mjs's SessionStart hook inject the full
+      // directive context into this child — the entire continuity mechanism
+      // for directive jobs, and set ONLY for them: a file job's child must
+      // never adopt a directive it was not launched for.
+      env: {
+        ...process.env, ACC_PTY: "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined,
+        ACC_DIRECTIVE: job.directiveId || "",
+      },
     };
     const child = sp.args ? spawn(sp.file, sp.args, opts) : spawn(sp.file, opts);
     child.stdin.write(job.bootstrap);
@@ -160,7 +197,22 @@ export function runOnce(job) {
   );
 }
 
-export async function runLoop(job, once, { run = runOnce } = {}) {
+// The week tier, via the same `usage.mjs check` verb clearbot shells
+// (Invoke-Kicks) — one authority, two callers. Any failure reads as green:
+// the console path fails open the same way (deliberate parity, revisit when
+// SL-010 gives usage.mjs an in-process API with its own coverage budget).
+// `exec` is injectable so the failure branches are testable without breaking
+// a real usage store.
+export function liveTier(exec = execFileSync) {
+  try {
+    const out = exec(process.execPath, [join(HERE, "..", "hooks", "usage.mjs"), "check"], { encoding: "utf8" });
+    return JSON.parse(out).tier || "green";
+  } catch {
+    return "green";
+  }
+}
+
+export async function runLoop(job, once, { run = runOnce, tier = liveTier } = {}) {
   let stuck = 0;
   for (let n = 1; n <= job.maxRuns; n++) {
     const stopFile = join(ROOT, "stop", job.name + ".stop");
@@ -171,8 +223,15 @@ export async function runLoop(job, once, { run = runOnce } = {}) {
     }
     const before = boardState(job);
     if (before.done) {
-      log(job, `done marker "${job.doneMarker}" present — queue complete`);
+      log(job, job.directiveId ? "directive left active status — complete" : `done marker "${job.doneMarker}" present — queue complete`);
       return 0;
+    }
+    // FR-005 on the headless path: a red week is a hard stop for anything
+    // that spends tokens unattended — same brake clearbot applies to kicks.
+    // Directive jobs only; file jobs never had a tier gate (unchanged here).
+    if (job.directiveId && tier() === "red") {
+      alert(job, "week token tier is RED — holding headless directive runs (exit 5)");
+      return 5;
     }
     log(job, `run ${n}/${job.maxRuns} starting (stuck ${stuck}/${job.maxStuck})`);
     // Every run goes through the machine-wide launch lane (hooks/lane.mjs):
@@ -182,6 +241,11 @@ export async function runLoop(job, once, { run = runOnce } = {}) {
     const { code, result, err } = await run(job);
     log(job, `run ${n} exited ${code}; tail: ${result.slice(-400).replaceAll("\n", " | ")}`);
     if (err) log(job, `stderr tail: ${err.replaceAll("\n", " | ")}`);
+    // The run's closing summary becomes the next fresh context's continuity
+    // (budget.mjs injects it as the log tail) AND the stuck signal
+    // (directiveState hashes it). Archived-mid-run is fine: appendCycle
+    // returns null against a directive that already left the live store.
+    if (job.directiveId) appendCycle(job.directiveId, { sessionId: "headless", ctx: 0, text: result });
     const after = boardState(job);
     if (after.done) {
       log(job, "queue complete");
@@ -203,6 +267,7 @@ export async function runLoop(job, once, { run = runOnce } = {}) {
 // sandbox this suite also runs in) — the real CLI path always uses the
 // default, unchanged from before.
 export function install(job, exec = execFileSync) {
+  if (job.directiveId) throw new Error("directive jobs are ad-hoc — not schedulable via --install");
   const s = job.schedule;
   if (!s || s.type !== "daily" || !s.time) {
     throw new Error('install needs job.schedule = {"type":"daily","time":"HH:MM"}');

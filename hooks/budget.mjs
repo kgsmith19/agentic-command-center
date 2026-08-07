@@ -14,7 +14,7 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, directiveForSession, recordTurnEnd } from "./directive.mjs";
+import { bindSession, appendCycle, logTail, directiveForSession, recordTurnEnd, KICK_TEXT } from "./directive.mjs";
 import { resolveRoot } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -307,9 +307,10 @@ function lastUserText(transcript) {
   return String(last || "").trim();
 }
 
-// Exactly the constants clearbot types (watcher/clearbot.ps1 $KICK and
-// $QUEUEKICK). Anything else came from a human, so the kick backs off.
-const KICK_CONSTANTS = ["Continue the active ACC directive.", "Run the queued prompt."];
+// Exactly the constants a transport delivers (clearbot.ps1 $KICK/$QUEUEKICK,
+// runner.mjs directive-job bootstrap). Anything else came from a human, so
+// the kick backs off. KICK_TEXT is canonical in directive.mjs.
+const KICK_CONSTANTS = [KICK_TEXT, "Run the queued prompt."];
 
 // ------------------------------------------------------------- handlers
 

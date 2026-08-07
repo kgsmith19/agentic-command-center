@@ -323,6 +323,7 @@ n++;
 fs.writeFileSync(countFile, String(n));
 fs.writeFileSync(dir + "/argv.json", JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(dir + "/pid.txt", String(process.pid));
+fs.writeFileSync(dir + "/env-directive.txt", process.env.ACC_DIRECTIVE || "");
 let stdin = "";
 process.stdin.on("data", (d) => (stdin += d));
 process.stdin.on("end", () => {
@@ -562,4 +563,154 @@ test("cli(): default dispatch runs the loop and returns runLoop's own code", asy
   const p = path.join(BASE, "cli-fn-done.json");
   fs.writeFileSync(p, JSON.stringify(j));
   assert.equal(await cliFn([p]), 0);
+});
+
+// ------------------------------------------------------------- directive jobs (SPEC-0001, FR-011)
+// The directive store is real (hooks/directive.mjs against a sandboxed
+// ACC_ROOT), never a forged fixture — these tests exercise the same store
+// mutations the live loop uses.
+process.env.ACC_ROOT = path.join(BASE, "accroot");
+const D = await import("../hooks/directive.mjs");
+const runnerNs = await import("./runner.mjs");
+const { loadDirectiveJob, directiveState } = runnerNs;
+
+function directive(over = {}) {
+  const cwd = over.cwd !== undefined ? over.cwd : fs.mkdtempSync(path.join(BASE, "dwork-"));
+  return D.createDirective({ text: over.text ?? "fix the tests", cwd });
+}
+
+test("AC-001: loadJob('directive:<id>') synthesizes a job from the store with file-job defaults", () => {
+  const d = directive();
+  const j = loadJob(`directive:${d.id}`);
+  assert.equal(j.name, `directive-${d.id}`);
+  assert.equal(j.workdir, d.cwd);
+  assert.equal(j.directiveId, d.id);
+  assert.equal(D.KICK_TEXT, "Continue the active ACC directive.",
+    "the wire constant clearbot types must be the canonical export");
+  assert.equal(j.bootstrap, D.KICK_TEXT);
+  assert.equal(j.maxStuck, 3);
+  assert.equal(j.maxRuns, 100);
+  assert.equal(j.runTimeoutMin, 180);
+});
+
+test("AC-002: a directive with no working folder is refused — no job object", () => {
+  const d = directive({ cwd: "" });
+  assert.throws(() => loadDirectiveJob(d.id), /working folder|cwd/i);
+});
+
+test("AC-003 / PROP-001: any non-active or absent directive is refused", () => {
+  for (const status of ["done", "blocked"]) {
+    const d = directive();
+    D.setStatus(d.id, status, "test");
+    assert.throws(() => loadDirectiveJob(d.id), /not active/i, `status ${status} must refuse`);
+  }
+  assert.throws(() => loadDirectiveJob("never-existed"), /not active/i);
+});
+
+test("directiveState: active with no log is not done and hashes stably", () => {
+  const d = directive();
+  const a = directiveState(d.id);
+  assert.equal(a.done, false);
+  assert.equal(directiveState(d.id).hash, a.hash);
+});
+
+test("directiveState: identical consecutive summaries hash identically — headers/timestamps excluded (AC-006's foundation)", () => {
+  const d = directive();
+  D.appendCycle(d.id, { sessionId: "headless", ctx: 0, text: "same summary" });
+  const a = directiveState(d.id);
+  D.appendCycle(d.id, { sessionId: "headless", ctx: 0, text: "same summary" });
+  assert.equal(directiveState(d.id).hash, a.hash,
+    "two cycles with identical bodies must not read as progress");
+  D.appendCycle(d.id, { sessionId: "headless", ctx: 0, text: "different summary" });
+  assert.notEqual(directiveState(d.id).hash, a.hash);
+});
+
+test("AC-005: the loop ends 0 when the directive itself reports done", async () => {
+  const d = directive();
+  const j = loadJob(`directive:${d.id}`);
+  let calls = 0;
+  const code = await runLoop(j, false, {
+    run: async () => {
+      calls++;
+      D.setStatus(d.id, "done", "finished by the model");
+      return { code: 0, result: "all done", err: "" };
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(calls, 1);
+});
+
+test("AC-006: identical consecutive summaries trip the stuck brake (alert + exit 2)", async () => {
+  const d = directive();
+  const j = { ...loadJob(`directive:${d.id}`), maxStuck: 2, maxRuns: 10 };
+  const code = await runLoop(j, false, {
+    run: async () => ({ code: 0, result: "same words every time", err: "" }),
+  });
+  assert.equal(code, 2);
+  const alerts = fs.readdirSync(path.join(process.env.ACC_RUNNER_ROOT, "alerts"))
+    .filter((f) => f.startsWith(j.name + "-"));
+  assert.ok(alerts.length >= 1, "a stuck stop must leave an alert");
+});
+
+test("AC-006: a differing summary resets the stuck counter", async () => {
+  const d = directive();
+  const j = { ...loadJob(`directive:${d.id}`), maxStuck: 2, maxRuns: 4 };
+  let n = 0;
+  const code = await runLoop(j, false, {
+    run: async () => ({ code: 0, result: `progress step ${++n}`, err: "" }),
+  });
+  assert.equal(code, 3, "always-different summaries must reach maxRuns (3), never stuck (2)");
+});
+
+test("AC-007 / PROP-002: each run appends exactly one cycle entry carrying the run's summary", async () => {
+  const d = directive();
+  const j = loadJob(`directive:${d.id}`);
+  await runLoop(j, true, { run: async () => ({ code: 0, result: "did X to the parser", err: "" }) });
+  assert.equal(Number(D.readDirective(d.id).cycles), 1, "exactly one cycle per run");
+  assert.match(D.logTail(d.id), /did X to the parser/);
+});
+
+test("AC-008: a red week tier holds the loop — no run, alert, exit 5", async () => {
+  const d = directive();
+  const j = loadJob(`directive:${d.id}`);
+  let calls = 0;
+  const code = await runLoop(j, false, {
+    run: async () => { calls++; return { code: 0, result: "x", err: "" }; },
+    tier: () => "red",
+  });
+  assert.equal(code, 5);
+  assert.equal(calls, 0, "a red tier must stop the run before any spawn");
+});
+
+test("AC-010: --install on a directive job is refused", () => {
+  const d = directive();
+  const j = loadJob(`directive:${d.id}`);
+  assert.throws(() => install(j, () => {}), /directive/i);
+});
+
+test("AC-004 integration: a directive job's child carries ACC_DIRECTIVE; a file job's does not", async () => {
+  const dirState = fakeClaudeDir("acc-directive");
+  process.env.FAKE_CLAUDE_MODE = "ok";
+  const d = directive();
+  const j = loadJob(`directive:${d.id}`);
+  const r = await runClaudeOnce({ ...j, runTimeoutMin: 1 });
+  assert.equal(r.code, 0);
+  assert.equal(fs.readFileSync(path.join(dirState, "env-directive.txt"), "utf8"), d.id);
+
+  const fileJob = job({ bootstrap: "plain file job" });
+  await runClaudeOnce({ ...fileJob, runTimeoutMin: 1 });
+  assert.equal(fs.readFileSync(path.join(dirState, "env-directive.txt"), "utf8"), "",
+    "a file job must never masquerade as a directive session");
+});
+
+test("liveTier: parses the check verb's JSON, and every failure shape reads green (documented fail-open parity with clearbot)", () => {
+  const { liveTier } = runnerNs;
+  assert.equal(liveTier(() => JSON.stringify({ tier: "red", weekTokens: 9 })), "red");
+  assert.equal(liveTier(() => JSON.stringify({ tier: "amber" })), "amber");
+  assert.equal(liveTier(() => JSON.stringify({})), "green", "missing tier field");
+  assert.equal(liveTier(() => "not json"), "green", "unparseable output");
+  assert.equal(liveTier(() => { throw new Error("spawn failed"); }), "green", "exec failure");
+  // The real spawn path, against the real usage.mjs in this sandbox (empty
+  // transcript tree, no thresholds): must complete and land on a real tier.
+  assert.ok(["green", "amber", "red"].includes(liveTier()));
 });

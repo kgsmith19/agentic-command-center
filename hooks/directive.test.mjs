@@ -612,3 +612,23 @@ test("a directive persists correctly after its directory is moved to a new locat
     fs.rmSync(newDir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------------------- SPEC-0001 (headless runner wiring)
+test("KICK_TEXT is the exact wire constant clearbot types — a drift here desyncs the human-hold detection", async () => {
+  const { m } = await loadDirective();
+  assert.equal(m.KICK_TEXT, "Continue the active ACC directive.");
+});
+
+test("lastCycleBody returns the last cycle's BODY only — headers/timestamps/session lines never leak in", async () => {
+  const { m } = await loadDirective();
+  const d = m.createDirective({ text: "t", cwd: "/w" });
+  assert.equal(m.lastCycleBody(d.id), "", "no log yet is empty, not a throw");
+  m.appendCycle(d.id, { sessionId: "s-1", ctx: 123000, text: "first summary" });
+  assert.equal(m.lastCycleBody(d.id), "first summary");
+  m.appendCycle(d.id, { sessionId: "s-2", ctx: 456000, text: "first summary" });
+  assert.equal(m.lastCycleBody(d.id), "first summary",
+    "identical bodies at different times/sessions must compare equal — this is the headless stuck signal");
+  m.appendCycle(d.id, { sessionId: "s-3", ctx: 1, text: "second summary" });
+  assert.equal(m.lastCycleBody(d.id), "second summary", "always the LAST cycle");
+  assert.equal(m.lastCycleBody("no-such-directive"), "", "missing directive is empty, not a throw");
+});

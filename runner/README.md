@@ -17,12 +17,32 @@ prompt), `statusFile` (progress = its hash changes between runs),
 `maxRuns` (100), `runTimeoutMin` (180), `schedule` ({"type":"daily",
 "time":"HH:MM"}, only needed for --install).
 
+Directive jobs (SPEC-0001, ADR-0001/0004 — the headless continuity path):
+
+    node C:\code\guards\runner\runner.mjs directive:<id>           # run a directive to completion
+    node C:\code\guards\runner\runner.mjs directive:<id> --once    # one run (debug)
+
+No job file: the directive store supplies workdir (its `cwd` — required) and
+identity; the bootstrap is only the kick constant because the SessionStart
+hook injects the full directive context (text, progress log tail, done/blocked
+protocol) into any child carrying `ACC_DIRECTIVE`. Done = the directive's own
+status leaves `active` (the model ran `directive.mjs done|blocked`). Progress =
+the run's closing summary changed from the previous run's (each run's summary
+is appended to the directive log — it is both the next fresh context's
+continuity and the stuck signal; a model repeating itself verbatim is the
+headless stuck mode). A RED week tier holds the loop before any spawn
+(exit 5) — same `usage.mjs check` verb clearbot consults, same fail-open on an
+unreadable usage store. `--install` is refused for directive jobs (they are
+ad-hoc, not scheduled).
+
 Design constraints (deliberate):
 - Sessions run WITHOUT --bare: the guard hook stack is the safety layer
   that makes headless bypassPermissions acceptable. Never add --bare.
 - Stop conditions are the job's, not the model's: done-marker, stuck-N
   (alert file in alerts/), maxRuns, per-run timeout. Alerts + exit codes
-  (2 stuck, 3 maxRuns, 4 graceful stop: create stop/<job>.stop, honored between runs) are the operator surface; logs rotate at 1 MiB.
+  (2 stuck, 3 maxRuns, 4 graceful stop: create stop/<job>.stop, honored
+  between runs, 5 red week tier held a directive job) are the operator
+  surface; logs rotate at 1 MiB.
 - One loop instance per job at a time; nothing here mutates guards state
   (config/vault untouched) — the runner only reads its own folder and the
   job workdir's status file.

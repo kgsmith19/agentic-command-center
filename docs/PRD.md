@@ -119,6 +119,7 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | FR-008 | The kernel must record exactly one `run_started` and one `run_finalized` ledger line per run, even under concurrent retries or a mid-run crash. | Must | Given 20 concurrent append attempts for the same run, when the ledger is read back, then no duplicate `run_started` line exists. | UC-003 | done |
 | FR-009 | The system must route a session to the narrowest folder its task text names, and fall back to advice-only when the destination cannot be confirmed safe to type. | Should | Given a task naming a specific sub-project, when routing runs, then the verdict names that sub-project's folder, not its parent. | UC-001 | done |
 | FR-010 | The system must let a human hand off any operation the guard blocks or that needs elevated rights, as a reviewable script the human runs deliberately. | Must | Given a guard-denied edit to protected machinery, when an agent needs it done, then it writes a runbox script instead of failing silently. | UC-001 | done |
+| FR-011 | The system must run a bound directive to completion headless — no console, no keystrokes — resuming across fresh contexts via the directive log, and holding all runs while the week token tier is red. | Must | Given an active directive with a working folder, when the runner is pointed at it, then each run receives the directive context (text, progress log, done/blocked protocol) and the loop ends only when the directive's own status leaves `active` — and given a red week tier, no run starts. | UC-002 | in-progress |
 
 **Priority values:** `Must` (product does not exist without it), `Should` (product is materially worse without it), `Could` (nice, cut it first), `Won't` (recorded so it is not re-litigated).
 
@@ -195,6 +196,17 @@ This system was built before this PRD existed. The slice plan below is historica
 | SL-005 | Kernel scenario-enumeration hardening | 12 kernel modules audited for TOCTOU/uncaught-throw gaps; 8 real bugs fixed | NFR-002, NFR-003 | historical | SL-004 |
 | SL-006 | SDD rearchitecture (this change) | Repo adopts PRD-as-source-of-truth doc contract; OPEN-ISSUES.md ledger replaced by GitHub issues; dead code, redundant docs, and low-value tests removed | — | ~-2000 (net deletion) | SL-005 |
 
+Forward plan (the ADR-0004 consolidation program — one Node core, delete the script sprawl):
+
+| Slice | Name | What becomes true | Requirements delivered | Est. net LOC | Depends on |
+|---|---|---|---|---|---|
+| SL-007 | Runner ↔ directive wiring (SPEC-0001) | A directive can run headless to completion; red week tier holds runs | FR-011, FR-005 (headless path) | ~+80 | - |
+| SL-008 | F1 overnight proof | One real, low-stakes directive completes unattended behind a hard ceiling (Kyle runs; issue #15) | validates FR-011 | 0 | SL-007 |
+| SL-009 | Web-GUI completion | Every WinForms tab exists in `gui/server.mjs`+HTML with Playwright coverage; `guards-gui.ps1` deleted | FR-010 (web surface) | ~-1,300 | - |
+| SL-010 | Watcher fold-in | Auto-approve + heartbeat run in Node; watcher PS1 shrinks to elevation installers | NFR-007 | ~-300 | SL-007 |
+| SL-011 | Keystroke-stack deletion | `clearbot.ps1`, `sendconsole.ps1`, `winfind.ps1`, `PtyHost.cs`, `term.html`, `gui/vendor/` (1.1 MB) gone; FR-004's console mechanism retired | FR-004 superseded by FR-011 | ~-1,900 | SL-008 |
+| SL-012 | Launcher/root cleanup | One entry point per concern; root `.cmd` sprawl gone | — | ~-100 | SL-009, SL-011 |
+
 ## 14. Glossary
 
 | Term | Definition (plain language) | Not to be confused with |
@@ -221,3 +233,4 @@ This system was built before this PRD existed. The slice plan below is historica
 | Date | Version | Change | Reason | Affected IDs |
 |---|---|---|---|---|
 | 2026-08-07 | 1.0.0 | Initial PRD, written retroactively against the existing system. `OPEN-ISSUES.md` retired in favor of GitHub issues; its two genuinely open entries became issues #11 and #12. | Rearchitect the repo onto an SDD documentation contract and start a simplification pass. | All |
+| 2026-08-07 | 1.1.0 | Added FR-011 (headless directive continuity) and the ADR-0004 forward slice plan (SL-007…SL-012): consolidate onto one Node core, finish the web-GUI migration, retire the keystroke stack and WinForms. | Kyle's rearchitecture directive — fewer files, fewer languages, one mechanism per concern. | FR-011, FR-004, FR-005, §13 |
