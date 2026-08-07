@@ -34,6 +34,15 @@
   <button data-verb="projects-rm">Stop watching selected</button>
 </fieldset>
 
+<fieldset><legend>Passwords and keys</legend>
+  <p class="muted">Hand Claude a secret without pasting it into chat. One <code>NAME=value</code> per line — values go straight to the vault and are never shown again.</p>
+  <textarea id="vaultInput" rows="3" style="width:98%" placeholder="API_KEY=abc123&#10;DB_PASSWORD=hunter2"></textarea><br>
+  <button id="vaultSave">Save to vault</button>
+  <span id="vaultMsg" class="muted"></span><br>
+  <label>Keys Claude can use (names only)<br><select id="vaultKeys" size="4"></select></label><br>
+  <button id="vaultRm">Delete selected key</button>
+</fieldset>
+
 <fieldset><legend>Claude's requests (runbox)</legend>
   <label>Pending<br><select id="pending" size="6"></select></label>
   <label>Trash (undo lives here)<br><select id="trashed" size="6"></select></label><br>
@@ -74,6 +83,7 @@ async function refresh() {
   fill($("secrets"), s.secrets || []);
   fill($("protected"), s.protected || []);
   fill($("projects"), s.projects || []);
+  fill($("vaultKeys"), s.vaultKeys || []);
   const l = await api("/api/guards/list");
   fill($("pending"), l.pending || [], (i) => i.label + ":" + i.name);
   fill($("trashed"), l.trashed || [], (i) => i.label + ":" + i.name);
@@ -95,6 +105,29 @@ for (const b of document.querySelectorAll("[data-verb]")) {
     if (arg) engine(verb, arg);
   };
 }
+$("vaultSave").onclick = async () => {
+  const pairs = [];
+  for (const line of $("vaultInput").value.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const i = t.indexOf("=");
+    if (i < 1) continue;
+    pairs.push({ key: t.slice(0, i).trim(), value: t.slice(i + 1) });
+  }
+  if (!pairs.length) { $("vaultMsg").textContent = "no NAME=value lines found"; return; }
+  const r = await api("/api/guards/vault-import", { pairs });
+  // Clear the secret out of the DOM the instant it is stored — no value lingers
+  // in the page, nothing to read back.
+  $("vaultInput").value = "";
+  $("vaultMsg").textContent = r.error || (r.stored ? "stored: " + r.stored.join(", ") : r.out);
+  $("vaultMsg").className = r.error ? "err" : "ok";
+  await refresh();
+};
+$("vaultRm").onclick = async () => {
+  if (!$("vaultKeys").value) return;
+  await api("/api/guards/vault-rm", { key: $("vaultKeys").value });
+  await refresh();
+};
 $("pending").onchange = async () => {
   const r = await api("/api/guards/preview", { ref: $("pending").value });
   $("preview").textContent = r.content || r.error;
