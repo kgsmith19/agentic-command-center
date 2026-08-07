@@ -13,14 +13,68 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadKernelPolicy, saveKernelPolicy } from "../kernel/policy.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Exact-match route map — request input never touches a filesystem path, so
 // there is no traversal surface to defend.
-const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html" };
+const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/guards": "guards.html" };
 const BODY_CAP = 64 * 1024;
+
+// --- guards API (SPEC-0002): thin shell over hooks/engine.mjs -------------
+// The engine stays the single owner of every state change, exactly as it is
+// for guards-gui.ps1 — this server adds transport, never logic. ACC_ENGINE
+// is resolved per request so tests can drive a fake engine (and one
+// read-only case the real one) without a restart.
+const enginePath = () => process.env.ACC_ENGINE || path.join(HERE, "..", "hooks", "engine.mjs");
+
+function engineExec(args) {
+  return new Promise((resolveExec) => {
+    execFile(process.execPath, [enginePath(), ...args], { timeout: 120000 }, (err, stdout, stderr) => {
+      resolveExec({ code: err ? (err.code ?? 1) : 0, stdout: String(stdout || ""), stderr: String(stderr || "") });
+    });
+  });
+}
+
+// PROP-001: engine argv is built ONLY from this map plus one validated arg.
+// No browser string is ever a path, a flag, or shell input (execFile, no
+// shell). Verbs that consume secret values (apply, vault-import) are
+// deliberately absent — SPEC-0003 owns that surface with its own review.
+const oneRef = (b) =>
+  typeof b.arg === "string" && b.arg.length > 0 && b.arg.length <= 512 && !b.arg.includes("\0")
+    ? [b.arg] : null;
+const ENGINE_VERBS = {
+  toggle: (b) => (b.arg === "on" || b.arg === "off" ? [b.arg] : null),
+  "secret-add": oneRef, "secret-rm": oneRef,
+  "protected-add": oneRef, "protected-rm": oneRef,
+  "projects-add": oneRef, "projects-rm": oneRef,
+  run: oneRef, trash: oneRef, restore: oneRef,
+  // Permanent deletion keeps its human gate: the browser must send an
+  // explicit confirm, and only the server ever writes the --really flag.
+  flush: (b) => (b.confirm === true ? ["--really"] : null),
+};
+
+async function engineJson(args) {
+  const r = await engineExec(args);
+  if (r.code !== 0) throw new Error(r.stderr || `engine exited ${r.code}`);
+  return JSON.parse(r.stdout);
+}
+
+function readBody(req, res, cb) {
+  let body = "";
+  req.on("data", (c) => {
+    body += c;
+    if (body.length > BODY_CAP) req.destroy(); // over-cap is dropped, never parsed
+  });
+  req.on("end", () => {
+    let parsed;
+    try { parsed = JSON.parse(body); }
+    catch { return send(res, 400, { error: "body is not JSON" }); }
+    cb(parsed);
+  });
+}
 
 const localHost = (h) => /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(String(h || ""));
 const localOrigin = (o) => o === undefined || /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(String(o));
@@ -44,20 +98,54 @@ export function handler(req, res) {
     }
     if (req.method === "POST") {
       if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
-      let body = "";
-      req.on("data", (c) => {
-        body += c;
-        if (body.length > BODY_CAP) req.destroy(); // over-cap is dropped, never parsed
-      });
-      req.on("end", () => {
-        let block;
-        try { block = JSON.parse(body); }
-        catch { return send(res, 400, { error: "body is not JSON" }); }
+      return readBody(req, res, (block) => {
         try { return send(res, 200, { ok: true, kernel: saveKernelPolicy(block) }); }
         catch (e) { return send(res, 400, { error: e.message }); }
       });
-      return;
     }
+  }
+  if (route === "/api/guards/status" && req.method === "GET") {
+    return engineJson(["status"])
+      .then((j) => send(res, 200, j))
+      .catch((e) => send(res, 500, { error: e.message }));
+  }
+  if (route === "/api/guards/list" && req.method === "GET") {
+    return Promise.all([engineJson(["list", "--json"]), engineJson(["trash-list", "--json"])])
+      .then(([pending, trashed]) => send(res, 200, { pending, trashed }))
+      .catch((e) => send(res, 500, { error: e.message }));
+  }
+  if (route === "/api/guards/engine" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      // Object.hasOwn, not bare property access: a prototype-key verb
+      // ("__proto__", "toString") would otherwise resolve to an Object
+      // prototype member — non-callable ones threw here and HUNG the
+      // request (found by this route's own suite, 2026-08-07).
+      const build = typeof b.verb === "string" && Object.hasOwn(ENGINE_VERBS, b.verb) ? ENGINE_VERBS[b.verb] : null;
+      const args = build && build(b);
+      if (!args) return send(res, 400, { error: `verb "${b.verb}" is not allowed here or its arg is invalid` });
+      const r = await engineExec([b.verb, ...args]);
+      // A non-zero engine exit is a RESULT, not a transport error: 200 with
+      // the code and output tail, so the page can show exactly what failed.
+      send(res, 200, { code: r.code, out: (r.stdout + r.stderr).slice(-4000) });
+    });
+  }
+  if (route === "/api/guards/preview" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      // AC-006: the ref resolves ONLY through the engine's own list — a
+      // browser string never becomes a filesystem path by itself.
+      let items;
+      try { items = await engineJson(["list", "--json"]); }
+      catch (e) { return send(res, 500, { error: e.message }); }
+      const item = (items || []).find((i) => `${i.label}:${i.name}` === b.ref || i.name === b.ref);
+      if (!item) return send(res, 404, { error: "no pending script matches that ref" });
+      try {
+        return send(res, 200, { content: fs.readFileSync(path.join(item.dir, item.name), "utf8").slice(0, BODY_CAP) });
+      } catch (e) {
+        return send(res, 500, { error: e.message });
+      }
+    });
   }
   send(res, 404, { error: "not found" });
 }

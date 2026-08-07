@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Guards</title>
+<style>
+  body { font: 14px 'Segoe UI', sans-serif; margin: 16px; max-width: 860px; }
+  fieldset { margin: 0 0 14px; border: 1px solid #ccc; }
+  label { display: inline-block; margin: 4px 14px 4px 0; }
+  input[type=text] { width: 260px; }
+  select { width: 300px; }
+  button { margin: 2px 6px 2px 0; }
+  #status { margin-left: 12px; font-weight: 600; }
+  #result, #preview { white-space: pre-wrap; background: #f6f6f6; border: 1px solid #ddd; padding: 8px; min-height: 40px; max-height: 240px; overflow: auto; }
+  .ok { color: #1a7a1a; }
+  .err { color: #b22222; }
+  .muted { color: #666; }
+</style>
+</head>
+<body>
+<h3>Guards <span id="status"></span><button id="toggle"></button></h3>
+<p class="muted">Same engine as the desktop app (<code>hooks/engine.mjs</code>) — every change here is the same change there.</p>
+
+<fieldset><legend>What Claude cannot touch</legend>
+  <label>Secret patterns (never read or written)<br><select id="secrets" size="4"></select></label>
+  <label>Locked paths (read-only)<br><select id="protected" size="4"></select></label>
+  <label>Watched folders<br><select id="projects" size="4"></select></label><br>
+  <input type="text" id="protInput" placeholder="pattern or path, e.g. *.pem or C:/code/x">
+  <button data-verb="secret-add">Block as secret</button>
+  <button data-verb="protected-add">Lock path</button>
+  <button data-verb="projects-add">Watch folder</button>
+  <button data-verb="secret-rm">Un-block selected secret</button>
+  <button data-verb="protected-rm">Unlock selected</button>
+  <button data-verb="projects-rm">Stop watching selected</button>
+</fieldset>
+
+<fieldset><legend>Claude's requests (runbox)</legend>
+  <label>Pending<br><select id="pending" size="6"></select></label>
+  <label>Trash (undo lives here)<br><select id="trashed" size="6"></select></label><br>
+  <div>Exactly what the selected script will do:</div>
+  <div id="preview" class="muted">(select a pending script)</div>
+  <button id="run">Run selected</button>
+  <button id="trash">Delete (to trash)</button>
+  <button id="restore">Restore selected from trash</button>
+  <button id="flush">Empty trash…</button>
+  <div>Result:</div>
+  <div id="result"></div>
+</fieldset>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = (route, body) => fetch(route, body === undefined
+  ? undefined
+  : { method: "POST", headers: { "content-type": "application/json", "X-ACC": "1" }, body: JSON.stringify(body) }
+).then((r) => r.json());
+
+let enabled = true;
+function fill(sel, items, label) {
+  sel.innerHTML = "";
+  for (const it of items) {
+    const o = document.createElement("option");
+    o.value = label ? label(it) : it;
+    o.textContent = o.value + (it.summary ? "  — " + it.summary : "");
+    sel.appendChild(o);
+  }
+}
+
+async function refresh() {
+  const s = await api("/api/guards/status");
+  enabled = !!s.enabled;
+  $("status").textContent = enabled ? "ENABLED" : "DISABLED";
+  $("status").className = enabled ? "ok" : "err";
+  $("toggle").textContent = enabled ? "Turn off" : "Turn on";
+  fill($("secrets"), s.secrets || []);
+  fill($("protected"), s.protected || []);
+  fill($("projects"), s.projects || []);
+  const l = await api("/api/guards/list");
+  fill($("pending"), l.pending || [], (i) => i.label + ":" + i.name);
+  fill($("trashed"), l.trashed || [], (i) => i.label + ":" + i.name);
+}
+
+async function engine(verb, arg, extra) {
+  const r = await api("/api/guards/engine", { verb, arg, ...extra });
+  $("result").textContent = r.error ? r.error : r.out;
+  $("result").className = r.error || r.code ? "err" : "";
+  await refresh();
+}
+
+$("toggle").onclick = () => engine("toggle", enabled ? "off" : "on");
+for (const b of document.querySelectorAll("[data-verb]")) {
+  b.onclick = () => {
+    const verb = b.dataset.verb;
+    const fromList = { "secret-rm": "secrets", "protected-rm": "protected", "projects-rm": "projects" }[verb];
+    const arg = fromList ? $(fromList).value : $("protInput").value.trim();
+    if (arg) engine(verb, arg);
+  };
+}
+$("pending").onchange = async () => {
+  const r = await api("/api/guards/preview", { ref: $("pending").value });
+  $("preview").textContent = r.content || r.error;
+  $("preview").className = r.content ? "" : "err";
+};
+$("run").onclick = () => $("pending").value && engine("run", $("pending").value);
+$("trash").onclick = () => $("pending").value && engine("trash", $("pending").value);
+$("restore").onclick = () => $("trashed").value && engine("restore", $("trashed").value);
+$("flush").onclick = () => confirm("Permanently delete everything in the runbox trash?") && engine("flush", undefined, { confirm: true });
+
+refresh();
+</script>
+</body>
+</html>
