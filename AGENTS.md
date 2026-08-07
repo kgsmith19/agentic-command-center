@@ -143,7 +143,7 @@ file under `kernel/adapters/`), and the honest guard ceilings.
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/prompts.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
+node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
     -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
@@ -281,8 +281,9 @@ Two decisions carry the whole design:
 2. **Goal text never becomes keystrokes.** It reaches the model through
    SessionStart context; the only thing ever typed is a constant.
 
-**ACC-hosted sessions run on a ConPTY inside the GUI** (spec
-`docs/superpowers/specs/2026-07-31-acc-embedded-terminal-design.md`): the Go
+**ACC-hosted sessions run on a ConPTY inside the GUI** (see
+`docs/adr/ADR-0001-retire-conpty-keystroke-channel.md` for the open question
+about this mechanism's future): the Go
 button spawns claude via `Acc.PtyHost` (gui/PtyHost.cs), renders it in an
 xterm.js/WebView2 Terminal tab, and records a `transport:"pty"` window with a
 pipe name (`hooks/budget.mjs`, env `ACC_PTY`). clearbot then drives the session

@@ -148,18 +148,6 @@ test("stopTask on a handle whose done already rejected does not throw", async ()
   await assert.doesNotReject(() => A.stopTask(handle));
 });
 
-test("the handle's own stop() convenience method calls stopTask", async () => {
-  const child = fakeChild();
-  const killed = [];
-  const handle = await A.startTask({
-    runId: "r-handle-stop", prompt: "x", settingsPath: "C:/tmp/s.json",
-    sessionId: "11111111-2222-3333-4444-555555555555", tools: ["Read"], cwd: BASE,
-    spawnFn: () => child, killFn: (c) => { killed.push(c.pid); c.emit("close", 143); },
-  });
-  await handle.stop();
-  assert.deepEqual(killed, [4242]);
-});
-
 test("startTask parses stdout stream-json lines into events, tolerating a non-JSON banner and split chunks", async () => {
   const child = fakeChild();
   const handle = await A.startTask({

@@ -2,7 +2,7 @@
 // An incomplete contract is refused before a harness process exists, because
 // a run whose success cannot be checked is not a run worth starting.
 import fs from "node:fs";
-import { loadKernelPolicy, alwaysDenyWriteRoots, norm } from "./policy.mjs";
+import { loadKernelPolicy, alwaysDenyWriteRoots, norm, stripBom } from "./policy.mjs";
 
 export const REQUIRED_FIELDS = Object.freeze([
   "goal", "constraints", "allowedActions", "budget", "acceptanceCriteria", "rollbackPlan",
@@ -13,9 +13,7 @@ const ACTION_KEYS = Object.freeze(["readRoots", "writeRoots", "bashPatterns", "n
 
 export function loadContract(file) {
   try {
-    let text = fs.readFileSync(file, "utf8");
-    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // strip a UTF-8 BOM
-    return JSON.parse(text);
+    return JSON.parse(stripBom(fs.readFileSync(file, "utf8")));
   } catch (e) {
     throw new Error(`kernel: contract unreadable: ${file} (${e.message})`);
   }

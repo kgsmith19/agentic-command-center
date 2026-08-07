@@ -457,8 +457,6 @@ function tierFor(weekTokens) {
 }
 
 function cmdCheck(project) {
-  const { main, sub } = weekTotals(project);
-  const total = totalTokens(main) + totalTokens(sub);
   console.log(JSON.stringify(tierFor(tierWindowTotal(project))));
 }
 

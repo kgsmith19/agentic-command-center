@@ -5,7 +5,7 @@
 # script does exactly one check and exits. Standalone by design: imports no
 # repo code, so a bug in hooks/lane.mjs or the shim cannot also break the
 # thing meant to detect that bug. Design:
-# docs/superpowers/specs/2026-08-03-claude-launch-cap-design.md
+# docs/adr/ADR-0003-launch-cap-check-then-launch.md
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $here
