@@ -47,16 +47,20 @@ runner/README.md               the slice-runner's own deep reference
 
 ## Workflow
 
-| Phase | Prompt | Notes |
-|---|---|---|
-| Explore | `prompts/10-research.md` | |
-| Requirements | `prompts/11-prd-create.md` / `12-prd-update.md` | |
-| Spec | `prompts/20-spec-write.md` | |
-| Build | `prompts/30-tests-red.md` / `31-implement-green.md` | Red-first, per `rules/06-TESTS.md` |
-| Review | `prompts/40-lean-review.md`, `41-security-review.md` | |
-| Ship | `prompts/33-integrate-merge.md`, `90-ship.md` | |
+New work follows one SDD cycle, end to end:
 
-`prompts/` is copied in from the SDD pack but not yet wired into day-to-day work on this repo — most changes so far are direct fixes against the existing, already-shipped system rather than fresh slices. Adopt the cycle (`prompts/91-cycle.md`) for new, greenfield work going forward.
+**Explore → Requirements (PRD) → Spec → Build (red tests first, then green) → Review (lean, then security) → Ship.**
+
+| Phase | What it produces | Rule card |
+|---|---|---|
+| Explore | a research note in `docs/notes/` | — |
+| Requirements | a new/updated `FR-`/`NFR-` in `docs/PRD.md` | — |
+| Spec | a `SPEC-NNNN` in `specs/active/` | `templates/SPEC.md` |
+| Build | red tests, then the minimal green | `rules/06-TESTS.md` (red-first) |
+| Review | lean + security pass before merge | `rules/00-CORE.md` |
+| Ship | merge with docs updated in the same commit | — |
+
+The step-by-step prompt pack that used to live in `prompts/` was removed (unused vendored scaffolding — it belongs in a shared service, not this repo). The cycle above is the process; follow it directly.
 
 ## Non-negotiables
 

@@ -102,7 +102,7 @@ traces: [FR-001, NFR-003]
 | Run it | Literal copy-pasteable commands, in order |
 | Test it | The literal command |
 | Where things are | Table pointing at the three canonical docs and `specs/` |
-| Workflow | The slice loop in five lines, linking to `prompts/` |
+| Workflow | The SDD slice loop in five lines (see `CLAUDE.md`) |
 
 A README duplicating the PRD is a maintenance burden and a contradiction source. Link to it.
 
@@ -111,8 +111,8 @@ A README duplicating the PRD is a maintenance burden and a contradiction source.
 | Every | Run |
 |---|---|
 | Slice | Update PRD status column (part of GATE-GREEN G9) |
-| `{{DOC_REFRESH_EVERY}}` slices | `prompts/43-doc-refresh.md` |
-| `{{LEAN_REVIEW_EVERY}}` slices | `prompts/40-lean-review.md` |
-| `{{SECURITY_REVIEW_EVERY}}` slices | `prompts/41-security-review.md` |
-| `{{TEST_REVIEW_EVERY}}` slices | `prompts/42-test-review.md` |
-| `{{PROCESS_REVIEW_EVERY}}` slices | `prompts/44-process-review.md` |
+| `{{DOC_REFRESH_EVERY}}` slices | doc refresh — reconcile docs against the shipped code |
+| `{{LEAN_REVIEW_EVERY}}` slices | lean review |
+| `{{SECURITY_REVIEW_EVERY}}` slices | security review (the `security-review` skill) |
+| `{{TEST_REVIEW_EVERY}}` slices | test review — every test earns its keep (`specs/TEST-LEDGER.md`) |
+| `{{PROCESS_REVIEW_EVERY}}` slices | process review — recalibrate the budgets in `rules/01-BUDGETS.md` |

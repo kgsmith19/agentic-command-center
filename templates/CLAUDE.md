@@ -49,16 +49,16 @@ specs/TEST-LEDGER.md           every test's justification
 
 ## Workflow
 
-| Phase | Prompt | Skill |
+| Phase | Produces | Skill |
 |---|---|---|
-| Explore | `prompts/10-research.md` | `superpowers:brainstorming` |
-| Requirements | `prompts/11-prd-create.md` / `12-prd-update.md` | |
-| Spec | `prompts/20-spec-write.md` | |
-| Isolate | `prompts/31-implement-green.md` | `superpowers:using-git-worktrees` |
-| Plan | | `superpowers:writing-plans` |
-| Build | | `superpowers:subagent-driven-development` + `test-driven-development` |
-| Review | | `superpowers:requesting-code-review` |
-| Ship | `prompts/33-integrate-merge.md` | `superpowers:finishing-a-development-branch` |
+| Explore | a research note | `superpowers:brainstorming` |
+| Requirements | a `FR-`/`NFR-` in the PRD | |
+| Spec | a `SPEC-NNNN` | |
+| Isolate | a slice branch/worktree | `superpowers:using-git-worktrees` |
+| Plan | the spec's task breakdown | `superpowers:writing-plans` |
+| Build | red tests, then green | `superpowers:subagent-driven-development` + `test-driven-development` |
+| Review | lean + security pass | `superpowers:requesting-code-review` |
+| Ship | merge, docs in-commit | `superpowers:finishing-a-development-branch` |
 
 Full routing and the worktree/subagent topology: `rules/07-SKILLS.md`.
 
