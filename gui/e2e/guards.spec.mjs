@@ -15,7 +15,7 @@ test.beforeEach(() => {
   fs.writeFileSync(path.join(rb, "fix.ps1"), "# does a thing\necho hi\n");
   fs.writeFileSync(stateFile, JSON.stringify({
     enabled: true,
-    secrets: [".env", "*.pem"], protected: ["C:/x"], projects: [],
+    secrets: [".env", "*.pem"], protected: ["C:/x"], projects: [], vaultKeys: ["EXISTING_KEY"],
     pending: [{ label: "central", name: "fix.ps1", dir: rb, runboxDir: rb, cwd: rb, keep: false, summary: "does a thing" }],
     trashed: [],
   }));
@@ -44,4 +44,28 @@ test("selecting a pending script previews its exact content; Run executes and mo
   await expect(page.locator("#pending option")).toHaveCount(0);
   await expect(page.locator("#trashed option")).toHaveCount(1);
   expect(onDisk().trashed[0].name).toBe("fix.ps1");
+});
+
+test("vault: saving a secret sends only NAME=value over stdin, clears the input, and lists the name", async ({ page }) => {
+  await page.goto("/guards");
+  await expect(page.locator("#vaultKeys option")).toHaveText(["EXISTING_KEY"]);
+  await page.locator("#vaultInput").fill("NEW_TOKEN=sup3r-secret");
+  await page.locator("#vaultSave").click();
+  await expect(page.locator("#vaultMsg")).toContainText("stored: NEW_TOKEN");
+  // The secret must not linger in the DOM after a save.
+  await expect(page.locator("#vaultInput")).toHaveValue("");
+  await expect(page.locator("#vaultKeys option")).toHaveText(["EXISTING_KEY", "NEW_TOKEN"]);
+  // The value's only sink was stdin — never rendered, and the state file the
+  // fake writes stores names only.
+  const stdin = fs.readFileSync(path.join(dir, "vault-stdin.txt"), "utf8");
+  expect(stdin).toBe("NEW_TOKEN=sup3r-secret\n");
+  expect(JSON.stringify(onDisk())).not.toContain("sup3r-secret");
+});
+
+test("vault: deleting a key removes it via vault-rm", async ({ page }) => {
+  await page.goto("/guards");
+  await page.locator("#vaultKeys").selectOption("EXISTING_KEY");
+  await page.locator("#vaultRm").click();
+  await expect(page.locator("#vaultKeys option")).toHaveCount(0);
+  expect(onDisk().vaultKeys).not.toContain("EXISTING_KEY");
 });

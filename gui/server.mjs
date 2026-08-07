@@ -30,13 +30,37 @@ const BODY_CAP = 64 * 1024;
 // read-only case the real one) without a restart.
 const enginePath = () => process.env.ACC_ENGINE || path.join(HERE, "..", "hooks", "engine.mjs");
 
-function engineExec(args) {
+// `stdin`, when given, is written to the engine's stdin and closed. This is
+// the ONLY channel a secret value ever travels (SPEC-0003): never argv, so it
+// cannot land in a process listing or a log; the value is not returned here
+// either — callers surface `code`/`stdout` only, and the engine's own output
+// names keys, never values.
+function engineExec(args, stdin) {
   return new Promise((resolveExec) => {
-    execFile(process.execPath, [enginePath(), ...args], { timeout: 120000 }, (err, stdout, stderr) => {
+    const child = execFile(process.execPath, [enginePath(), ...args], { timeout: 120000 }, (err, stdout, stderr) => {
       resolveExec({ code: err ? (err.code ?? 1) : 0, stdout: String(stdout || ""), stderr: String(stderr || "") });
     });
+    if (stdin !== undefined) { child.stdin.end(stdin); }
   });
 }
+
+// A vault key must be an env-var-shaped name and a value must be single-line:
+// the engine frames the vault as `KEY=VALUE\n` lines on stdin, so a `\n` in a
+// value or an `=`/newline in a key would forge an extra entry. Enforced here
+// as a security boundary (PROP-002), not politeness.
+// The anti-forgery guarantee rests on engine.mjs framing the vault as
+// `KEY=VALUE` lines split ONLY on /\r?\n/: rejecting \r and \n in a value is
+// therefore sufficient (a U+2028/U+2029 in a value passes through as literal
+// value text, not a new line). If the engine's split ever widens, widen
+// validVaultValue's rejected set in lockstep.
+const VAULT_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// `__proto__`/`constructor`/`prototype` are env-var-shaped but would pollute
+// the prototype of engine.mjs's plain-object vault via `v[key] = value` —
+// rejected here even though the engine's string-value assignment happens to
+// be inert today, so no future consumer can be surprised.
+const VAULT_KEY_RESERVED = new Set(["__proto__", "constructor", "prototype"]);
+const validVaultKey = (k) => typeof k === "string" && VAULT_KEY_RE.test(k) && !VAULT_KEY_RESERVED.has(k);
+const validVaultValue = (v) => typeof v === "string" && !/[\r\n]/.test(v) && v.length <= 8192;
 
 // PROP-001: engine argv is built ONLY from this map plus one validated arg.
 // No browser string is ever a path, a flag, or shell input (execFile, no
@@ -128,6 +152,34 @@ export function handler(req, res) {
       // A non-zero engine exit is a RESULT, not a transport error: 200 with
       // the code and output tail, so the page can show exactly what failed.
       send(res, 200, { code: r.code, out: (r.stdout + r.stderr).slice(-4000) });
+    });
+  }
+  if (route === "/api/guards/vault-import" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      const pairs = Array.isArray(b.pairs) ? b.pairs : null;
+      if (!pairs || !pairs.length) return send(res, 400, { error: "pairs must be a non-empty array" });
+      // Validate EVERY pair before invoking the engine: one bad entry rejects
+      // the whole import, so a partial write can never happen.
+      for (const p of pairs) {
+        if (!p || !validVaultKey(p.key)) return send(res, 400, { error: `invalid vault key: ${JSON.stringify(p && p.key)}` });
+        if (!validVaultValue(p.value)) return send(res, 400, { error: `invalid value for ${p.key} (must be single-line text)` });
+      }
+      const stdin = pairs.map((p) => `${p.key}=${p.value}\n`).join("");
+      const r = await engineExec(["vault-import"], stdin);
+      // Names only: derived from the request keys we already validated, never
+      // echoing a value back to the browser.
+      send(res, r.code === 0 ? 200 : 200, r.code === 0
+        ? { stored: pairs.map((p) => p.key) }
+        : { code: r.code, out: (r.stdout + r.stderr).slice(-2000) });
+    });
+  }
+  if (route === "/api/guards/vault-rm" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      if (!validVaultKey(b.key)) return send(res, 400, { error: `invalid vault key: ${JSON.stringify(b.key)}` });
+      const r = await engineExec(["vault-rm", b.key]);
+      send(res, 200, { code: r.code, out: (r.stdout + r.stderr).slice(-2000) });
     });
   }
   if (route === "/api/guards/preview" && req.method === "POST") {

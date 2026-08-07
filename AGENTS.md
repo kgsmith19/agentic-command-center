@@ -4,9 +4,14 @@ Independent guard rail + control panel for Claude Code sessions on this machine.
 `hooks/guard.mjs` is a PreToolUse hook (registered in `~/.claude/settings.json`
 for `Edit|Write|NotebookEdit|Read`, all projects); `hooks/engine.mjs` is the CLI
 engine that owns every state change; `guards-gui.ps1` (launch: `Guards
-Control.cmd`) is the user's GUI on top — its toggle/protections/requests tabs
-also exist in the web GUI (`node gui/server.mjs` → `/guards`, SPEC-0002, the
-SL-009 migration that eventually deletes the WinForms shell); the `/approve` skill
+Control.cmd`) is the user's GUI on top — its toggle/protections/requests/vault
+tabs also exist in the web GUI (`node gui/server.mjs` → `/guards`, SPEC-0002 +
+SPEC-0003, the SL-009 migration that eventually deletes the WinForms shell).
+The web vault route pipes each `KEY=VALUE` to `engine.mjs vault-import` over
+**stdin** — a value never becomes argv, a log line, a filesystem path, or a
+response field, and the browser clears the input on save; key names are
+env-var-shaped and single-line-value-validated so the stdin framing can't be
+forged. The `/approve` skill
 (`~/.claude/skills/approve/`) is the user's in-chat Run button.
 
 ## What the guard enforces (in order)
