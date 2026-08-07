@@ -159,6 +159,32 @@ test("pendingKicks refuses: directive paused mid-flight", async () => {
   assert.equal(m.pendingKicks(Date.now() + 10000).length, 0);
 });
 
+// issue #14, second half: markKicked clears needsKick the moment the constant
+// is TYPED, not when it lands. If the keystrokes miss, no turn runs, no Stop
+// hook fires, nothing re-arms the kick — before this fix the loop stalled
+// silently forever (the adversarial review's D3).
+test("issue #14: a kick with no resulting turn is presumed swallowed and re-armed", async () => {
+  const { m } = await loadDirective();
+  const g = m.createDirective({ text: "t" });
+  m.bindSession({ sessionId: SID(40), consolePid: LIVE, directiveId: g.id });
+  m.markKicked(g.id); // typed... and swallowed: no turn ever ends
+  assert.equal(m.readDirective(g.id).needsKick, false);
+  assert.equal(m.pendingKicks(Date.now() + 5 * 60_000).length, 0, "not re-armed before the window");
+  const pend = m.pendingKicks(Date.now() + 11 * 60_000);
+  assert.equal(pend.length, 1, "re-armed once the window passes with no turn end");
+  assert.equal(m.readDirective(g.id).needsKick, true, "the re-arm persists");
+
+  // Counter-case: the kick WORKED (a turn ended after it) — this path stays out
+  // of it; recordTurnEnd already owns re-arming after a real turn.
+  const g2 = m.createDirective({ text: "t2" });
+  m.bindSession({ sessionId: SID(41), consolePid: LIVE, directiveId: g2.id });
+  m.markKicked(g2.id);
+  m.recordTurnEnd(g2.id, {}); // sets needsKick itself, with a fresh turnEndedAt
+  m.setStatus(g2.id, "paused"); // park it so only the swallowed-kick path could re-arm it
+  m.setStatus(g.id, "paused");
+  assert.equal(m.pendingKicks(Date.now() + 11 * 60_000).length, 0, "a paused directive is never re-armed by the swallowed-kick path");
+});
+
 test("cycles append to the log and the tail is bounded", async () => {
   const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
@@ -369,6 +395,31 @@ test("recordTurnEnd and markKicked return null for a nonexistent or non-active d
   const g = m.createDirective({ text: "t" });
   m.setStatus(g.id, "paused");
   assert.equal(m.recordTurnEnd(g.id, {}), null, "a paused directive is not active");
+});
+
+// --- issue #14: concurrent mutators must not lose updates ---
+// SessionStart (bindSession), Stop (recordTurnEnd/appendCycle), clearbot
+// (markKicked), and model runs (setStatus) are separate PROCESSES touching the
+// same directive file; before the mutate() lock, each was read -> change ->
+// write with nothing serializing it, so two concurrent writers silently lost
+// one side's update. Real subprocesses (not in-process calls) because the lock
+// is a cross-process file lock; ACC_DIRECTIVE_MUTATE_DELAY_MS widens the
+// microseconds-wide natural race window so the test is deterministic rather
+// than a timing coin flip — proven red against the unlocked code (cycles came
+// back 1-2 of 5), green and stable with the lock.
+test("issue #14: N concurrent appendCycle processes lose no update", async () => {
+  const { spawn } = await import("node:child_process");
+  const g = m.createDirective({ text: "t" });
+  const N = 5;
+  const mjs = path.join(path.dirname(new URL(import.meta.url).pathname), "directive.mjs");
+  const runs = Array.from({ length: N }, () => new Promise((resolve, reject) => {
+    const c = spawn(process.execPath, ["-e",
+      `import(${JSON.stringify("file://" + mjs)}).then(d => d.appendCycle(${JSON.stringify(g.id)}, { text: "x" }))`],
+      { env: { ...process.env, ACC_DIRECTIVES_DIR: DIRECTIVES_DIR, ACC_DIRECTIVE_MUTATE_DELAY_MS: "60" } });
+    c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+  }));
+  await Promise.all(runs);
+  assert.equal(m.readDirective(g.id).cycles, N, "every concurrent cycle increment must land — a lower count is a lost update");
 });
 
 test("CLI: main() 'log' swallows a log-write failure instead of throwing", () => {

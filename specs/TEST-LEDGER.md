@@ -18,8 +18,8 @@ owner: Kyle Smith
 
 | Test ID | Name / location | Level | Traces to | Failure mode caught | Why not cheaper | Why not duplicate | Mutation verified | Runtime (ms) | Deletion criterion | Added |
 |---|---|---|---|---|---|---|---|---|---|---|
-
-*(empty — populated going forward; see adoption note above for existing coverage)*
+| T-I-001 | `hooks/directive.test.mjs`: "issue #14: N concurrent appendCycle processes lose no update" | integration (real subprocesses) | FR-004 (directive survives resets — a lost update stalls the loop silently) | Two concurrent hook processes each read-modify-write the same directive file; one side's update is silently lost, which presents as the exact silent stall the directive loop exists to prevent | A type/lint rule cannot see a cross-process race; only a real multi-process test exercises the file lock | No other test runs concurrent real processes against the directive store | 2026-08-07 (lock neutered via a temporary seam → test went red, 48/49; restored → green ×3) | ~400 | When the directive store moves off per-file JSON (e.g. the ADR-0001 headless-runner migration replaces this mechanism entirely) | this change |
+| T-U-001 | `hooks/directive.test.mjs`: "issue #14: a kick with no resulting turn is presumed swallowed and re-armed" | unit | FR-004 | A kick whose keystrokes miss produces no turn, so nothing re-arms `needsKick` — the loop stalls silently forever (the 2026-08-03 adversarial review's D3, observed class) | The stall is emergent from timing across two processes; no static check can see it | The cooldown/settle tests never exercise a kick that produced no turn end | 2026-08-07 (git-stash red-proof against pre-fix code: failed; with fix: green) | <5 | Same as T-I-001 — dies with the keystroke mechanism if ADR-0001's migration lands | this change |
 
 ## 2. Level distribution
 
@@ -36,7 +36,7 @@ The highest-value historical regressions — each found a real bug, not a hypoth
 | T-R-003 | `kernel/run.mjs`'s supervisor tick had no try/catch around `readState()` — a harness fault crashed the whole kernel process, not just the one run | 2026-08-06 | No fault-injection test existed for the tick path | A timer callback isn't covered by `runTask`'s own async try/catch | `kernel/run.mjs`, `kernel/run.test.mjs` | Yes — the tick is now wrapped, the test proves the wrap |
 | T-R-004 | `hooks/directive.mjs`'s `bindSession` rebound an active directive to any UUID-shaped session id from a hand-piped SessionStart payload, hijacking a live session's directive | 2026-08-03 (observed live) | A hand-run hook against live state, not a sandboxed test | No validation that the incoming id was UUID-shaped before rebinding | `hooks/directive.mjs`, `hooks/directive.test.mjs` | Yes — the UUID-shape check is the fix, not just a test |
 
-**Still open, no test yet (tracked as GitHub issues, not ledger rows, since no fix has landed):** issue #13 (pipe/request-channel auth), issue #14 (unlocked directive-store writes), issue #15 (missing per-directive hard ceiling).
+**Still open, no test yet (tracked as GitHub issues, not ledger rows, since no fix has landed):** issue #13 (pipe/request-channel auth), issue #15 (missing per-directive hard ceiling). Issue #14 (unlocked directive-store writes) is fixed and covered by T-I-001 in section 1.
 
 ## 4. Deleted tests
 

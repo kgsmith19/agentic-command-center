@@ -57,6 +57,9 @@ const TUI_READY_MS_DEFAULT = 4000;
 // One kick per directive per minute, whatever happens. A resume loop that somehow
 // re-armed itself must not be able to machine-gun the console.
 const KICK_COOLDOWN_MS = 60000;
+// A kick that produced no turn end within this window is presumed swallowed
+// (keystrokes missed) and re-armed by pendingKicks — issue #14's second half.
+const KICK_REARM_MS = 10 * 60_000;
 // A turn that ends UNDER budget used to end the loop: nothing re-armed the
 // kick, so an active directive sat dead until a human typed (observed twice on
 // 2026-07-31, once for 18 minutes). These two windows are what make an
@@ -100,6 +103,49 @@ function write(directive) {
   directive.updatedAt = nowIso();
   fs.writeFileSync(directivePath(directive.id), JSON.stringify(directive, null, 2) + "\n");
   return directive;
+}
+
+// SessionStart, Stop, clearbot, and a model run can all touch the same
+// directive at once, and every mutator below was a bare read -> change ->
+// write with nothing serializing it across processes -- a lost update looks
+// exactly like the silent stall this whole mechanism exists to prevent
+// (issue #14). Same fs-primitives shape kernel/ledger.mjs's withLock proves
+// (exclusive-create + stale-mtime reap + Atomics.wait backoff), reimplemented
+// here rather than imported: kernel and the directive loop are deliberately
+// separate systems (kernel/README.md "Out of scope"), and the lock itself is
+// small enough that a cross-module dependency would cost more than it saves.
+function withLock(id, fn) {
+  fs.mkdirSync(directivesDir(), { recursive: true });
+  const file = path.join(directivesDir(), `${safeId(id)}.lock`);
+  const deadline = Date.now() + 4000;
+  for (;;) {
+    try { fs.closeSync(fs.openSync(file, "wx")); break; } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try { if (Date.now() - fs.statSync(file).mtimeMs > 5000) { fs.rmSync(file, { force: true }); continue; } } catch {}
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the "${id}" directive lock`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  try { return fn(); } finally { try { fs.unlinkSync(file); } catch {} }
+}
+
+// read -> change -> write as one locked unit. The read happens AFTER the
+// lock is held, not before, so a writer never acts on a copy another process
+// has since changed. `change` returning literal `false` aborts without
+// writing (a mutator whose own precondition, e.g. "still active", failed).
+function mutate(id, change) {
+  return withLock(id, () => {
+    const directive = readDirective(id);
+    if (!directive) return null;
+    // Test seam ONLY (default 0, a no-op): the natural read-to-write window is
+    // microseconds, so a lost-update race reproduces only rarely by chance.
+    // Widening it on demand makes the regression test deterministic — same
+    // pattern as kernel/ledger.mjs's ACC_LEDGER_APPEND_ONCE_DELAY_MS.
+    const delay = Number(process.env.ACC_DIRECTIVE_MUTATE_DELAY_MS) || 0;
+    if (delay) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    if (change(directive) === false) return null;
+    return write(directive);
+  });
 }
 
 export function readDirective(id) {
@@ -217,34 +263,37 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // same way an auto-clear does.
 export function bindSession({ sessionId, consolePid, cwd, directiveId }) {
   ensureDirs();
-  let directive = directiveId ? readDirective(directiveId) : null;
-  if (directive && directive.status !== "active") directive = null;
-  if (!directive && consolePid) {
-    directive = activeDirectives().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
+  // Unlocked lookup only decides WHICH directive to target; mutate() below
+  // re-reads it fresh once the lock is held, so a candidate that went stale
+  // between this search and the lock can never be written over.
+  let found = directiveId ? readDirective(directiveId) : null;
+  if (found && found.status !== "active") found = null;
+  if (!found && consolePid) {
+    found = activeDirectives().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
   }
-  if (!directive) return null;
+  if (!found) return null;
 
-  // A non-UUID id (garbage, or simply absent) never touches sessionId/
-  // needsKick/boundAt below -- it is inert, not "no-op with side effects".
-  const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
-  const fresh = validId !== null && directive.sessionId !== validId;
-  if (validId !== null) directive.sessionId = validId;
-  if (consolePid) directive.consolePid = Number(consolePid);
-  if (!directive.cwd && cwd) directive.cwd = cwd;
-  if (fresh) {
-    // A new session for a live directive is exactly the state that needs a prompt
-    // typed into it - whether this is the launch or the 4th resume.
-    directive.needsKick = true;
-    directive.boundAt = nowIso();
-  }
-  return write(directive);
+  return mutate(found.id, (directive) => {
+    if (directive.status !== "active") return false; // went inactive since the lookup
+    // A non-UUID id (garbage, or simply absent) never touches sessionId/
+    // needsKick/boundAt below -- it is inert, not "no-op with side effects".
+    const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
+    const fresh = validId !== null && directive.sessionId !== validId;
+    if (validId !== null) directive.sessionId = validId;
+    if (consolePid) directive.consolePid = Number(consolePid);
+    if (!directive.cwd && cwd) directive.cwd = cwd;
+    if (fresh) {
+      // A new session for a live directive is exactly the state that needs a prompt
+      // typed into it - whether this is the launch or the 4th resume.
+      directive.needsKick = true;
+      directive.boundAt = nowIso();
+    }
+  });
 }
 
 export function appendCycle(id, { sessionId, ctx, text }) {
-  const directive = readDirective(id);
+  const directive = mutate(id, (d) => { d.cycles = Number(d.cycles || 0) + 1; });
   if (!directive) return null;
-  directive.cycles = Number(directive.cycles || 0) + 1;
-  write(directive);
   const body = String(text || "").trim().slice(0, 4000);
   try {
     fs.appendFileSync(
@@ -272,12 +321,12 @@ export function logTail(id, maxChars = 3000) {
 }
 
 export function setStatus(id, status, why) {
-  const directive = readDirective(id);
+  const directive = mutate(id, (d) => {
+    d.status = status;
+    d.needsKick = false;
+    if (why) d.why = String(why).slice(0, 500);
+  });
   if (!directive) return null;
-  directive.status = status;
-  directive.needsKick = false;
-  if (why) directive.why = String(why).slice(0, 500);
-  write(directive);
   if (status === "done" || status === "blocked" || status === "dead") {
     try {
       fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
@@ -305,7 +354,20 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     opts.kickSettleSeconds != null ? Number(opts.kickSettleSeconds) * 1000 : KICK_SETTLE_MS_DEFAULT;
   const holdMs =
     opts.humanHoldMinutes != null ? Number(opts.humanHoldMinutes) * 60000 : HUMAN_HOLD_MS_DEFAULT;
-  return activeDirectives()
+  const list = activeDirectives();
+  // issue #14's second half: a kick whose keystrokes missed produces no turn,
+  // so nothing ever re-arms needsKick and the loop stalls silently. A kick
+  // with no turn end after KICK_REARM_MS is presumed swallowed and re-armed.
+  // Worst case (the turn is genuinely still running that long) the retyped
+  // constant queues as the next prompt — the same text the loop sends anyway.
+  for (const g of list) {
+    if (!g.needsKick && g.lastKickAt && now - Date.parse(g.lastKickAt) >= KICK_REARM_MS &&
+        (!g.turnEndedAt || Date.parse(g.turnEndedAt) < Date.parse(g.lastKickAt))) {
+      mutate(g.id, (d) => { d.needsKick = true; });
+      g.needsKick = true;
+    }
+  }
+  return list
     .filter((g) => g.needsKick)
     .filter((g) => consoleAlive(g.consolePid))
     .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= tuiReadyMs)
@@ -324,20 +386,19 @@ export function pendingKicks(now = Date.now(), opts = {}) {
 // firing it is safe. `human` marks a turn Kyle prompted, which backs the kick
 // off - see HUMAN_HOLD_MS_DEFAULT.
 export function recordTurnEnd(id, { human } = {}) {
-  const directive = readDirective(id);
-  if (!directive || directive.status !== "active") return null;
-  directive.needsKick = true;
-  directive.turnEndedAt = nowIso();
-  if (human) directive.humanPromptAt = nowIso();
-  return write(directive);
+  return mutate(id, (directive) => {
+    if (directive.status !== "active") return false;
+    directive.needsKick = true;
+    directive.turnEndedAt = nowIso();
+    if (human) directive.humanPromptAt = nowIso();
+  });
 }
 
 export function markKicked(id) {
-  const directive = readDirective(id);
-  if (!directive) return null;
-  directive.needsKick = false;
-  directive.lastKickAt = nowIso();
-  return write(directive);
+  return mutate(id, (directive) => {
+    directive.needsKick = false;
+    directive.lastKickAt = nowIso();
+  });
 }
 
 // ------------------------------------------------------------- CLI

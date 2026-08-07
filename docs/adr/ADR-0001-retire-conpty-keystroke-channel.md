@@ -1,6 +1,6 @@
 ---
 title: Retire the ConPTY/keystroke continuity channel in favor of the headless runner
-status: proposed
+status: accepted
 scope: repo
 created: 2026-08-07
 updated: 2026-08-07
@@ -12,7 +12,7 @@ superseded_by: none
 
 # ADR-0001: Retire the ConPTY/keystroke continuity channel in favor of the headless runner
 
-> Condensed from `docs/2026-08-03-acc-adversarial-review.md` (deleted; full text in git history). This decision was raised 2026-08-03 and has **not been acted on** as of 2026-08-07 — status stays `proposed` until Kyle decides.
+> Condensed from `docs/2026-08-03-acc-adversarial-review.md` (deleted; full text in git history). Raised 2026-08-03; **accepted in direction by Kyle 2026-08-07** ("we need to migrate it to something much much much better as what we are doing is not that great"). Direction is decided; the migration itself is future work with its own spec — nothing has been deleted yet.
 
 ## Context
 
@@ -20,7 +20,7 @@ ACC survives a Claude Code context-limit `/clear` by typing into a live Windows 
 
 ## Decision
 
-**Not yet decided.** This ADR records the open question and the case for each side so the decision, whenever made, has the context it needs. The 2026-08-03 review's recommendation was: migrate directive continuity onto `runner.mjs` (set `ACC_DIRECTIVE`, read `done`/`blocked` instead of scraping a console) and retire `sendconsole.ps1`, `winfind.ps1`, the typing core of `clearbot.ps1`, `gui/PtyHost.cs`, `term.html`, and `gui/vendor/` in that order.
+We migrate directive continuity off the ConPTY/keystroke channel and onto the headless runner: wire `runner.mjs` to the directive store (set `ACC_DIRECTIVE`, read `done`/`blocked` instead of scraping a console), then retire `sendconsole.ps1`, `winfind.ps1`, the typing core of `clearbot.ps1`, `gui/PtyHost.cs`, `term.html`, and `gui/vendor/` in that order. Kyle accepted this direction 2026-08-07. The migration is real, multi-session work and gets its own spec under `specs/active/` before any code moves — per this repo's own STOP conditions, not as a side effect of another change.
 
 ## Options considered
 
@@ -30,9 +30,9 @@ ACC survives a Claude Code context-limit `/clear` by typing into a live Windows 
 | Migrate to `runner.mjs` (headless) | `claude -p` per job, fresh context, no console, no keystrokes | Already built and tested (39 tests) but never run against real unattended work | ~100 LOC to wire `ACC_DIRECTIVE` in; then incremental deletion of the keystroke stack | None — plain child-process spawn | None identified — `runner.mjs` already has its own test suite |
 | Hybrid (keep both, gate by use case) | Interactive sessions use ConPTY; long unattended directives use the runner | Doubles the surface area to maintain | Ongoing — never fully retires the fragile stack | Same as "keep" for the interactive half | Two continuity mechanisms to reason about at once |
 
-## Why this isn't decided yet
+## Sequencing note
 
-The review's own recommended first step (F1: prove the runner produces one real PR on a real job overnight) has not been run. Deciding to delete 1,400+ LOC of working, load-bearing code before that proof exists would be premature — the review itself says so ("do not build more harness before running one real job"). This ADR exists so the decision is visible and traceable, not to force it.
+The review's recommended proving step (F1: point the runner at one real, low-stakes job overnight behind a hard per-run ceiling — issue #15) has still not been run, and remains the right first slice of the migration: it validates the destination before the working keystroke stack is deleted. Deletion happens incrementally behind that proof, never ahead of it.
 
 ## Consequences if migration proceeds
 
@@ -53,4 +53,4 @@ The review's own recommended first step (F1: prove the runner produces one real 
 
 ## Verification
 
-Run the review's own F1 experiment: point `runner.mjs` at one real, low-stakes job overnight behind a hard per-run ceiling (issue #15). A produced PR validates the migration case; no PR after a fair run means the bottleneck is model reliability, not the mechanism, and this ADR should be closed as "keep ConPTY" instead.
+Run the review's own F1 experiment as the migration's first slice: point `runner.mjs` at one real, low-stakes job overnight behind a hard per-run ceiling (issue #15). A produced PR validates proceeding to deletion; no PR after a fair run means the bottleneck is model reliability, not the mechanism — in that case, write a superseding ADR reversing this one rather than deleting the working keystroke stack anyway.
