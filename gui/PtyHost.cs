@@ -15,6 +15,8 @@ using System;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
@@ -169,6 +171,27 @@ namespace Acc
             ResizePseudoConsole(_hPC, size);
         }
 
+        // #13: the default DACL a NamedPipeServerStream gets when no
+        // PipeSecurity is supplied grants access to any process that can
+        // reach this pipe name, not just this one's own user. The pipe name
+        // itself is not a secret (a GUID written in cleartext to
+        // runner/state/.window and the child's ACC_PTY env var, both
+        // same-user-readable) -- an explicit DACL naming exactly the current
+        // user's SID, and no one else, is the actual boundary. This narrows
+        // "any process that finds the name" to "any process running as this
+        // user" -- it does not defend against a same-user attacker (already
+        // out of scope per #13's threat model), and it is Windows-only code
+        // that could not be exercised in the Linux sandbox this was written
+        // in; gui/ptyhost.test.ps1 (Windows-only fast tier) is the real proof
+        // this still serves a legitimate same-user client.
+        static PipeSecurity OwnerOnlyPipeSecurity()
+        {
+            PipeSecurity security = new PipeSecurity();
+            SecurityIdentifier owner = WindowsIdentity.GetCurrent().User;
+            security.AddAccessRule(new PipeAccessRule(owner, PipeAccessRights.ReadWrite, AccessControlType.Allow));
+            return security;
+        }
+
         // Line protocol on \\.\pipe\<name>: "TEXT <payload>" | "SUBMIT" | "ESC".
         // One request per connection; reply "OK" or "FAIL <reason>".
         public void ServePipe(string pipeName)
@@ -179,7 +202,9 @@ namespace Acc
                 {
                     try
                     {
-                        using (NamedPipeServerStream srv = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1))
+                        using (NamedPipeServerStream srv = new NamedPipeServerStream(
+                            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+                            PipeOptions.None, 0, 0, OwnerOnlyPipeSecurity()))
                         {
                             srv.WaitForConnection();
                             using (StreamReader rd = new StreamReader(srv, Encoding.UTF8, false, 4096, true))
