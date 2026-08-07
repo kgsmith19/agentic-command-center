@@ -48,7 +48,7 @@ graph TB
         SHIM["Launch-cap shim<br/>tech: cmd/POSIX shim"]
         RUNNER["Runner (slice-runner)<br/>tech: Node"]
     end
-    HOOKS -->|"reads/writes"| STATE[("runner/ state files<br/>goals, ledger, lane")]
+    HOOKS -->|"reads/writes"| STATE[("runner/ state files<br/>directives, ledger, lane")]
     KERNEL -->|"reads/writes"| STATE
     GUI -->|"edits"| STATE
     WATCHER -->|"types into"| CLI2["claude console"]
@@ -57,7 +57,7 @@ graph TB
 
 | ID | Container | Technology | Responsibility (one sentence) | Runs where | Traces to |
 |---|---|---|---|---|---|
-| C-001 | Hooks | Node 22, `node:test`, no runtime deps | PreToolUse/PostToolUse/SessionStart/Stop hook logic: guard, budget, goal, route, usage, lane, testplan, covgate | Any OS (CI: Linux + Windows) | FR-001, FR-003, FR-004, FR-005 |
+| C-001 | Hooks | Node 22, `node:test`, no runtime deps | PreToolUse/PostToolUse/SessionStart/Stop hook logic: guard, budget, directive, route, usage, lane, testplan, covgate | Any OS (CI: Linux + Windows) | FR-001, FR-003, FR-004, FR-005 |
 | C-002 | Kernel | Node 22, `node:test` | Headless bounded task runner: contract validation, guardhook enforcement, supervisor, ledger, verification | Any OS | FR-006, FR-007, FR-008 |
 | C-003 | GUI | PowerShell WinForms (`guards-gui.ps1`), C# `PtyHost.cs` (ConPTY), Node HTTP server (`gui/server.mjs`) serving `gui/kernel.html`/`term.html` | Human control panel: launch/stop/approve, kernel policy editing, embedded terminal | Windows | FR-010, UC-001 |
 | C-004 | Watcher | PowerShell | Supervises the automation loop's liveness; drives clearbot's keystroke/pipe injection; launch-cap alerting | Windows | NFR-007 |
@@ -76,7 +76,7 @@ graph TB
 | CMP-004 | `kernel/verifier.mjs` | Kernel | Runs each acceptance criterion's `verify.method` against real end-state, never trusting the harness's claim | FR-007 |
 | CMP-005 | `kernel/adapters/claude-code.mjs` | Kernel | The one harness adapter today; the file naming a harness by name, per `kernel/adapter.mjs`'s swap contract | FR-006 |
 | CMP-006 | `hooks/lane.mjs` | Hooks | Machine-wide launch-lane semaphore (`withLaunchSlot`) with paced starts and transport-only retry | FR-003 |
-| CMP-007 | `hooks/goal.mjs` | Hooks | Goal CRUD, console-PID binding, dead-goal reaping, pending-kick decision | FR-004, FR-005 |
+| CMP-007 | `hooks/directive.mjs` | Hooks | Directive CRUD, console-PID binding, dead-directive reaping, pending-kick decision | FR-004, FR-005 |
 | CMP-008 | `hooks/route.mjs` | Hooks | Scores task text against `ROUTING.md`, decides the narrowest folder, decides block-vs-advise | FR-009 |
 
 ## 4. System requirements
@@ -86,7 +86,7 @@ graph TB
 | SR-001 | The guard hook must deny an Edit/Write/Read whose target path matches a `secrets` glob, before the underlying tool runs. | FR-001 | Test | `hooks/guard.mjs` tests | done |
 | SR-002 | The kernel guard must resolve `.`/`..` path segments before comparing against allowed roots. | FR-001 (bypass class closed 2026-08-04) | Test | `kernel/guard.test.mjs` | done |
 | SR-003 | The launch lane must serialize every automated `claude` spawn through one machine-wide slot semaphore stored outside any sandboxable root. | FR-003 | Test | `hooks/lane.test.mjs` | done |
-| SR-004 | A goal must bind to a console PID, not a session id, so it survives the session id changing across `/clear`. | FR-004 | Test | `hooks/goal.test.mjs` | done |
+| SR-004 | A directive must bind to a console PID, not a session id, so it survives the session id changing across `/clear`. | FR-004 | Test | `hooks/directive.test.mjs` | done |
 | SR-005 | The kernel must validate a contract's `acceptanceCriteria` and `allowedActions` shapes before any harness process is spawned. | FR-006 | Test | `kernel/contract.test.mjs` | done |
 | SR-006 | Ledger appends for the same `(runId, event)` must be idempotent under concurrent writers via a cross-process file lock. | FR-008 | Test | `kernel/ledger.test.mjs` (20 concurrent writers, no duplicates) | done |
 | SR-007 | A supervisor tick fault (e.g. `readState()` throwing) must produce a `supervisor-fault` abort outcome, never an uncaught process exit. | NFR-002 | Test | `kernel/run.test.mjs` | done |
@@ -122,7 +122,7 @@ Not applicable in the traditional sense — ACC has no HTTP API surface except t
 | Table/store | Purpose | Key columns | Row growth | Retention | Traces to |
 |---|---|---|---|---|---|
 | `runner/ledger/*.jsonl` | Kernel run records | `runId`, `event` (started/finalized), `outcome`, `criteria` | One line per run event | Indefinite | DR-002 |
-| `runner/goals/*.json` + `<id>.log.md` | Goal state and its progress log | `id`, `consolePid`, `status` | One file per active goal, archived on completion | Until archived to `runner/goals/done/`, then indefinite | DR-003 |
+| `runner/directives/*.json` + `<id>.log.md` | Directive state and its progress log | `id`, `consolePid`, `status` | One file per active directive, archived on completion | Until archived to `runner/directives/done/`, then indefinite | DR-003 |
 | `vault.json` | Named secrets | `KEY` -> value | Grows with keys Kyle adds | Until Kyle removes a key | DR-001 |
 | `watcher/approvals.log` | Auto-approved runbox script runs | timestamp, script, outcome | One line per auto-run | Indefinite | DR-004 |
 
@@ -155,10 +155,10 @@ Not applicable in the traditional sense — ACC has no HTTP API surface except t
 | Deployment | None — this is a machine-resident tool, not a deployed service. Changes take effect on the next hook fire / next GUI restart. |
 | Rollback | `git revert` / checkout a prior commit. No migration or data rollback exists because there is no database. |
 | Migrations | Not applicable — no schema, JSONL append-only stores. |
-| Backups | Git is the backup for code; ledger/goal/vault files are local-disk only, not separately backed up today (accepted gap, single-machine tool). |
+| Backups | Git is the backup for code; ledger/directive/vault files are local-disk only, not separately backed up today (accepted gap, single-machine tool). |
 | Monitoring | `watcher/clearbot.heartbeat` freshness, statusline `bot DEAD` indicator, `hooks/usage.mjs week` token tier. |
 | Alerting | Statusline warnings only (no external paging) — consistent with a single-operator tool. |
-| Logging | Kernel ledger, goal logs, `watcher/approvals.log`; no centralized log aggregation. |
+| Logging | Kernel ledger, directive logs, `watcher/approvals.log`; no centralized log aggregation. |
 | Runbook | `AGENTS.md` is the operational runbook for this repo. |
 
 ## 9. Technology decisions
@@ -175,7 +175,7 @@ Not applicable in the traditional sense — ACC has no HTTP API surface except t
 |---|---|---|---|---|
 | Concurrent automated `claude` spawns | 1 (serialized) | `policy.json lane.total` (cap 3, real exe path) | Launch cap watcher alerts; lane refuses a second automated slot | Raise `lane.slots`/`lane.total` deliberately, only if transport can take it |
 | Concurrent kernel runs | 1 | 1 (launch lane) | A second kernel run queues behind the lane | Out of scope (OOS-002) |
-| Weekly token spend | tracked | `policy.json week.redTokens` (1.8B) | All goal resumes held | Kyle raises the ceiling or reduces usage |
+| Weekly token spend | tracked | `policy.json week.redTokens` (1.8B) | All directive resumes held | Kyle raises the ceiling or reduces usage |
 
 ## 11. Explicitly not built
 

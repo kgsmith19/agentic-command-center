@@ -14,7 +14,7 @@ Control.cmd`) is the user's GUI on top; the `/approve` skill
    read nor written by agent tools, so keys never enter a conversation.
 2. **Self-protection** — currently **OFF**: `C:/code/guards` is not in the
    `protected` list (removed deliberately during the ACC build-out phase). Once
-   the ACC goal closes, it should be re-added (`C:/code/guards/` in full, or
+   the ACC directive closes, it should be re-added (`C:/code/guards/` in full, or
    specifically `C:/code/guards/gui/` and `C:/code/guards/watcher/`) to block
    agent edits of the harness itself. When re-protected, only `~/.claude/settings.json`
    will remain guarded. Exception when re-enabled: runboxes (below).
@@ -136,14 +136,14 @@ deny-by-default boundary the harness cannot widen, verifies the real
 end-state independently of what the harness claims, records every run in one
 structured ledger (`node kernel/ledger.mjs query ...`), and tightens its own
 ceilings after a run of failures — all separate from, and untouched by, the
-interactive ConPTY/goal-loop path above. See `kernel/README.md` for the
+interactive ConPTY/directive-loop path above. See `kernel/README.md` for the
 contract shape, the harness-swap procedure (one config value plus one new
 file under `kernel/adapters/`), and the honest guard ceilings.
 
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/goal.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
+node --test hooks/budget.test.mjs hooks/directive.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
     -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
        never `node --test hooks/` (the runner grades the directory as one
        bogus failing test). `npm test` runs the portable subset of this same
@@ -168,7 +168,7 @@ node kernel/kernel.e2e.mjs
        tokens, so run it deliberately. 1 an in-scope edit is allowed, made,
        and independently verified; 2 the same contract with writeRoots
        elsewhere is denied, the file stays untouched, and the run is
-       rejected; a third check confirms no ACC goal-loop state leaks from a
+       rejected; a third check confirms no ACC directive-loop state leaks from a
        kernel run into the live repo.
 powershell -File gui/ptyhost.test.ps1
     -> INTEGRATION. Acc.PtyHost against a real cmd.exe on a ConPTY - pipe
@@ -186,9 +186,9 @@ npm run e2e:gui
        sandbox; runs headless in CI (gui-e2e job).
 ```
 
-**Never run a hook by hand against live state.** `bindSession` adopts a goal by
+**Never run a hook by hand against live state.** `bindSession` adopts a directive by
 console PID, so piping a fake SessionStart into `budget.mjs` from a console
-that owns a goal used to rebind that goal to whatever session id the payload
+that owns a directive used to rebind that directive to whatever session id the payload
 carried and quietly break the real session's loop (guards OI-006 — it
 happened). `bindSession` now refuses to rebind on anything that isn't
 UUID-shaped, closing that specific hijack — but a hand-run hook can still
@@ -204,7 +204,7 @@ window whenever the GUI changes.
 ## The launch lane — why automated claude spawns never race
 
 `hooks/lane.mjs`. One account, many loops: the slice-runner (`claude -p` per
-board task), the proof tier, and the goal loop all open real API streams, and
+board task), the proof tier, and the directive loop all open real API streams, and
 concurrent bursts died in transport as `econnreset` (2026-07-31, during test
 firing). Every AUTOMATED spawn now goes through `withLaunchSlot`: a
 machine-wide slot semaphore (`policy.json lane.slots`, default 1 — strict
@@ -222,7 +222,7 @@ Tests: `node --test hooks/lane.test.mjs` (14).
 ## Testing doctrine — the contract every implementation carries
 
 `hooks/testplan.mjs` (UserPromptSubmit, advisory like route.mjs — blocking
-would stall the goal loop, which has no replay for it) injects the contract
+would stall the directive loop, which has no replay for it) injects the contract
 once per session when a prompt starts implementation planning. The contract,
 which is also simply the house rule: every acceptance criterion maps 1:1 to
 tests — unit (pure logic) and integration (process/filesystem boundary) in
@@ -262,23 +262,23 @@ fix is bloat; it earns its keep when two or more chunks would otherwise
 collide on the same files/branch at once, or a chunk is large enough that
 keeping the main tree clean for other work matters.
 
-## Goals — how a session survives its own context limit
+## Directives — how a session survives its own context limit
 
-A **goal** is a piece of work that outlives the session doing it. The GUI's GO
-button creates one (`hooks/goal.mjs new --text-file`) and launches Claude with
-`ACC_GOAL=<id>`; from then on the loop runs with no human in it:
+A **directive** is a piece of work that outlives the session doing it. The GUI's GO
+button creates one (`hooks/directive.mjs new --text-file`) and launches Claude with
+`ACC_DIRECTIVE=<id>`; from then on the loop runs with no human in it:
 
 `budget.mjs` Stop (over budget) → captures the closing checkpoint as the next
 cycle's handoff → clearbot types `/clear` → the new session's SessionStart adopts
-the goal and injects it → clearbot types `Continue the active ACC goal.`
+the directive and injects it → clearbot types `Continue the active ACC directive.`
 
 Two decisions carry the whole design:
 
-1. **A goal binds to the CONSOLE PID, not the session id.** A `/clear` ends the
+1. **A directive binds to the CONSOLE PID, not the session id.** A `/clear` ends the
    session id; the terminal process is the same throughout. Every session that
-   starts in that console adopts the goal, which is what makes resumption survive
+   starts in that console adopts the directive, which is what makes resumption survive
    the clear. Queued prompts (above) are keyed the same way for the same reason.
-2. **Goal text never becomes keystrokes.** It reaches the model through
+2. **Directive text never becomes keystrokes.** It reaches the model through
    SessionStart context; the only thing ever typed is a constant.
 
 **ACC-hosted sessions run on a ConPTY inside the GUI** (see
@@ -292,21 +292,21 @@ keystroke injection; `sendconsole.ps1` remains the transport for external
 sessions and the fallback when the pipe is dead. Without the WebView2 runtime
 the Go button falls back to the legacy `cmd /k claude` console launch.
 
-State: `runner\goals\<id>.json` plus a running `<id>.log.md`, archived to
-`runner\goals\done\` on completion. **The loop only ends because the model ends
-it** — `goal.mjs done <id>` or `goal.mjs blocked <id> --why "..."`, both stated
+State: `runner\directives\<id>.json` plus a running `<id>.log.md`, archived to
+`runner\directives\done\` on completion. **The loop only ends because the model ends
+it** — `directive.mjs done <id>` or `directive.mjs blocked <id> --why "..."`, both stated
 in full in the injected block. The week kill switch is the cost brake; a red week
-holds all kicks. `goal.mjs pending` decides every condition that makes a kick
+holds all kicks. `directive.mjs pending` decides every condition that makes a kick
 unsafe (active? console alive? binding settled? cooldown?) so there is one place
 to audit, and `clearbot.ps1` stays a dumb executor.
 
-Tests: `node --test hooks/goal.test.mjs` (48).
+Tests: `node --test hooks/directive.test.mjs` (48).
 
 Two things keep the loop from stalling, added 2026-07-31 after it stalled
-twice in one day. **Liveness:** a goal session that ends its turn UNDER the
+twice in one day. **Liveness:** a directive session that ends its turn UNDER the
 ceiling gets no clear, so the Stop hook re-arms the kick instead
-(`goal.mjs recordTurnEnd`), and `pendingKicks` decides when firing it is safe —
-after `goals.kickSettleSeconds` (90), and not within `goals.humanHoldMinutes`
+(`directive.mjs recordTurnEnd`), and `pendingKicks` decides when firing it is safe —
+after `directives.kickSettleSeconds` (90), and not within `directives.humanHoldMinutes`
 (10) of a prompt Kyle typed, so it stays quiet during a conversation and
 self-heals when he walks away. A turn is "his" unless the last user message is
 exactly one of clearbot's constants. Before this, a turn simply finishing ended
@@ -318,13 +318,15 @@ boundary (honouring the kill switch), and a Startup-folder launcher covers
 logon. The external Scheduled Task version is optional and needs an elevated
 shell — `watcher/watchdog/` holds it and its undo scripts.
 
-`/goal <condition>` (user skill `~\.claude\skills\goal\`) is ACC-native: it
-logs `CONDITION: <text>` into the active goal's log via `goal.mjs log`, so the
-directive rides the goal store and survives every `/clear` with the rest of
-the handoff; `/goal clear` logs `CONDITION MET`. It never registers a session
+`/directive <condition>` (user skill, still at `~\.claude\skills\goal\` on disk as of
+2026-08-07 — that path is outside this repo, so renaming it is Kyle's own manual
+step on his machine, not something this rename touched) is ACC-native: it
+logs `CONDITION: <text>` into the active directive's log via `directive.mjs log`, so the
+directive rides the directive store and survives every `/clear` with the rest of
+the handoff; `/directive clear` logs `CONDITION MET`. It never registers a session
 Stop hook: a Stop-gate fights the budget gate (OI-011) — the loop continues BY
-ending turns — so conditions live in goal state, not hooks. With no active
-goal the condition is session-local only.
+ending turns — so conditions live in directive state, not hooks. With no active
+directive the condition is session-local only.
 
 ## Folder routing (Start work tab)
 

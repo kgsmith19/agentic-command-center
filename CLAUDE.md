@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-A guard rail and control panel that lets Claude Code sessions run longer and more unattended on Kyle's machine without more risk: a hook that blocks risky file touches, a headless kernel that runs bounded tasks under independent verification, and a goal loop that survives context-limit resets.
+A guard rail and control panel that lets Claude Code sessions run longer and more unattended on Kyle's machine without more risk: a hook that blocks risky file touches, a headless kernel that runs bounded tasks under independent verification, and a directive loop that survives context-limit resets.
 
 ## Read before you act
 
@@ -10,11 +10,11 @@ A guard rail and control panel that lets Claude Code sessions run longer and mor
 |---|---|---|
 | 1 | `docs/PRD.md` | **Source of truth.** Living document. |
 | 2 | `rules/00-CORE.md` | Principles, halts, output contract |
-| 3 | `AGENTS.md` | The deep operational reference — guard, vault, runboxes, kernel, launch lane, goal loop, folder routing. Read the section for whatever you're touching before touching it. |
+| 3 | `AGENTS.md` | The deep operational reference — guard, vault, runboxes, kernel, launch lane, directive loop, folder routing. Read the section for whatever you're touching before touching it. |
 | 4 | The rule card a prompt names | Do not read all of `rules/` by default |
 | 5 | `specs/active/` | What is being built right now, if anything is |
 
-`docs/SYSTEM-REQUIREMENTS.md` and `docs/DATA-FLOW-DIAGRAM.md` are read when the work touches architecture, interfaces, data, or security. `docs/adr/` holds standing decisions — read the ones relevant to what you're touching (`ADR-0001` before touching the ConPTY/goal-loop mechanism, `ADR-0002` before touching the GUI, `ADR-0003` before touching the launch cap).
+`docs/SYSTEM-REQUIREMENTS.md` and `docs/DATA-FLOW-DIAGRAM.md` are read when the work touches architecture, interfaces, data, or security. `docs/adr/` holds standing decisions — read the ones relevant to what you're touching (`ADR-0001` before touching the ConPTY/directive-loop mechanism, `ADR-0002` before touching the GUI, `ADR-0003` before touching the launch cap).
 
 ## STOP conditions
 

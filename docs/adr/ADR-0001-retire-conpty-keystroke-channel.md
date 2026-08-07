@@ -16,19 +16,19 @@ superseded_by: none
 
 ## Context
 
-ACC survives a Claude Code context-limit `/clear` by typing into a live Windows console: `watcher/clearbot.ps1` sends real keystrokes/pipe writes, `hooks/goal.mjs` binds a goal to the console's PID, and `gui/PtyHost.cs` hosts an embedded ConPTY terminal. This mechanism works today (`kernel/README.md`'s two invariants: continuity is console-PID not session-id; nothing but fixed constants is ever typed) but is roughly 1,400+ LOC plus 1.1 MB of vendored terminal assets, and is the origin of most of the goal-loop's historical bugs (closed: OI-002, OI-003, OI-004, OI-009, OI-010, OI-012; still open: issues #13, #14 filed 2026-08-07). A separate, already-built, already-tested headless mechanism (`runner/runner.mjs`, `claude -p` per job, fresh context by construction, 39 tests) exists in the same repo and has never been wired to the goal store.
+ACC survives a Claude Code context-limit `/clear` by typing into a live Windows console: `watcher/clearbot.ps1` sends real keystrokes/pipe writes, `hooks/directive.mjs` binds a directive to the console's PID, and `gui/PtyHost.cs` hosts an embedded ConPTY terminal. This mechanism works today (`kernel/README.md`'s two invariants: continuity is console-PID not session-id; nothing but fixed constants is ever typed) but is roughly 1,400+ LOC plus 1.1 MB of vendored terminal assets, and is the origin of most of the directive-loop's historical bugs (closed: OI-002, OI-003, OI-004, OI-009, OI-010, OI-012; still open: issues #13, #14 filed 2026-08-07). A separate, already-built, already-tested headless mechanism (`runner/runner.mjs`, `claude -p` per job, fresh context by construction, 39 tests) exists in the same repo and has never been wired to the directive store.
 
 ## Decision
 
-**Not yet decided.** This ADR records the open question and the case for each side so the decision, whenever made, has the context it needs. The 2026-08-03 review's recommendation was: migrate goal continuity onto `runner.mjs` (set `ACC_GOAL`, read `done`/`blocked` instead of scraping a console) and retire `sendconsole.ps1`, `winfind.ps1`, the typing core of `clearbot.ps1`, `gui/PtyHost.cs`, `term.html`, and `gui/vendor/` in that order.
+**Not yet decided.** This ADR records the open question and the case for each side so the decision, whenever made, has the context it needs. The 2026-08-03 review's recommendation was: migrate directive continuity onto `runner.mjs` (set `ACC_DIRECTIVE`, read `done`/`blocked` instead of scraping a console) and retire `sendconsole.ps1`, `winfind.ps1`, the typing core of `clearbot.ps1`, `gui/PtyHost.cs`, `term.html`, and `gui/vendor/` in that order.
 
 ## Options considered
 
 | Option | How it works | Maturity cost | Migration cost if we leave | Lock-in | Ecosystem gaps |
 |---|---|---|---|---|---|
 | **Keep ConPTY/keystroke channel (current)** | Type `/clear` + a fixed resume phrase into a live console bound by PID | Proven in production since 2026-07-31; 0 automated PowerShell/C# coverage | n/a (status quo) | Windows-only, ConPTY-specific | No test harness exists for the PowerShell/C# surface at all |
-| Migrate to `runner.mjs` (headless) | `claude -p` per job, fresh context, no console, no keystrokes | Already built and tested (39 tests) but never run against real unattended work | ~100 LOC to wire `ACC_GOAL` in; then incremental deletion of the keystroke stack | None — plain child-process spawn | None identified — `runner.mjs` already has its own test suite |
-| Hybrid (keep both, gate by use case) | Interactive sessions use ConPTY; long unattended goals use the runner | Doubles the surface area to maintain | Ongoing — never fully retires the fragile stack | Same as "keep" for the interactive half | Two continuity mechanisms to reason about at once |
+| Migrate to `runner.mjs` (headless) | `claude -p` per job, fresh context, no console, no keystrokes | Already built and tested (39 tests) but never run against real unattended work | ~100 LOC to wire `ACC_DIRECTIVE` in; then incremental deletion of the keystroke stack | None — plain child-process spawn | None identified — `runner.mjs` already has its own test suite |
+| Hybrid (keep both, gate by use case) | Interactive sessions use ConPTY; long unattended directives use the runner | Doubles the surface area to maintain | Ongoing — never fully retires the fragile stack | Same as "keep" for the interactive half | Two continuity mechanisms to reason about at once |
 
 ## Why this isn't decided yet
 
@@ -40,7 +40,7 @@ The review's own recommended first step (F1: prove the runner produces one real 
 |---|---|
 | We can now | Run truly unattended, headless overnight jobs with fresh context per run — no console, no keystroke injection, no pipe |
 | We can no longer | Rely on a live interactive terminal for continuity; the embedded GUI terminal would become a read-only log viewer at most |
-| We must maintain | `runner.mjs`'s job-file contract instead of the goal-store/console-binding contract |
+| We must maintain | `runner.mjs`'s job-file contract instead of the directive-store/console-binding contract |
 | We are exposed to | Losing the interactive "watch it work" experience the GUI currently provides, unless a log-viewer replacement ships first |
 
 ## Reversal

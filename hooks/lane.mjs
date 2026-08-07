@@ -2,7 +2,7 @@
 // lane.mjs — machine-wide launch lane for real-API claude spawns.
 //
 // THE JAM (2026-07-31): runner.mjs (claude -p per board task), e2e/loop.e2e.mjs
-// (real TUI sessions), the goal loop, and Kyle's interactive sessions all open
+// (real TUI sessions), the directive loop, and Kyle's interactive sessions all open
 // API streams from one account with zero coordination. Concurrent bursts die in
 // transport as "Unable to connect to API (econnreset)" — the edge resets the
 // socket instead of returning a clean 429. The fix is not "retry harder"; it is

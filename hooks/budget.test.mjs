@@ -1,9 +1,9 @@
 // Tests for the Stop-gate precedence in hooks/budget.mjs (OI-011).
 //
 // The bug being pinned: onStop early-allowed whenever stop_hook_active was set,
-// so after the forced checkpoint turn the latched path (clear request + goal
+// so after the forced checkpoint turn the latched path (clear request + directive
 // cycle) never ran - auto-clear deadlocked even with no other Stop hook, and a
-// /goal Stop hook that kept blocking pinned the session over the ceiling
+// /directive Stop hook that kept blocking pinned the session over the ceiling
 // forever. Once the budget latch exists, budget must win on EVERY stop.
 //
 // The hook process.exit()s on every path, so each case runs it as a child
@@ -20,14 +20,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ptyAnchorPid } from "./usage.mjs";
-// goal.mjs resolves its store from ACC_ROOT/ACC_GOALS_DIR on every call, not
-// at import time (see hooks/goal.mjs), specifically so a single shared import
+// directive.mjs resolves its store from ACC_ROOT/ACC_DIRECTIVES_DIR on every call, not
+// at import time (see hooks/directive.mjs), specifically so a single shared import
 // works across many tests each pointed at their own sandbox -- important here
 // beyond just tidiness: when covgate.mjs runs this file in the same node
-// process as goal.test.mjs, a second, differently-parameterized import of
-// goal.mjs would collide with goal.test.mjs's own coverage instance (node's
+// process as directive.test.mjs, a second, differently-parameterized import of
+// directive.mjs would collide with directive.test.mjs's own coverage instance (node's
 // lcov merge is last-write-wins per file path, not a union -- see OI-006).
-import * as gm from "./goal.mjs";
+import * as gm from "./directive.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, "budget.mjs");
@@ -55,11 +55,11 @@ const POLICY = {
   review: { fullLeanReview: "manual-only", localFullSuiteInReview: false, maxFinders: 3 },
   runner: { stopOnRed: true, statusFile: "SLICE-RUNNER.md", waitingGuard: true },
   autoClear: { enabled: true },
-  goals: { autoResume: true, maxCycles: 0 },
+  directives: { autoResume: true, maxCycles: 0 },
 };
 
 // Real Claude Code session ids are UUIDs, and OI-006's bindSession guard now
-// rejects anything else as a rebind source, so tests that seed a goal via
+// rejects anything else as a rebind source, so tests that seed a directive via
 // bindSession (and later look it up by that exact sessionId) need one.
 const SID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -118,7 +118,7 @@ function runStop(sb, { sid, transcript, active, profile }) {
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
-      ACC_GOALS_DIR: "",
+      ACC_DIRECTIVES_DIR: "",
       ACC_PROFILE: profile || "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
@@ -153,18 +153,18 @@ test("latched + stop_hook_active: clear request still fires (the OI-011 deadlock
   assert.ok(fs.existsSync(clearReq(sb, sid)), "clear request written despite stop_hook_active");
 });
 
-test("further over-budget stops re-request the clear; the goal cycle is one-shot", async () => {
+test("further over-budget stops re-request the clear; the directive cycle is one-shot", async () => {
   const sb = sandbox();
   const sid = SID(1);
   seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
 
-  // Seed a goal in the sandbox tree and bind this session to it, the same way
-  // SessionStart would. goal.mjs resolves its store from ACC_ROOT on every call.
+  // Seed a directive in the sandbox tree and bind this session to it, the same way
+  // SessionStart would. directive.mjs resolves its store from ACC_ROOT on every call.
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "finish the thing", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  process.env.ACC_DIRECTIVES_DIR = "";
+  const g = gm.createDirective({ text: "finish the thing", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, directiveId: g.id });
 
   runStop(sb, { sid, transcript: t, active: false }); // block + latch
   runStop(sb, { sid, transcript: t, active: true }); // latched stop 1
@@ -173,7 +173,7 @@ test("further over-budget stops re-request the clear; the goal cycle is one-shot
   const out = runStop(sb, { sid, transcript: t, active: true }); // latched stop 2
   assert.match(out, /systemMessage/);
   assert.ok(fs.existsSync(clearReq(sb, sid)), "request re-written for the stuck turn");
-  assert.equal(gm.readGoal(g.id).cycles, 1, "cycle logged exactly once across latched stops");
+  assert.equal(gm.readDirective(g.id).cycles, 1, "cycle logged exactly once across latched stops");
 });
 
 test("under hard: stop passes silently", () => {
@@ -208,9 +208,9 @@ test("profile context (when present) still overrides for that session", () => {
 });
 
 // --- liveness: an under-budget turn end must re-arm the kick ---------------
-// The 2026-07-31 stall, pinned. A goal session that simply finishes its turn
+// The 2026-07-31 stall, pinned. A directive session that simply finishes its turn
 // well under the ceiling used to get nothing: no clear, no resume, dead air
-// until a human typed. The Stop hook must report that turn end to the goal
+// until a human typed. The Stop hook must report that turn end to the directive
 // store - silently, without changing its own output.
 
 // The classifier reads the LAST USER message, so these transcripts need one.
@@ -225,26 +225,26 @@ function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
   return f;
 }
 
-// Seed a goal in the sandbox and bind this session to it, as SessionStart does.
-function seedGoal(sb, sid) {
+// Seed a directive in the sandbox and bind this session to it, as SessionStart does.
+function seedDirective(sb, sid) {
   process.env.ACC_ROOT = sb.root;
-  process.env.ACC_GOALS_DIR = "";
-  const g = gm.createGoal({ text: "keep going", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, goalId: g.id });
+  process.env.ACC_DIRECTIVES_DIR = "";
+  const g = gm.createDirective({ text: "keep going", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, consolePid: process.pid, directiveId: g.id });
   gm.markKicked(g.id); // a kick already fired; needsKick is false
   return { gm, g };
 }
 
-test("under budget with an active goal: the turn end re-arms the kick", async () => {
+test("under budget with an active directive: the turn end re-arms the kick", async () => {
   const sb = sandbox();
   const sid = SID(2);
-  const { gm, g } = await seedGoal(sb, sid);
-  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC goal.");
+  const { gm, g } = await seedDirective(sb, sid);
+  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC directive.");
 
   const out = runStop(sb, { sid, transcript: t, active: false });
   assert.equal(out.trim(), "", "still silent - liveness must not add output");
 
-  const after = gm.readGoal(g.id);
+  const after = gm.readDirective(g.id);
   assert.equal(after.needsKick, true, "kick re-armed");
   assert.ok(after.turnEndedAt, "turn end stamped");
   assert.ok(!after.humanPromptAt, "the kick constant is a MACHINE turn");
@@ -253,15 +253,15 @@ test("under budget with an active goal: the turn end re-arms the kick", async ()
 test("a human-prompted turn end is classified as human", async () => {
   const sb = sandbox();
   const sid = SID(3);
-  const { gm, g } = await seedGoal(sb, sid);
+  const { gm, g } = await seedDirective(sb, sid);
   const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
 
   runStop(sb, { sid, transcript: t, active: false });
-  assert.ok(gm.readGoal(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
+  assert.ok(gm.readDirective(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
 });
 
 // --- self-healing watcher --------------------------------------------------
-// A dead clearbot means no clear and no resume, and a goal session cannot
+// A dead clearbot means no clear and no resume, and a directive session cannot
 // notice on its own. The Stop hook is the right place to check: it IS the turn
 // boundary where a clear or a kick is about to be needed. The sandbox gets a
 // FAKE start-clearbot.cmd, so these prove the decision without starting a real
@@ -329,9 +329,9 @@ test("a deliberate stop is never overridden by the revive", () => {
   assert.equal(appears(marker, 2500), false, "the kill switch wins");
 });
 
-test("no goal: an under-budget stop still does nothing at all", () => {
+test("no directive: an under-budget stop still does nothing at all", () => {
   const sb = sandbox();
-  const sid = "s-live-nogoal";
+  const sid = "s-live-nodirective";
   const t = writeTranscriptWithUser(sb, sid, 10000, "hello");
   assert.equal(runStop(sb, { sid, transcript: t, active: false }).trim(), "");
 });
@@ -349,7 +349,7 @@ test("SessionStart with ACC_PTY records a pty window bound to the parent pid", (
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
-      ACC_GOALS_DIR: "",
+      ACC_DIRECTIVES_DIR: "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
       CLAUDE_CODE_RUNNER: "",
