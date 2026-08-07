@@ -46,6 +46,18 @@ The highest-value historical regressions — each found a real bug, not a hypoth
 | — | `kernel/adapters/claude-code.test.mjs`: `"the handle's own stop() convenience method calls stopTask"` | 2026-08-07 | Tested a zero-caller convenience method (`handle.stop`) removed in the same pass; `stopTask` itself is still called directly by `run.mjs` and still covered | nothing needed — the real code path is `run.mjs` calling `stopTask` directly |
 | — | `hooks/prompts.test.mjs` (whole file) | 2026-08-07 | Tested `hooks/prompts.mjs`, a module with zero callers anywhere in the repo (not wired into any hook, the GUI, or the CLI) — speculative infrastructure never adopted | nothing needed |
 
+## 4a. Strengthened tests (leanness Pass 1)
+
+A fresh test-quality audit (Lens B, 2026-08-07) found 5 tests that would still pass if the function under test were replaced with a hardcoded return value. Rather than delete the coverage outright, each was rewritten to assert the real, independently-computed value (an "oracle" — reading the real file/directory the fallback is supposed to resolve to, same pattern `hooks/usage.test.mjs` already used) — the underlying fallback behavior is real and worth testing, the old assertion just didn't prove it.
+
+| Test | Location | What changed |
+|---|---|---|
+| `kernelRoot falls back to the repo root when ACC_ROOT is unset` | `kernel/policy.test.mjs` | `path.isAbsolute(...)` → equals an independently-computed real repo root |
+| `loadKernelPolicy falls back to the repo policy.json when ACC_POLICY is unset` | `kernel/policy.test.mjs` | `doesNotThrow` → asserts the loaded `harness` matches the real `policy.json`'s own value |
+| `end-to-end: ACC_ROOT unset falls back to the real repo root` | `hooks/testplan.test.mjs` | Switched from a non-firing prompt (proved nothing landed) to a firing one; asserts the latch file lands under the real repo's `runner/state/`, cleaned up immediately |
+| `POLICY() and LANE_DIR() fall back to their real defaults` | `hooks/lane.test.mjs` | `cfg.slots >= 1` → equals the real `policy.json`'s own `lane.slots` value |
+| `acquireSlot works end to end with ACC_LANE_DIR genuinely unset` | `hooks/lane.test.mjs` | No assertion → reads the real `owner.json` under `os.tmpdir()/acc-lane/slot-N/`, and confirms `release()` actually removes it |
+
 ## 5. Quarantine
 
 *(none)*

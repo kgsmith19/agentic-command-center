@@ -93,18 +93,30 @@ test("end-to-end: a non-planning prompt stays silent and writes no latch", () =>
   assert.equal(fs.existsSync(path.join(ROOT, "runner", "state", `${sid}.testplan`)), false);
 });
 
-test("end-to-end: ACC_ROOT unset falls back to the real repo root, proven safely via a non-firing prompt", () => {
+test("end-to-end: ACC_ROOT unset falls back to the real repo root", () => {
   // ROOT is resolved once at module load (unlike lane.mjs's lazy POLICY()),
-  // so the fallback branch is only reachable in a fresh subprocess. A
-  // non-planning prompt returns before any fs write, so this proves the
-  // fallback resolves without ever touching the real runner/state.
+  // so the fallback branch is only reachable in a fresh subprocess. Uses a
+  // FIRING prompt and checks the latch lands at the REAL repo's
+  // runner/state/ — a subprocess that silently swallowed ACC_ROOT and wrote
+  // nowhere (or crashed and printed nothing) would also pass a "returns ''"
+  // assertion, so that alone doesn't prove the fallback path was real.
+  // Cleaned up immediately either way, same convention as the
+  // "missing session_id" test above.
+  const realRoot = path.resolve(HERE, "..");
+  const sid = "acc-root-fallback-probe";
+  const latch = path.join(realRoot, "runner", "state", `${sid}.testplan`);
   const env = { ...process.env };
   delete env.ACC_ROOT;
-  const out = execFileSync("node", [path.join(HERE, "testplan.mjs")], {
-    input: JSON.stringify({ session_id: "acc-root-fallback-probe", prompt: "what time is it" }),
-    encoding: "utf8", env,
-  });
-  assert.equal(out, "");
+  try {
+    const out = execFileSync("node", [path.join(HERE, "testplan.mjs")], {
+      input: JSON.stringify({ session_id: sid, prompt: "plan out the retry queue" }),
+      encoding: "utf8", env,
+    });
+    assert.ok(out.includes("Test contract"), "must inject using the real fallback root, not fail silently");
+    assert.ok(fs.existsSync(latch), "latch must land under the REAL repo root's runner/state/");
+  } finally {
+    fs.rmSync(latch, { force: true });
+  }
 });
 
 test("fail-open: a STATE dir that cannot be written to still exits cleanly (no crash, no injection)", { skip: process.platform === "win32" ? "chmod-based fault injection is POSIX-only; funcs/lines for this file are unaffected on Windows" : false }, () => {

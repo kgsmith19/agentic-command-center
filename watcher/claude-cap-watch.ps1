@@ -1,6 +1,6 @@
 # watcher/claude-cap-watch.ps1 - one-shot claude launch-cap health check.
 # Alert-only: NEVER kills a process. Invoked repeatedly by a Scheduled Task
-# (60s repetition, registered by runbox/install-claude-cap-gate.ps1) rather
+# (60s repetition, registered by watcher/install-cap-watch-task.ps1) rather
 # than looping itself - Task Scheduler already owns repetition, so this
 # script does exactly one check and exits. Standalone by design: imports no
 # repo code, so a bug in hooks/lane.mjs or the shim cannot also break the
