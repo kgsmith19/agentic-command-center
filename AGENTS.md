@@ -295,13 +295,26 @@ with pipe writes (`TEXT`/`SUBMIT`/`ESC` — guaranteed Enter) instead of
 keystroke injection; `sendconsole.ps1` remains the transport for external
 sessions and the fallback when the pipe is dead. Without the WebView2 runtime
 the Go button falls back to the legacy `cmd /k claude` console launch. The
-pipe carries a `PipeSecurity` ACL scoped to the current user's SID (#13) —
-narrows "any process that finds the pipe name" to "any process running as
-this user," not a defense against a same-user attacker, which stays out of
-scope per that issue's threat model. `directive.mjs pending`'s kicks and
-`Test-Binding`'s request-file check both re-verify a console's `consolePid`
-against that session's own `runner/state/<sid>.window` record before typing
-into it, for the same reason.
+pipe carries a `PipeSecurity` ACL scoped to the current user's SID, and
+`directive.mjs pending`'s kicks and `Test-Binding`'s request-file check both
+re-verify a console's `consolePid` against that session's own
+`runner/state/<sid>.window` record before typing into it — narrows "any
+process that finds the pipe name or forges one side of the binding" to "any
+process running as this user."
+
+**Pipe/binding auth — accepted residual risk (#13, Kyle, 2026-08-07):** the
+hardening above still does not stop a same-user attacker who can write BOTH
+the request file and the `.window` file it's checked against — both are
+local, unsigned, gitignored, and agent-writable, so a co-located writer can
+supply matching values and pass. Accepted rather than engineered further:
+(1) that attacker already needs local code execution as this user, at which
+point far stronger routes exist (edit `config.json`, replace `claude.exe`,
+read every file this user can) than forging a pipe handshake; (2) this whole
+mechanism is already slated for retirement in favor of the headless runner
+(ADR-0001, accepted the same day) — hardening code that is being deleted
+fails this repo's own cheapest-sufficient-mechanism test. If the risk profile
+ever needs to change before that migration lands, the lever is a real
+per-request signed/one-time token, not more file-agreement checks.
 
 State: `runner\directives\<id>.json` plus a running `<id>.log.md`, archived to
 `runner\directives\done\` on completion. **The loop only ends because the model ends
