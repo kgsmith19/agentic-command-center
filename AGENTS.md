@@ -4,14 +4,21 @@ Independent guard rail + control panel for Claude Code sessions on this machine.
 `hooks/guard.mjs` is a PreToolUse hook (registered in `~/.claude/settings.json`
 for `Edit|Write|NotebookEdit|Read`, all projects); `hooks/engine.mjs` is the CLI
 engine that owns every state change; `guards-gui.ps1` (launch: `Guards
-Control.cmd`) is the user's GUI on top — its toggle/protections/requests/vault
-tabs also exist in the web GUI (`node gui/server.mjs` → `/guards`, SPEC-0002 +
-SPEC-0003, the SL-009 migration that eventually deletes the WinForms shell).
-The web vault route pipes each `KEY=VALUE` to `engine.mjs vault-import` over
-**stdin** — a value never becomes argv, a log line, a filesystem path, or a
-response field, and the browser clears the input on save; key names are
-env-var-shaped and single-line-value-validated so the stdin framing can't be
-forged. The `/approve` skill
+Control.cmd`) is the user's GUI on top — every tab EXCEPT "Start work" now
+also exists in the web GUI (`node gui/server.mjs` → `/guards`): toggle,
+protections, and requests (SPEC-0002), vault (SPEC-0003), and the
+spending/process tab — 7-day spend + tier, policy dials, emergency
+STOP/Resume/fan-out, cleanup on/off/test + autoApprove (SPEC-0004). The
+"Start work" launch tab (profile, route, directive create, embedded ConPTY
+terminal) stays in `guards-gui.ps1` until SL-011 ports it and deletes the
+shell; that is the only reason the WinForms file still exists. The web vault
+route pipes each `KEY=VALUE` to `engine.mjs vault-import` over **stdin** — a
+value never becomes argv, a log line, a filesystem path, or a response field,
+and the browser clears the input on save; key names are env-var-shaped and
+single-line-value-validated so the stdin framing can't be forged. The web
+spending dials do a read-merge-write of `policy.json` preserving every
+unowned key, and the process controls are an allowlisted action map (no
+browser string becomes argv). The `/approve` skill
 (`~/.claude/skills/approve/`) is the user's in-chat Run button.
 
 ## What the guard enforces (in order)

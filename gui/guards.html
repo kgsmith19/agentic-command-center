@@ -56,6 +56,31 @@
   <div id="result"></div>
 </fieldset>
 
+<fieldset><legend>Spending &amp; limits</legend>
+  <div id="tier" style="font-size:18px;font-weight:700"></div>
+  <div id="spendSummary" class="muted"></div>
+  <div style="margin:8px 0">
+    <label>Warn a session at <input type="text" id="softK" style="width:70px"></label>
+    <label>Force save at <input type="text" id="hardK" style="width:70px"></label>
+    <label>Max helpers <input type="text" id="maxFinders" style="width:50px"></label><br>
+    <label>Warn this week at <input type="text" id="amber" style="width:80px"> billion tokens</label>
+    <label>STOP at <input type="text" id="red" style="width:80px"> billion</label><br>
+    <label>Helpers allowed (comma-separated) <input type="text" id="allow" style="width:300px"></label><br>
+    <label><input type="checkbox" id="autoApprove"> Run Claude's requested scripts automatically (no /approve)</label><br>
+    <button id="dialsSave">Save my limits</button>
+    <span id="dialsMsg" class="muted"></span>
+  </div>
+  <div><strong>Emergency stop</strong> — <span id="stopState" class="muted"></span></div>
+  <button id="ctlStop">STOP all automated work</button>
+  <button id="ctlResume">Resume work</button>
+  <button id="ctlFanout">Allow extra helpers for 30 min</button><br>
+  <div style="margin-top:8px"><strong>Automatic cleanup</strong> — <span id="cleanupState" class="muted"></span></div>
+  <button id="ctlCleanupOn">Turn cleanup ON</button>
+  <button id="ctlCleanupOff">Turn cleanup OFF</button>
+  <button id="ctlClearNow">Clean up my newest session now…</button>
+  <div id="procResult" class="muted"></div>
+</fieldset>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const api = (route, body) => fetch(route, body === undefined
@@ -138,7 +163,51 @@ $("trash").onclick = () => $("pending").value && engine("trash", $("pending").va
 $("restore").onclick = () => $("trashed").value && engine("restore", $("trashed").value);
 $("flush").onclick = () => confirm("Permanently delete everything in the runbox trash?") && engine("flush", undefined, { confirm: true });
 
+// --- spending & limits (SPEC-0004) ---
+const TIER_TEXT = { red: "STOPPED — you hit your weekly limit", amber: "Getting expensive", green: "Spending is fine" };
+async function refreshProcess() {
+  const s = await api("/api/process/status");
+  if (s.error) { $("tier").textContent = s.error; $("tier").className = "err"; return; }
+  const tier = s.tier && s.tier.tier;
+  $("tier").textContent = tier ? (TIER_TEXT[tier] || tier) : "no usage data";
+  $("tier").className = tier === "red" ? "err" : tier === "green" ? "ok" : "";
+  $("spendSummary").textContent = s.tier
+    ? `Used ${Math.round(s.tier.pct || 0)}% of your weekly limit.  ${s.weekText}` : s.weekText;
+  const d = s.dials || {};
+  $("softK").value = d.softK ?? ""; $("hardK").value = d.hardK ?? ""; $("maxFinders").value = d.maxFinders ?? "";
+  $("amber").value = d.amberTokens != null ? d.amberTokens / 1e9 : "";
+  $("red").value = d.redTokens != null ? d.redTokens / 1e9 : "";
+  $("allow").value = (d.allow || []).join(", ");
+  $("autoApprove").checked = !!d.autoApprove;
+  $("stopState").textContent = s.stopped ? "STOPPED — no new automated work will start." : "Running normally.";
+  $("cleanupState").textContent = s.cleanupKilled ? "OFF — kill switch engaged." : "ON (or ready).";
+}
+$("dialsSave").onclick = async () => {
+  const dials = {
+    softK: Number($("softK").value), hardK: Number($("hardK").value), maxFinders: Number($("maxFinders").value),
+    amberTokens: Math.round(Number($("amber").value) * 1e9), redTokens: Math.round(Number($("red").value) * 1e9),
+    allow: $("allow").value.split(",").map((s) => s.trim()).filter(Boolean), autoApprove: $("autoApprove").checked,
+  };
+  const r = await api("/api/process/dials", dials);
+  $("dialsMsg").textContent = r.error || "Saved — hooks pick this up on the next fire.";
+  $("dialsMsg").className = r.error ? "err" : "ok";
+  await refreshProcess();
+};
+async function control(action, extra) {
+  const r = await api("/api/process/control", { action, ...extra });
+  $("procResult").textContent = r.error || r.out || (r.ok ? "done" : JSON.stringify(r));
+  $("procResult").className = r.error ? "err" : "";
+  await refreshProcess();
+}
+$("ctlStop").onclick = () => control("stop");
+$("ctlResume").onclick = () => control("resume");
+$("ctlFanout").onclick = () => control("fanout");
+$("ctlCleanupOn").onclick = () => control("cleanup-on");
+$("ctlCleanupOff").onclick = () => control("cleanup-off");
+$("ctlClearNow").onclick = () => confirm("This types /clear into your newest Claude Code session now. Continue?") && control("clear-now", { confirm: true });
+
 refresh();
+refreshProcess();
 </script>
 </body>
 </html>
