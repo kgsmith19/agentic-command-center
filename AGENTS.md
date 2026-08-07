@@ -294,7 +294,14 @@ pipe name (`hooks/budget.mjs`, env `ACC_PTY`). clearbot then drives the session
 with pipe writes (`TEXT`/`SUBMIT`/`ESC` — guaranteed Enter) instead of
 keystroke injection; `sendconsole.ps1` remains the transport for external
 sessions and the fallback when the pipe is dead. Without the WebView2 runtime
-the Go button falls back to the legacy `cmd /k claude` console launch.
+the Go button falls back to the legacy `cmd /k claude` console launch. The
+pipe carries a `PipeSecurity` ACL scoped to the current user's SID (#13) —
+narrows "any process that finds the pipe name" to "any process running as
+this user," not a defense against a same-user attacker, which stays out of
+scope per that issue's threat model. `directive.mjs pending`'s kicks and
+`Test-Binding`'s request-file check both re-verify a console's `consolePid`
+against that session's own `runner/state/<sid>.window` record before typing
+into it, for the same reason.
 
 State: `runner\directives\<id>.json` plus a running `<id>.log.md`, archived to
 `runner\directives\done\` on completion. **The loop only ends because the model ends

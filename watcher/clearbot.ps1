@@ -392,6 +392,16 @@ function Invoke-Kicks {
     } catch { }
 
     foreach ($g in @($pend)) {
+        # #13: pendingKicks() reads consolePid out of the directive store, a
+        # local, unsigned, agent-writable JSONL file -- unlike Invoke-Cd/
+        # Invoke-Clear, this path had no check that the console it is about to
+        # type into actually belongs to the session that owns this directive.
+        # Same enforcement as invariant 2 (Test-Binding, guards OI-004):
+        # re-read the session's OWN window record and refuse on disagreement.
+        if (-not (Test-Binding $g)) {
+            Log "REFUSE kick $($g.id): consolePid $($g.consolePid) does not match session $($g.sessionId)'s own window record"
+            continue
+        }
         $cpid = [int]$g.consolePid
         if (-not (Get-Process -Id $cpid -ErrorAction SilentlyContinue)) { continue }
         $r = Send-Keys $cpid $KICK -ClearLineFirst
