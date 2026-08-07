@@ -437,3 +437,224 @@ test("AC-007: an engine failure surfaces as code+out, which by engine contract n
 });
 
 if (RESTORE_FAKE) after(() => { try { fs.writeFileSync(FAKE_ENGINE, RESTORE_FAKE); } catch {} });
+
+// ------------------------------------------------------------- process/spending API (SPEC-0004)
+// Fake usage + budget scripts record argv; policy.json lives in the sandbox
+// (process.env.ACC_POLICY, already set at top). ACC_ROOT sandboxes the
+// stop-file and kill-switch. Nothing touches the real machine.
+const PROC_DIR = path.join(BASE, "proc");
+const FAKE_USAGE = path.join(BASE, "fake-usage.mjs");
+const FAKE_BUDGET = path.join(BASE, "fake-budget.mjs");
+const FAKE_START = path.join(BASE, "fake-clearbot-start.mjs");
+fs.writeFileSync(FAKE_USAGE, `
+const a = process.argv.slice(2);
+if (a[0] === "check") console.log(JSON.stringify({ tier: "amber", pct: 60, weekTokens: 1200000, redTokens: 2000000 }));
+else if (a[0] === "week") console.log("TOTAL  $12.34");
+`.trimStart());
+fs.writeFileSync(FAKE_BUDGET, `
+import fs from "node:fs";
+fs.appendFileSync(process.env.FAKE_BUDGET_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+console.log("budget " + process.argv.slice(2).join(" ") + " ok");
+`.trimStart());
+fs.writeFileSync(FAKE_START, `
+import fs from "node:fs";
+fs.appendFileSync(process.env.FAKE_BUDGET_LOG, JSON.stringify(["clearbot-start"]) + "\\n");
+console.log("started");
+`.trimStart());
+const BUDGET_LOG = path.join(PROC_DIR, "budget-calls.jsonl");
+const budgetCalls = () => { try { return fs.readFileSync(BUDGET_LOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+const POLICY_BASE = { _comment: "keep me", context: { softK: 400, hardK: 600 }, week: { amberTokens: 1e9, redTokens: 2e9 }, review: { maxFinders: 3 }, subagents: { allow: ["Explore"] }, autoApprove: { enabled: false }, kernel: { harness: "claude-code", budget: { toolCalls: 200 } }, rates: { opus: { in: 15 } } };
+
+function resetProc() {
+  fs.rmSync(PROC_DIR, { recursive: true, force: true });
+  fs.mkdirSync(PROC_DIR, { recursive: true });
+  process.env.ACC_ROOT = PROC_DIR;
+  process.env.ACC_USAGE = FAKE_USAGE;
+  process.env.ACC_BUDGET = FAKE_BUDGET;
+  process.env.FAKE_BUDGET_LOG = BUDGET_LOG;
+  delete process.env.ACC_CLEARBOT_START;
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify(POLICY_BASE, null, 2));
+}
+const ppost = (route, body, headers = {}) => fetch(`${base}${route}`, {
+  method: "POST", body: JSON.stringify(body),
+  headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
+});
+
+test("AC-001: GET /api/process/status returns tier, week text, dials, and control state", async () => {
+  resetProc();
+  const r = await fetch(`${base}/api/process/status`);
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.tier.tier, "amber");
+  assert.match(j.weekText, /\$12\.34/);
+  assert.equal(j.dials.softK, 400);
+  assert.deepEqual(j.dials.allow, ["Explore"]);
+  assert.equal(j.dials.autoApprove, false);
+  assert.equal(j.stopped, false);
+  assert.equal(j.cleanupKilled, false);
+  resetPolicy(); // restore the kernel-policy fixture other tests rely on
+});
+
+test("AC-002/PROP-001: saving dials updates the owned blocks and leaves every other key byte-identical", async () => {
+  resetProc();
+  const before = JSON.parse(fs.readFileSync(process.env.ACC_POLICY, "utf8"));
+  const r = await ppost("/api/process/dials", { softK: 350, hardK: 550, amberTokens: 1.2e9, redTokens: 1.8e9, maxFinders: 5, allow: ["Explore", "Plan"], autoApprove: true });
+  assert.equal(r.status, 200);
+  const after = JSON.parse(fs.readFileSync(process.env.ACC_POLICY, "utf8"));
+  assert.equal(after.context.softK, 350);
+  assert.equal(after.week.redTokens, 1.8e9);
+  assert.equal(after.review.maxFinders, 5);
+  assert.deepEqual(after.subagents.allow, ["Explore", "Plan"]);
+  assert.equal(after.autoApprove.enabled, true);
+  // untouched blocks
+  assert.deepEqual(after.kernel, before.kernel);
+  assert.deepEqual(after.rates, before.rates);
+  assert.equal(after._comment, before._comment);
+  resetPolicy();
+});
+
+test("AC-003: an invalid dial is refused and policy.json is left untouched", async () => {
+  resetProc();
+  const before = fs.readFileSync(process.env.ACC_POLICY, "utf8");
+  for (const bad of [
+    { softK: "x", hardK: 600, amberTokens: 1e9, redTokens: 2e9, maxFinders: 3, allow: [], autoApprove: false },
+    { softK: 400, hardK: -1, amberTokens: 1e9, redTokens: 2e9, maxFinders: 3, allow: [], autoApprove: false },
+    { softK: 400, hardK: 600, amberTokens: 1e9, redTokens: 2e9, maxFinders: 3, allow: "nope", autoApprove: false },
+    { softK: 400, hardK: 600, amberTokens: 1e9, redTokens: 2e9, maxFinders: 3, allow: [], autoApprove: "yes" },
+  ]) {
+    const r = await ppost("/api/process/dials", bad);
+    assert.equal(r.status, 400, JSON.stringify(bad));
+  }
+  assert.equal(fs.readFileSync(process.env.ACC_POLICY, "utf8"), before, "no bad dial may write");
+  resetPolicy();
+});
+
+test("AC-004: control stop writes the slice-runner stop file", async () => {
+  resetProc();
+  const r = await ppost("/api/process/control", { action: "stop" });
+  assert.equal(r.status, 200);
+  assert.ok(fs.existsSync(path.join(PROC_DIR, "runner", "stop", "slice-runner.stop")));
+  resetPolicy();
+});
+
+test("AC-005/AC-006: resume and fanout invoke the right budget verb", async () => {
+  resetProc();
+  await ppost("/api/process/control", { action: "resume" });
+  await ppost("/api/process/control", { action: "fanout" });
+  assert.deepEqual(budgetCalls(), [["unstop"], ["fanout", "30"]]);
+  resetPolicy();
+});
+
+test("AC-007: cleanup-off engages the kill switch; cleanup-on clears it and fires the start seam", async () => {
+  resetProc();
+  process.env.ACC_CLEARBOT_START = FAKE_START;
+  await ppost("/api/process/control", { action: "cleanup-off" });
+  assert.ok(fs.existsSync(path.join(PROC_DIR, "watcher", "clearbot.stop")), "kill switch engaged");
+  await ppost("/api/process/control", { action: "cleanup-on" });
+  assert.ok(!fs.existsSync(path.join(PROC_DIR, "watcher", "clearbot.stop")), "kill switch cleared");
+  assert.deepEqual(budgetCalls().at(-1), ["clearbot-start"]);
+  resetPolicy();
+});
+
+test("AC-008: clear-now needs confirm; with it, budget clear-now fires", async () => {
+  resetProc();
+  assert.equal((await ppost("/api/process/control", { action: "clear-now" })).status, 400);
+  assert.equal(budgetCalls().length, 0);
+  const r = await ppost("/api/process/control", { action: "clear-now", confirm: true });
+  assert.equal(r.status, 200);
+  assert.deepEqual(budgetCalls().at(-1), ["clear-now"]);
+  resetPolicy();
+});
+
+test("AC-009: an action outside the allowlist (incl. a prototype key) is refused, nothing invoked", async () => {
+  resetProc();
+  for (const action of ["rm", "__proto__", "toString", "", "constructor"]) {
+    const r = await ppost("/api/process/control", { action });
+    assert.equal(r.status, 400, `action "${action}" must be refused`);
+  }
+  assert.equal(budgetCalls().length, 0);
+  resetPolicy();
+});
+
+test("AC-010: process routes demand X-ACC and local Origin", async () => {
+  resetProc();
+  assert.equal((await ppost("/api/process/dials", { softK: 1, hardK: 2, amberTokens: 0, redTokens: 0, maxFinders: 1, allow: [], autoApprove: false }, { "X-ACC": "" })).status, 403);
+  assert.equal((await ppost("/api/process/control", { action: "stop" }, { origin: "https://evil.example" })).status, 403);
+  resetPolicy();
+});
+
+test("status: an unreadable policy.json is a 500, and a non-JSON tier degrades to null", async () => {
+  resetProc();
+  fs.writeFileSync(FAKE_USAGE, 'const a=process.argv.slice(2); if(a[0]==="check")console.log("not json"); else console.log("wk");\n');
+  fs.rmSync(process.env.ACC_POLICY);
+  const r = await fetch(`${base}/api/process/status`);
+  assert.equal(r.status, 500);
+  // now a readable policy with a valid-but-non-JSON check → tier null, 200
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify(POLICY_BASE));
+  const r2 = await fetch(`${base}/api/process/status`);
+  assert.equal(r2.status, 200);
+  assert.equal((await r2.json()).tier, null);
+  fs.writeFileSync(FAKE_USAGE, `const a=process.argv.slice(2);\nif(a[0]==="check")console.log(JSON.stringify({tier:"green"}));else console.log("TOTAL $0.00");\n`);
+  resetPolicy();
+});
+
+test("status: policy blocks that are absent surface as undefined dials, not a crash", async () => {
+  resetProc();
+  fs.writeFileSync(FAKE_USAGE, `const a=process.argv.slice(2);\nif(a[0]==="check")console.log(JSON.stringify({tier:"green"}));else console.log("TOTAL $0.00");\n`);
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ _comment: "bare" }));
+  const r = await fetch(`${base}/api/process/status`);
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.deepEqual(j.dials.allow, []);
+  assert.equal(j.dials.autoApprove, false);
+  resetPolicy();
+});
+
+test("dials: an unreadable policy.json is a 500", async () => {
+  resetProc();
+  fs.rmSync(process.env.ACC_POLICY);
+  const r = await ppost("/api/process/dials", { softK: 1, hardK: 2, amberTokens: 0, redTokens: 0, maxFinders: 1, allow: [], autoApprove: false });
+  assert.equal(r.status, 500);
+  resetPolicy();
+});
+
+test("control: a non-string action is refused", async () => {
+  resetProc();
+  assert.equal((await ppost("/api/process/control", { action: 42 })).status, 400);
+  assert.equal((await ppost("/api/process/control", {})).status, 400);
+  resetPolicy();
+});
+
+test("control: cleanup-on with no start seam clears the switch and reports it (no Windows launcher on this host)", async () => {
+  resetProc();
+  delete process.env.ACC_CLEARBOT_START;
+  fs.mkdirSync(path.join(PROC_DIR, "watcher"), { recursive: true });
+  fs.writeFileSync(path.join(PROC_DIR, "watcher", "clearbot.stop"), "x");
+  const r = await ppost("/api/process/control", { action: "cleanup-on" });
+  assert.equal(r.status, 200);
+  assert.match((await r.json()).note, /kill switch cleared/);
+  assert.ok(!fs.existsSync(path.join(PROC_DIR, "watcher", "clearbot.stop")));
+  resetPolicy();
+});
+
+test("vault-import surfaces an engine failure as code+out (no value in the tail)", async () => {
+  // A stdin with no '=' makes the real-shaped fake exit 1 naming no keys.
+  withVaultFake();
+  const r = await gpost("/api/guards/vault-import", { pairs: [{ key: "K", value: "v-secret" }] });
+  // The withVaultFake stores fine; to force failure, point at a fake that always fails:
+  fs.writeFileSync(FAKE_ENGINE, `process.stderr.write("no KEY=VALUE lines found on stdin"); process.exit(1);\n`);
+  const r2 = await gpost("/api/guards/vault-import", { pairs: [{ key: "K", value: "v-secret" }] });
+  assert.equal(r2.status, 200);
+  const j = await r2.json();
+  assert.equal(j.code, 1);
+  assert.ok(!JSON.stringify(j).includes("v-secret"));
+});
+
+test("control: cleanup-on when no kill-switch file exists is a no-op unlink, not a crash", async () => {
+  resetProc();
+  delete process.env.ACC_CLEARBOT_START;
+  // no watcher/clearbot.stop present
+  const r = await ppost("/api/process/control", { action: "cleanup-on" });
+  assert.equal(r.status, 200);
+  resetPolicy();
+});

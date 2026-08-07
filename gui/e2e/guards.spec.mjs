@@ -69,3 +69,57 @@ test("vault: deleting a key removes it via vault-rm", async ({ page }) => {
   await expect(page.locator("#vaultKeys option")).toHaveCount(0);
   expect(onDisk().vaultKeys).not.toContain("EXISTING_KEY");
 });
+
+// --- spending tab (SPEC-0004) ---
+const policyFile = path.join(dir, "policy.json");
+const budgetCallsFile = path.join(dir, "budget-calls.jsonl");
+function seedPolicy() {
+  fs.writeFileSync(policyFile, JSON.stringify({
+    _comment: "e2e", context: { softK: 400, hardK: 600 }, week: { amberTokens: 1e9, redTokens: 2e9 },
+    review: { maxFinders: 3 }, subagents: { allow: ["Explore"] }, autoApprove: { enabled: false },
+    kernel: { harness: "claude-code", budget: { wallClockMin: 60, toolCalls: 200, tokens: 500000 }, hardCaps: { wallClockMin: 240 }, autonomy: { window: 10, rejectRate: 0.3, factor: 0.5, runs: 5 }, checkpointMin: 20, alwaysAllowTools: ["TodoWrite"], extraDenyWriteRoots: [] },
+  }, null, 2));
+  try { fs.rmSync(budgetCallsFile); } catch {}
+}
+
+test("spending: tier and dials render from the backend", async ({ page }) => {
+  seedPolicy();
+  await page.goto("/guards");
+  await expect(page.locator("#tier")).toContainText("Getting expensive"); // amber
+  await expect(page.locator("#softK")).toHaveValue("400");
+  await expect(page.locator("#allow")).toHaveValue("Explore");
+});
+
+test("spending: saving dials writes policy.json and preserves the kernel block", async ({ page }) => {
+  seedPolicy();
+  const before = JSON.parse(fs.readFileSync(policyFile, "utf8"));
+  await page.goto("/guards");
+  // Wait for the async load populate to finish before editing — otherwise the
+  // in-flight refreshProcess() overwrites the field after fill() and the save
+  // reads the stale value.
+  await expect(page.locator("#softK")).toHaveValue("400");
+  await page.locator("#softK").fill("350");
+  await page.locator("#allow").fill("Explore, Plan");
+  await page.locator("#dialsSave").click();
+  await expect(page.locator("#dialsMsg")).toContainText("Saved");
+  const after = JSON.parse(fs.readFileSync(policyFile, "utf8"));
+  expect(after.context.softK).toBe(350);
+  expect(after.subagents.allow).toEqual(["Explore", "Plan"]);
+  expect(after.kernel).toEqual(before.kernel);
+});
+
+test("spending: STOP writes the runner stop-file; Resume calls budget unstop", async ({ page }) => {
+  seedPolicy();
+  await page.goto("/guards");
+  await expect(page.locator("#stopState")).toContainText("Running normally"); // initial load settled
+  await page.locator("#ctlStop").click();
+  await expect(page.locator("#stopState")).toContainText("STOPPED");
+  expect(fs.existsSync(path.join(dir, "runner", "stop", "slice-runner.stop"))).toBe(true);
+  await page.locator("#ctlResume").click();
+  // Resume runs `budget unstop`, which clears the stop-file; wait for the UI
+  // to reflect that before reading the recorded calls — the click's POST +
+  // fake-budget append are async, so reading the file immediately races them.
+  await expect(page.locator("#stopState")).toContainText("Running normally");
+  const calls = fs.readFileSync(budgetCallsFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  expect(calls).toContainEqual(["unstop"]);
+});

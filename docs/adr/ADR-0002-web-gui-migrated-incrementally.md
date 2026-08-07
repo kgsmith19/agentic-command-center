@@ -13,6 +13,8 @@ superseded_by: none
 # ADR-0002: GUI platform is web, migrated incrementally from WinForms
 
 > Condensed from `docs/superpowers/specs/2026-08-03-acc-oi-closure-design.md` (deleted; full text in git history), which resolved former OI-022.
+>
+> **Update 2026-08-07:** ADR-0004 converts this ADR's "incremental, no fixed date" pace into a finish-and-delete plan. The migration is now nearly complete — every tab except "Start work" is on the web (SPEC-0002/0003/0004). The "both shells indefinitely" consequence below no longer holds: `guards-gui.ps1` is deleted once SL-011 ports the last (launch) tab.
 
 ## Context
 

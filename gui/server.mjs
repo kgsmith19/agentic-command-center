@@ -29,20 +29,30 @@ const BODY_CAP = 64 * 1024;
 // is resolved per request so tests can drive a fake engine (and one
 // read-only case the real one) without a restart.
 const enginePath = () => process.env.ACC_ENGINE || path.join(HERE, "..", "hooks", "engine.mjs");
+// SPEC-0004 process controls shell the same node scripts the WinForms GUI did;
+// each path is env-overridable so a test can point at a fake that records its
+// argv/stdin. ACC_ROOT sandboxes the control files (stop-file, kill switch),
+// the same discipline budget.mjs/runner already honour.
+const budgetPath = () => process.env.ACC_BUDGET || path.join(HERE, "..", "hooks", "budget.mjs");
+const usagePath = () => process.env.ACC_USAGE || path.join(HERE, "..", "hooks", "usage.mjs");
+const repoRoot = () => (process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.join(HERE, ".."));
+const policyFile = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
+const sliceStopFile = () => path.join(repoRoot(), "runner", "stop", "slice-runner.stop");
+const clearbotStopFile = () => path.join(repoRoot(), "watcher", "clearbot.stop");
 
-// `stdin`, when given, is written to the engine's stdin and closed. This is
-// the ONLY channel a secret value ever travels (SPEC-0003): never argv, so it
+// Run a node script; `stdin`, when given, is written and closed. This is the
+// ONLY channel a secret value ever travels (SPEC-0003): never argv, so it
 // cannot land in a process listing or a log; the value is not returned here
-// either — callers surface `code`/`stdout` only, and the engine's own output
-// names keys, never values.
-function engineExec(args, stdin) {
+// either — callers surface `code`/`stdout` only.
+function nodeExec(script, args, stdin) {
   return new Promise((resolveExec) => {
-    const child = execFile(process.execPath, [enginePath(), ...args], { timeout: 120000 }, (err, stdout, stderr) => {
+    const child = execFile(process.execPath, [script, ...args], { timeout: 120000 }, (err, stdout, stderr) => {
       resolveExec({ code: err ? (err.code ?? 1) : 0, stdout: String(stdout || ""), stderr: String(stderr || "") });
     });
     if (stdin !== undefined) { child.stdin.end(stdin); }
   });
 }
+const engineExec = (args, stdin) => nodeExec(enginePath(), args, stdin);
 
 // A vault key must be an env-var-shaped name and a value must be single-line:
 // the engine frames the vault as `KEY=VALUE\n` lines on stdin, so a `\n` in a
@@ -84,6 +94,52 @@ async function engineJson(args) {
   const r = await engineExec(args);
   if (r.code !== 0) throw new Error(r.stderr || `engine exited ${r.code}`);
   return JSON.parse(r.stdout);
+}
+
+// --- spending/process controls (SPEC-0004) --------------------------------
+const nonNegInt = (n) => Number.isInteger(n) && n >= 0;
+const nonNegNum = (n) => Number.isFinite(n) && n >= 0;
+
+// PROP-001: merge validated dials into the policy object while leaving every
+// key the dials form does not own byte-identical. Returns the new policy
+// object, or throws naming the first bad field — the caller writes only on a
+// clean return, so a bad dial never partially corrupts policy.json.
+export function mergeDials(policy, d) {
+  const req = (name, v, ok) => { if (!ok(v)) throw new Error(`invalid ${name}`); return v; };
+  if (!Array.isArray(d.allow) || d.allow.some((s) => typeof s !== "string")) throw new Error("invalid allow (must be a string array)");
+  if (typeof d.autoApprove !== "boolean") throw new Error("invalid autoApprove (must be boolean)");
+  return {
+    ...policy,
+    context: { ...(policy.context || {}), softK: req("softK", d.softK, nonNegInt), hardK: req("hardK", d.hardK, nonNegInt) },
+    week: { ...(policy.week || {}), amberTokens: req("amberTokens", d.amberTokens, nonNegNum), redTokens: req("redTokens", d.redTokens, nonNegNum) },
+    review: { ...(policy.review || {}), maxFinders: req("maxFinders", d.maxFinders, nonNegInt) },
+    subagents: { ...(policy.subagents || {}), allow: d.allow.map((s) => s.trim()).filter(Boolean) },
+    autoApprove: { ...(policy.autoApprove || {}), enabled: d.autoApprove },
+  };
+}
+
+// Allowlisted control actions. Each returns a thunk performing exactly one
+// side effect — the browser's `action` string only selects a thunk, it never
+// becomes argv, a path, or a flag (PROP-002). `confirm`-gated actions type
+// into a real console, so they demand an explicit browser confirm.
+function controlAction(action, body) {
+  const startCmd = process.env.ACC_CLEARBOT_START; // fake seam for the Windows launcher
+  const writeFile = (f, txt) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, txt); };
+  const table = {
+    stop: () => { writeFile(sliceStopFile(), "stopped from the Command Center\n"); return { ok: true }; },
+    resume: () => nodeExec(budgetPath(), ["unstop"]),
+    fanout: () => nodeExec(budgetPath(), ["fanout", "30"]),
+    "clear-now": () => (body.confirm === true ? nodeExec(budgetPath(), ["clear-now"]) : null),
+    // The kill-switch file is the cross-platform gate clearbot.ps1 actually
+    // checks; the Windows watcher launch is a best-effort extra behind the
+    // injectable seam.
+    "cleanup-off": () => { writeFile(clearbotStopFile(), `stopped ${""}\n`); return { ok: true }; },
+    "cleanup-on": () => {
+      try { fs.unlinkSync(clearbotStopFile()); } catch {}
+      return startCmd ? nodeExec(startCmd, []) : { ok: true, note: "kill switch cleared" };
+    },
+  };
+  return Object.hasOwn(table, action) ? table[action] : null;
 }
 
 function readBody(req, res, cb) {
@@ -167,9 +223,11 @@ export function handler(req, res) {
       }
       const stdin = pairs.map((p) => `${p.key}=${p.value}\n`).join("");
       const r = await engineExec(["vault-import"], stdin);
-      // Names only: derived from the request keys we already validated, never
-      // echoing a value back to the browser.
-      send(res, r.code === 0 ? 200 : 200, r.code === 0
+      // Always 200 — a non-zero engine exit is a RESULT the page shows, not a
+      // transport error. Names only on success (derived from the validated
+      // request keys); on failure the engine's own output, which by contract
+      // names keys, never values.
+      send(res, 200, r.code === 0
         ? { stored: pairs.map((p) => p.key) }
         : { code: r.code, out: (r.stdout + r.stderr).slice(-2000) });
     });
@@ -197,6 +255,56 @@ export function handler(req, res) {
       } catch (e) {
         return send(res, 500, { error: e.message });
       }
+    });
+  }
+  if (route === "/api/process/status" && req.method === "GET") {
+    return (async () => {
+      const check = await nodeExec(usagePath(), ["check"]);
+      const week = await nodeExec(usagePath(), ["week"]);
+      let tier = null;
+      try { tier = JSON.parse(check.stdout.trim()); } catch {}
+      let dials = null;
+      try {
+        const p = JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^﻿/, ""));
+        dials = {
+          softK: p.context?.softK, hardK: p.context?.hardK,
+          amberTokens: p.week?.amberTokens, redTokens: p.week?.redTokens,
+          maxFinders: p.review?.maxFinders, allow: p.subagents?.allow ?? [],
+          autoApprove: !!p.autoApprove?.enabled,
+        };
+      } catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
+      send(res, 200, {
+        tier, weekText: (week.stdout + week.stderr).trim(), dials,
+        stopped: fs.existsSync(sliceStopFile()),
+        cleanupKilled: fs.existsSync(clearbotStopFile()),
+      });
+    })();
+  }
+  if (route === "/api/process/dials" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, (b) => {
+      let policy, merged;
+      try { policy = JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^﻿/, "")); }
+      catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
+      try { merged = mergeDials(policy, b); }
+      catch (e) { return send(res, 400, { error: e.message }); } // bad dial -> file untouched
+      // Atomic write (tmp + rename), matching kernel/policy.mjs: a crash
+      // mid-write can't truncate policy.json, the file the whole system reads.
+      const tmp = policyFile() + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n");
+      fs.renameSync(tmp, policyFile());
+      send(res, 200, { ok: true });
+    });
+  }
+  if (route === "/api/process/control" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      const thunk = typeof b.action === "string" ? controlAction(b.action, b) : null;
+      if (!thunk) return send(res, 400, { error: `action "${b.action}" is not allowed or is missing its confirm` });
+      const outcome = thunk();
+      if (outcome === null) return send(res, 400, { error: `action "${b.action}" requires confirm:true` });
+      const r = await outcome; // a plain object (file ops) or a nodeExec result
+      send(res, 200, r.code !== undefined ? { code: r.code, out: (r.stdout + r.stderr).slice(-2000) } : r);
     });
   }
   send(res, 404, { error: "not found" });

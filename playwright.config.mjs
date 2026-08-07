@@ -28,6 +28,10 @@ export default defineConfig({
       // guards.spec.mjs: the server shells this fake instead of the real
       // engine, so e2e can never mutate the live config/runbox (SPEC-0002).
       ACC_ENGINE: path.resolve("gui/e2e/fake-engine.e2e.mjs"), ACC_GUI_E2E_DIR: dir,
+      // guards.spec.mjs spending tab (SPEC-0004): fake usage/budget so the
+      // process controls never read real spend or type into a console.
+      ACC_USAGE: path.resolve("gui/e2e/fake-usage.e2e.mjs"),
+      ACC_BUDGET: path.resolve("gui/e2e/fake-budget.e2e.mjs"),
     },
   },
 });
