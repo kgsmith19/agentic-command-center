@@ -1,6 +1,6 @@
 # Agentic Command Center
 
-A guard rail and control panel that lets Claude Code sessions run longer and more unattended on one Windows machine without more risk: a hook that blocks risky file touches, a headless kernel that runs bounded tasks under independent verification, and a goal loop that lets work survive a context-limit reset. See `docs/PRD.md` for the full picture.
+A guard rail and control panel that lets Claude Code sessions run longer and more unattended on one Windows machine without more risk: a hook that blocks risky file touches, a headless kernel that runs bounded tasks under independent verification, and a directive loop that lets work survive a context-limit reset. See `docs/PRD.md` for the full picture.
 
 ## Prerequisites
 

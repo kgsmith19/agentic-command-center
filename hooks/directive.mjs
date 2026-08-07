@@ -1,25 +1,25 @@
 #!/usr/bin/env node
-// Agentic Command Center - the GOAL store. This is what makes ACC able to carry
+// Agentic Command Center - the DIRECTIVE store. This is what makes ACC able to carry
 // a piece of work across a /clear instead of losing it.
 //
 // THE PROBLEM IT SOLVES: the auto-clear chain (Stop hook -> clear-request ->
 // clearbot -> WriteConsoleInput types "/clear") worked, but it stopped there.
 // The fresh session came up with an empty prompt and no idea what it had been
-// doing, so a human had to retype the task. A goal survives the clear because it
+// doing, so a human had to retype the task. A directive survives the clear because it
 // lives in a FILE, not in context.
 //
 // THE THREAD OF CONTINUITY IS THE CONSOLE PID, not the session id. A /clear ends
 // the session id and starts a new one, but the terminal window - and therefore
 // the console pid that clearbot types into - is the same process throughout. So
-// a goal binds to a console, and every session that starts in that console
+// a directive binds to a console, and every session that starts in that console
 // adopts it.
 //
 // WHY THE TEXT NEVER TRAVELS AS KEYSTROKES: clearbot turns text into real key
 // events, so a newline in a task would submit a fragment (this is OI-004). The
-// goal text goes in this file; the only thing ever typed is a constant. That is
+// directive text goes in this file; the only thing ever typed is a constant. That is
 // also what lets a multi-line task work at all.
 //
-// Fails OPEN, like every other ACC hook helper: a broken goal store must cost
+// Fails OPEN, like every other ACC hook helper: a broken directive store must cost
 // auto-resume and nothing else.
 
 import fs from "node:fs";
@@ -30,21 +30,21 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT: see budget.mjs. Both must honour it or a test would split its state
 // across two trees. Resolved on every call, not captured once at import: a
 // test process that imports this module once and then runs many cases, each
-// against its own ACC_ROOT/ACC_GOALS_DIR sandbox, needs every call to see
+// against its own ACC_ROOT/ACC_DIRECTIVES_DIR sandbox, needs every call to see
 // whatever is current -- a module-load-time const would only ever see the
 // first sandbox and silently leak state into every later one.
 function root() {
   return process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
 }
-export function goalsDir() {
-  return process.env.ACC_GOALS_DIR || path.join(root(), "runner", "goals");
+export function directivesDir() {
+  return process.env.ACC_DIRECTIVES_DIR || path.join(root(), "runner", "directives");
 }
 function doneDir() {
-  return path.join(goalsDir(), "done");
+  return path.join(directivesDir(), "done");
 }
 
 // A kick is only sent once the binding has had time to settle. SessionStart runs
-// before the TUI is ready to accept input, so firing the instant a goal binds
+// before the TUI is ready to accept input, so firing the instant a directive binds
 // types into a console that is still starting up. Policy-overridable
 // (`tui.readySettleMs`) and reused verbatim by watcher/clearbot.ps1's
 // Get-TuiReadyMs for the /cd settle (guards OI-003) -- one proven number for
@@ -54,14 +54,17 @@ function doneDir() {
 // real-token repro (OI-003, 2026-08-04) after already failing once with zero
 // settle at all -- so this value now has exactly one source of truth.
 const TUI_READY_MS_DEFAULT = 4000;
-// One kick per goal per minute, whatever happens. A resume loop that somehow
+// One kick per directive per minute, whatever happens. A resume loop that somehow
 // re-armed itself must not be able to machine-gun the console.
 const KICK_COOLDOWN_MS = 60000;
+// A kick that produced no turn end within this window is presumed swallowed
+// (keystrokes missed) and re-armed by pendingKicks — issue #14's second half.
+const KICK_REARM_MS = 10 * 60_000;
 // A turn that ends UNDER budget used to end the loop: nothing re-armed the
-// kick, so an active goal sat dead until a human typed (observed twice on
+// kick, so an active directive sat dead until a human typed (observed twice on
 // 2026-07-31, once for 18 minutes). These two windows are what make an
 // under-budget turn end resume instead of stall. Both are policy dials
-// (goals.kickSettleSeconds / goals.humanHoldMinutes); these are the fallbacks.
+// (directives.kickSettleSeconds / directives.humanHoldMinutes); these are the fallbacks.
 const KICK_SETTLE_MS_DEFAULT = 90_000;
 // While Kyle is actively prompting this console, stay out of his way. The hold
 // EXPIRES, so walking away mid-conversation still self-heals into autonomy.
@@ -70,7 +73,7 @@ const HUMAN_HOLD_MS_DEFAULT = 10 * 60_000;
 const nowIso = () => new Date().toISOString();
 
 function ensureDirs() {
-  fs.mkdirSync(goalsDir(), { recursive: true });
+  fs.mkdirSync(directivesDir(), { recursive: true });
   fs.mkdirSync(doneDir(), { recursive: true });
 }
 
@@ -82,12 +85,12 @@ function readJson(p, dflt) {
   }
 }
 
-function goalPath(id) {
-  return path.join(goalsDir(), `${safeId(id)}.json`);
+function directivePath(id) {
+  return path.join(directivesDir(), `${safeId(id)}.json`);
 }
 
 export function logPath(id) {
-  return path.join(goalsDir(), `${safeId(id)}.log.md`);
+  return path.join(directivesDir(), `${safeId(id)}.log.md`);
 }
 
 // Ids are used to build file paths and are echoed into injected context, so they
@@ -96,30 +99,73 @@ function safeId(id) {
   return String(id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
 }
 
-function write(goal) {
-  goal.updatedAt = nowIso();
-  fs.writeFileSync(goalPath(goal.id), JSON.stringify(goal, null, 2) + "\n");
-  return goal;
+function write(directive) {
+  directive.updatedAt = nowIso();
+  fs.writeFileSync(directivePath(directive.id), JSON.stringify(directive, null, 2) + "\n");
+  return directive;
 }
 
-export function readGoal(id) {
-  const g = readJson(goalPath(id), null);
+// SessionStart, Stop, clearbot, and a model run can all touch the same
+// directive at once, and every mutator below was a bare read -> change ->
+// write with nothing serializing it across processes -- a lost update looks
+// exactly like the silent stall this whole mechanism exists to prevent
+// (issue #14). Same fs-primitives shape kernel/ledger.mjs's withLock proves
+// (exclusive-create + stale-mtime reap + Atomics.wait backoff), reimplemented
+// here rather than imported: kernel and the directive loop are deliberately
+// separate systems (kernel/README.md "Out of scope"), and the lock itself is
+// small enough that a cross-module dependency would cost more than it saves.
+function withLock(id, fn) {
+  fs.mkdirSync(directivesDir(), { recursive: true });
+  const file = path.join(directivesDir(), `${safeId(id)}.lock`);
+  const deadline = Date.now() + 4000;
+  for (;;) {
+    try { fs.closeSync(fs.openSync(file, "wx")); break; } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try { if (Date.now() - fs.statSync(file).mtimeMs > 5000) { fs.rmSync(file, { force: true }); continue; } } catch {}
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the "${id}" directive lock`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  try { return fn(); } finally { try { fs.unlinkSync(file); } catch {} }
+}
+
+// read -> change -> write as one locked unit. The read happens AFTER the
+// lock is held, not before, so a writer never acts on a copy another process
+// has since changed. `change` returning literal `false` aborts without
+// writing (a mutator whose own precondition, e.g. "still active", failed).
+function mutate(id, change) {
+  return withLock(id, () => {
+    const directive = readDirective(id);
+    if (!directive) return null;
+    // Test seam ONLY (default 0, a no-op): the natural read-to-write window is
+    // microseconds, so a lost-update race reproduces only rarely by chance.
+    // Widening it on demand makes the regression test deterministic — same
+    // pattern as kernel/ledger.mjs's ACC_LEDGER_APPEND_ONCE_DELAY_MS.
+    const delay = Number(process.env.ACC_DIRECTIVE_MUTATE_DELAY_MS) || 0;
+    if (delay) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    if (change(directive) === false) return null;
+    return write(directive);
+  });
+}
+
+export function readDirective(id) {
+  const g = readJson(directivePath(id), null);
   return g && g.id ? g : null;
 }
 
-export function listGoals() {
+export function listDirectives() {
   try {
     return fs
-      .readdirSync(goalsDir())
+      .readdirSync(directivesDir())
       .filter((f) => f.endsWith(".json"))
-      .map((f) => readJson(path.join(goalsDir(), f), null))
+      .map((f) => readJson(path.join(directivesDir(), f), null))
       .filter((g) => g && g.id);
   } catch {
     return [];
   }
 }
 
-// Is that console still alive? A goal bound to a window Kyle has since closed
+// Is that console still alive? A directive bound to a window Kyle has since closed
 // must never be resumed - there is nothing to type into, and the pid may since
 // have been reused by an unrelated process.
 export function consoleAlive(pid) {
@@ -133,20 +179,20 @@ export function consoleAlive(pid) {
   }
 }
 
-// OI-031: left alone, an active goal whose console died just sits "active"
+// OI-031: left alone, an active directive whose console died just sits "active"
 // forever - nothing ever marked it dead, so the store only grows and
-// pendingKicks keeps re-checking goals no one can ever resume (found live:
-// 7 "active" goals, oldest four days old, every consolePid gone). "dead"
-// means BOUND (consolePid nonzero) and NOT alive; an unbound goal
+// pendingKicks keeps re-checking directives no one can ever resume (found live:
+// 7 "active" directives, oldest four days old, every consolePid gone). "dead"
+// means BOUND (consolePid nonzero) and NOT alive; an unbound directive
 // (consolePid 0 - created but not yet launched into a console) is left
 // alone, since there is nothing yet to prove dead. Runs on every
-// activeGoals() call rather than on a timer: cheap (one process.kill(pid,0)
-// per active goal, same cost pendingKicks already pays), and it means every
-// reader - list, pending, goalForSession - sees the reaped result
+// activeDirectives() call rather than on a timer: cheap (one process.kill(pid,0)
+// per active directive, same cost pendingKicks already pays), and it means every
+// reader - list, pending, directiveForSession - sees the reaped result
 // immediately instead of a stale one.
-export function reapDeadGoals() {
+export function reapDeadDirectives() {
   const reaped = [];
-  for (const g of listGoals()) {
+  for (const g of listDirectives()) {
     if (g.status !== "active") continue;
     if (!g.consolePid || consoleAlive(g.consolePid)) continue;
     setStatus(g.id, "dead", `console pid ${g.consolePid} is gone (reaped)`);
@@ -155,29 +201,29 @@ export function reapDeadGoals() {
   return reaped;
 }
 
-export function activeGoals() {
-  reapDeadGoals();
-  return listGoals().filter((g) => g.status === "active");
+export function activeDirectives() {
+  reapDeadDirectives();
+  return listDirectives().filter((g) => g.status === "active");
 }
 
-export function goalForSession(sessionId) {
+export function directiveForSession(sessionId) {
   if (!sessionId) return null;
-  return activeGoals().find((g) => g.sessionId === sessionId) || null;
+  return activeDirectives().find((g) => g.sessionId === sessionId) || null;
 }
 
-export function createGoal({ text, cwd, profile }) {
+export function createDirective({ text, cwd, profile }) {
   ensureDirs();
   const t = String(text || "").trim();
-  if (!t) throw new Error("a goal needs text");
+  if (!t) throw new Error("a directive needs text");
   const iso = new Date().toISOString(); // 2026-07-31T04:10:27.123Z
   const id =
-    "g-" +
+    "d-" +
     iso.slice(0, 10).replace(/-/g, "") +
     "-" +
     iso.slice(11, 19).replace(/:/g, "") +
     "-" +
     Math.random().toString(36).slice(2, 6);
-  const goal = {
+  const directive = {
     id,
     text: t,
     cwd: cwd || "",
@@ -194,68 +240,71 @@ export function createGoal({ text, cwd, profile }) {
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
-  write(goal);
+  write(directive);
   fs.writeFileSync(
     logPath(id),
-    `# Goal ${id}\n\n${t}\n\n- folder: ${goal.cwd || "(not set)"}\n- profile: ${goal.profile || "(default)"}\n- opened: ${goal.createdAt}\n\n## Progress\n\n`
+    `# Directive ${id}\n\n${t}\n\n- folder: ${directive.cwd || "(not set)"}\n- profile: ${directive.profile || "(default)"}\n- opened: ${directive.createdAt}\n\n## Progress\n\n`
   );
-  return goal;
+  return directive;
 }
 
 // Real Claude Code session ids are always UUIDs. bindSession is reachable by
 // hand (piping a fake SessionStart payload into budget.mjs against live
 // state), and a synthetic sessionId there would otherwise silently steal a
-// live console's goal binding (OI-006, reproduced). A non-UUID sessionId is
+// live console's directive binding (OI-006, reproduced). A non-UUID sessionId is
 // therefore treated exactly like none was passed at all.
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Called from SessionStart. Two ways in:
-//   - ACC_GOAL is set   -> the Command Center launched this session for that goal
-//   - otherwise         -> adopt whatever active goal owns this console
+//   - ACC_DIRECTIVE is set   -> the Command Center launched this session for that directive
+//   - otherwise         -> adopt whatever active directive owns this console
 // The second case is the one that survives a /clear, and it is deliberately not
-// conditional on how the clear happened: a goal Kyle cleared by hand resumes the
+// conditional on how the clear happened: a directive Kyle cleared by hand resumes the
 // same way an auto-clear does.
-export function bindSession({ sessionId, consolePid, cwd, goalId }) {
+export function bindSession({ sessionId, consolePid, cwd, directiveId }) {
   ensureDirs();
-  let goal = goalId ? readGoal(goalId) : null;
-  if (goal && goal.status !== "active") goal = null;
-  if (!goal && consolePid) {
-    goal = activeGoals().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
+  // Unlocked lookup only decides WHICH directive to target; mutate() below
+  // re-reads it fresh once the lock is held, so a candidate that went stale
+  // between this search and the lock can never be written over.
+  let found = directiveId ? readDirective(directiveId) : null;
+  if (found && found.status !== "active") found = null;
+  if (!found && consolePid) {
+    found = activeDirectives().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
   }
-  if (!goal) return null;
+  if (!found) return null;
 
-  // A non-UUID id (garbage, or simply absent) never touches sessionId/
-  // needsKick/boundAt below -- it is inert, not "no-op with side effects".
-  const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
-  const fresh = validId !== null && goal.sessionId !== validId;
-  if (validId !== null) goal.sessionId = validId;
-  if (consolePid) goal.consolePid = Number(consolePid);
-  if (!goal.cwd && cwd) goal.cwd = cwd;
-  if (fresh) {
-    // A new session for a live goal is exactly the state that needs a prompt
-    // typed into it - whether this is the launch or the 4th resume.
-    goal.needsKick = true;
-    goal.boundAt = nowIso();
-  }
-  return write(goal);
+  return mutate(found.id, (directive) => {
+    if (directive.status !== "active") return false; // went inactive since the lookup
+    // A non-UUID id (garbage, or simply absent) never touches sessionId/
+    // needsKick/boundAt below -- it is inert, not "no-op with side effects".
+    const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
+    const fresh = validId !== null && directive.sessionId !== validId;
+    if (validId !== null) directive.sessionId = validId;
+    if (consolePid) directive.consolePid = Number(consolePid);
+    if (!directive.cwd && cwd) directive.cwd = cwd;
+    if (fresh) {
+      // A new session for a live directive is exactly the state that needs a prompt
+      // typed into it - whether this is the launch or the 4th resume.
+      directive.needsKick = true;
+      directive.boundAt = nowIso();
+    }
+  });
 }
 
 export function appendCycle(id, { sessionId, ctx, text }) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.cycles = Number(goal.cycles || 0) + 1;
-  write(goal);
+  const directive = mutate(id, (d) => { d.cycles = Number(d.cycles || 0) + 1; });
+  if (!directive) return null;
   const body = String(text || "").trim().slice(0, 4000);
   try {
     fs.appendFileSync(
       logPath(id),
-      `\n### Cycle ${goal.cycles} - ${nowIso()}\n` +
+      `\n### Cycle ${directive.cycles} - ${nowIso()}\n` +
         `_session ${sessionId || "?"} ended at ${Math.round(Number(ctx || 0) / 1000)}k_\n\n` +
         (body || "_(no closing summary captured)_") +
         "\n"
     );
   } catch {}
-  return goal;
+  return directive;
 }
 
 // The tail is what gets injected into the next session, so it is bounded here
@@ -272,12 +321,12 @@ export function logTail(id, maxChars = 3000) {
 }
 
 export function setStatus(id, status, why) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.status = status;
-  goal.needsKick = false;
-  if (why) goal.why = String(why).slice(0, 500);
-  write(goal);
+  const directive = mutate(id, (d) => {
+    d.status = status;
+    d.needsKick = false;
+    if (why) d.why = String(why).slice(0, 500);
+  });
+  if (!directive) return null;
   if (status === "done" || status === "blocked" || status === "dead") {
     try {
       fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
@@ -285,16 +334,16 @@ export function setStatus(id, status, why) {
     // Archive so the live directory only ever holds work in flight.
     try {
       ensureDirs();
-      fs.renameSync(goalPath(id), path.join(doneDir(), `${safeId(id)}.json`));
+      fs.renameSync(directivePath(id), path.join(doneDir(), `${safeId(id)}.json`));
       fs.renameSync(logPath(id), path.join(doneDir(), `${safeId(id)}.log.md`));
     } catch {}
   }
-  return goal;
+  return directive;
 }
 
 // What clearbot asks for every cycle. Everything that makes a kick unsafe is
 // decided HERE, in one place, so the watcher stays a dumb executor:
-//   - goal must be active
+//   - directive must be active
 //   - its console must still exist
 //   - the binding must have settled (TUI ready)
 //   - the cooldown must have expired
@@ -305,7 +354,20 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     opts.kickSettleSeconds != null ? Number(opts.kickSettleSeconds) * 1000 : KICK_SETTLE_MS_DEFAULT;
   const holdMs =
     opts.humanHoldMinutes != null ? Number(opts.humanHoldMinutes) * 60000 : HUMAN_HOLD_MS_DEFAULT;
-  return activeGoals()
+  const list = activeDirectives();
+  // issue #14's second half: a kick whose keystrokes missed produces no turn,
+  // so nothing ever re-arms needsKick and the loop stalls silently. A kick
+  // with no turn end after KICK_REARM_MS is presumed swallowed and re-armed.
+  // Worst case (the turn is genuinely still running that long) the retyped
+  // constant queues as the next prompt — the same text the loop sends anyway.
+  for (const g of list) {
+    if (!g.needsKick && g.lastKickAt && now - Date.parse(g.lastKickAt) >= KICK_REARM_MS &&
+        (!g.turnEndedAt || Date.parse(g.turnEndedAt) < Date.parse(g.lastKickAt))) {
+      mutate(g.id, (d) => { d.needsKick = true; });
+      g.needsKick = true;
+    }
+  }
+  return list
     .filter((g) => g.needsKick)
     .filter((g) => consoleAlive(g.consolePid))
     .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= tuiReadyMs)
@@ -318,26 +380,25 @@ export function pendingKicks(now = Date.now(), opts = {}) {
     .map((g) => ({ id: g.id, consolePid: g.consolePid, cycles: g.cycles, sessionId: g.sessionId }));
 }
 
-// Called from the Stop hook on every turn end of a goal session that did NOT go
+// Called from the Stop hook on every turn end of a directive session that did NOT go
 // over budget (the over-budget path has its own clear/resume chain). This is the
 // liveness trigger: it re-arms the kick, and pendingKicks() above decides when
 // firing it is safe. `human` marks a turn Kyle prompted, which backs the kick
 // off - see HUMAN_HOLD_MS_DEFAULT.
 export function recordTurnEnd(id, { human } = {}) {
-  const goal = readGoal(id);
-  if (!goal || goal.status !== "active") return null;
-  goal.needsKick = true;
-  goal.turnEndedAt = nowIso();
-  if (human) goal.humanPromptAt = nowIso();
-  return write(goal);
+  return mutate(id, (directive) => {
+    if (directive.status !== "active") return false;
+    directive.needsKick = true;
+    directive.turnEndedAt = nowIso();
+    if (human) directive.humanPromptAt = nowIso();
+  });
 }
 
 export function markKicked(id) {
-  const goal = readGoal(id);
-  if (!goal) return null;
-  goal.needsKick = false;
-  goal.lastKickAt = nowIso();
-  return write(goal);
+  return mutate(id, (directive) => {
+    directive.needsKick = false;
+    directive.lastKickAt = nowIso();
+  });
 }
 
 // ------------------------------------------------------------- CLI
@@ -347,9 +408,9 @@ function arg(argv, name, dflt = "") {
   return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : dflt;
 }
 
-// Goal text for `new`. --text-file exists because the caller that matters is the
+// Directive text for `new`. --text-file exists because the caller that matters is the
 // GUI, and the GUI's node shim strips double quotes and cannot pass a newline in
-// a command line at all - so a multi-line goal typed in the box would arrive
+// a command line at all - so a multi-line directive typed in the box would arrive
 // mangled or truncated. A file has neither problem.
 export function textFromArgs(argv) {
   const file = arg(argv, "--text-file");
@@ -357,13 +418,13 @@ export function textFromArgs(argv) {
   return arg(argv, "--text");
 }
 
-// Positional id, falling back to the single active goal. Every command a MODEL
+// Positional id, falling back to the single active directive. Every command a MODEL
 // is told to run takes an explicit id (SessionStart injects it), so this fallback
 // only serves a human at a prompt.
 function resolveId(argv) {
-  const pos = argv.find((a) => /^g-/.test(a));
+  const pos = argv.find((a) => /^d-/.test(a));
   if (pos) return pos;
-  const act = activeGoals();
+  const act = activeDirectives();
   return act.length === 1 ? act[0].id : "";
 }
 
@@ -372,7 +433,7 @@ export function main() {
   const cmd = argv[0] || "list";
 
   if (cmd === "new") {
-    const g = createGoal({
+    const g = createDirective({
       text: textFromArgs(argv),
       cwd: arg(argv, "--cwd"),
       profile: arg(argv, "--profile"),
@@ -381,11 +442,11 @@ export function main() {
     return;
   }
   if (cmd === "list") {
-    console.log(JSON.stringify(activeGoals(), null, 2));
+    console.log(JSON.stringify(activeDirectives(), null, 2));
     return;
   }
   if (cmd === "reap") {
-    console.log(JSON.stringify(reapDeadGoals()));
+    console.log(JSON.stringify(reapDeadDirectives()));
     return;
   }
   if (cmd === "pending") {
@@ -397,8 +458,8 @@ export function main() {
         fs.readFileSync(process.env.ACC_POLICY || path.join(root(), "policy.json"), "utf8")
       );
       dials = {
-        kickSettleSeconds: pol?.goals?.kickSettleSeconds,
-        humanHoldMinutes: pol?.goals?.humanHoldMinutes,
+        kickSettleSeconds: pol?.directives?.kickSettleSeconds,
+        humanHoldMinutes: pol?.directives?.humanHoldMinutes,
         tuiReadySettleMs: pol?.tui?.readySettleMs,
       };
     } catch {}
@@ -410,15 +471,15 @@ export function main() {
     return;
   }
   if (cmd === "show") {
-    const g = readGoal(resolveId(argv));
-    console.log(g ? JSON.stringify(g, null, 2) : "no active goal");
+    const g = readDirective(resolveId(argv));
+    console.log(g ? JSON.stringify(g, null, 2) : "no active directive");
     return;
   }
   if (cmd === "log") {
     const id = resolveId(argv);
-    const text = arg(argv, "--text") || argv.slice(1).filter((a) => !/^g-/.test(a)).join(" ");
-    const g = readGoal(id);
-    if (!g) return console.log("no active goal");
+    const text = arg(argv, "--text") || argv.slice(1).filter((a) => !/^d-/.test(a)).join(" ");
+    const g = readDirective(id);
+    if (!g) return console.log("no active directive");
     try {
       fs.appendFileSync(logPath(id), `\n- ${nowIso()} ${text}\n`);
     } catch {}
@@ -427,13 +488,13 @@ export function main() {
   }
   if (cmd === "done" || cmd === "blocked" || cmd === "paused") {
     const id = resolveId(argv);
-    if (!id) return console.log("no active goal (pass the id)");
+    if (!id) return console.log("no active directive (pass the id)");
     setStatus(id, cmd === "paused" ? "paused" : cmd, arg(argv, "--why"));
-    console.log(`goal ${id} -> ${cmd}`);
+    console.log(`directive ${id} -> ${cmd}`);
     return;
   }
   console.log(
-    "usage: goal.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
+    "usage: directive.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
   );
 }
 

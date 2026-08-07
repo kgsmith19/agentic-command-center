@@ -46,7 +46,7 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 - Blocking an agent from reading or writing secret files, guard machinery, or another cell's owned paths (`hooks/guard.mjs`, `config.json`).
 - A GUI control panel to launch, watch, stop, and approve agent work (`guards-gui.ps1`, `gui/`).
 - A headless kernel that runs one bounded AI-harness task at a time under a deny-by-default policy, verifies the real end-state, and records every run in a structured ledger (`kernel/`).
-- A goal store that lets a session's work survive a context-limit `/clear` by re-injecting the goal into the next session bound to the same console (`hooks/goal.mjs`).
+- A directive store that lets a session's work survive a context-limit `/clear` by re-injecting the directive into the next session bound to the same console (`hooks/directive.mjs`).
 - A launch lane that serializes every automated `claude` process spawn on the machine so concurrent bursts do not break the transport (`hooks/lane.mjs`).
 - Folder routing that scopes a session to the narrowest correct working directory for the task it was given (`hooks/route.mjs`, `hooks/fixtures/ROUTING.md`).
 - A watcher that supervises the automation loop's own liveness and restarts it if it goes stale (`watcher/`).
@@ -84,11 +84,11 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | Field | Content |
 |---|---|
 | Actor | U-002 |
-| Precondition | A goal is bound to the session's console PID |
+| Precondition | A directive is bound to the session's console PID |
 | Trigger | `budget.mjs`'s Stop hook detects the session ended over its context ceiling |
-| Main path | 1. The closing state is captured as the next cycle's handoff. 2. clearbot types `/clear`. 3. The new session's SessionStart hook adopts the goal by console PID and injects it. 4. clearbot types the fixed resume phrase. |
-| Success outcome | The new session continues the same goal with no human retyping context |
-| Failure paths | Console PID not bound -> no adoption, goal stays idle; week token tier is red -> resume held |
+| Main path | 1. The closing state is captured as the next cycle's handoff. 2. clearbot types `/clear`. 3. The new session's SessionStart hook adopts the directive by console PID and injects it. 4. clearbot types the fixed resume phrase. |
+| Success outcome | The new session continues the same directive with no human retyping context |
+| Failure paths | Console PID not bound -> no adoption, directive stays idle; week token tier is red -> resume held |
 | Frequency | Whenever a long task outruns one context window |
 | Traces to | FR-004, FR-005 |
 
@@ -97,7 +97,7 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | Field | Content |
 |---|---|
 | Actor | U-003 |
-| Precondition | A valid task contract (goal, allowed actions, budget, acceptance criteria, rollback plan) |
+| Precondition | A valid task contract (directive, allowed actions, budget, acceptance criteria, rollback plan) |
 | Trigger | `node kernel/run.mjs <contract.json>` |
 | Main path | 1. Contract is validated; a run refused before validation gets no ledger entry. 2. The harness launches with a derived tool allowlist and a guardhook enforcing contract + policy on every tool call. 3. A supervisor tick checks wall-clock, token, and tool-call ceilings, tightened by autonomy state. 4. On completion, every acceptance criterion is verified independently of the harness's own claim. 5. One `run_finalized` ledger record is written. |
 | Success outcome | `accepted` (all criteria pass) or `rejected` (contract ran, criteria failed) — both are honest, ledgered outcomes |
@@ -112,8 +112,8 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | FR-001 | The system must block an agent tool call that would read or write a file matching a `secrets` glob in `config.json`. | Must | Given a `.env` file in a guarded repo, when an agent Edit/Write/Read targets it, then the call is denied with a message naming the reason. | UC-001 | done |
 | FR-002 | The system must block a write to a cell-owned path unless `.agents/task.json` declares that cell as the writer. | Must | Given a repo with `cells` configured and no `task.json`, when an agent writes inside a cell path, then the call is denied. | UC-001 | done |
 | FR-003 | The system must refuse to let more than one automated `claude` process hold the launch lane at a time. | Must | Given one automated launch already holding the lane, when a second automated launch requests it, then the second is refused with a busy indication, not queued silently as a duplicate process. | UC-001 | done |
-| FR-004 | The system must let a bound goal survive a `/clear` by re-injecting it into the next session on the same console. | Must | Given a goal bound to console PID `P`, when a new session starts on `P`, then that session's context includes the goal text within the first turn. | UC-002 | done |
-| FR-005 | The system must stop resuming a goal once the week's token tier is red. | Must | Given the week tier is red, when a goal's turn ends, then no `/clear`-and-resume kick fires. | UC-002 | done |
+| FR-004 | The system must let a bound directive survive a `/clear` by re-injecting it into the next session on the same console. | Must | Given a directive bound to console PID `P`, when a new session starts on `P`, then that session's context includes the directive text within the first turn. | UC-002 | done |
+| FR-005 | The system must stop resuming a directive once the week's token tier is red. | Must | Given the week tier is red, when a directive's turn ends, then no `/clear`-and-resume kick fires. | UC-002 | done |
 | FR-006 | The kernel must refuse to launch a harness for a contract with no acceptance criteria or an unrecognized `verify.method`. | Must | Given a contract with an empty `acceptanceCriteria` array, when `run.mjs` is invoked, then the outcome is `refused` and no ledger entry exists. | UC-003 | done |
 | FR-007 | The kernel must verify every acceptance criterion against the real end-state after the harness reports done, independent of the harness's own claim. | Must | Given a harness that claims success but never created the file an `AC` requires, when verification runs, then that criterion fails and the run is `rejected`. | UC-003 | done |
 | FR-008 | The kernel must record exactly one `run_started` and one `run_finalized` ledger line per run, even under concurrent retries or a mid-run crash. | Must | Given 20 concurrent append attempts for the same run, when the ledger is read back, then no duplicate `run_started` line exists. | UC-003 | done |
@@ -143,7 +143,7 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 |---|---|---|---|---|---|---|
 | DR-001 | Vault keys (`vault.json`) | API keys/secrets an agent's process may need, by name | Kyle, via the GUI's "Give Claude keys" tab | secret | Until Kyle removes the key; gitignored, plaintext on disk | FR-010 |
 | DR-002 | Kernel ledger (`runner/ledger/*.jsonl`) | One record per kernel run: contract summary, outcome, criteria results | `kernel/ledger.mjs` | internal | Kept indefinitely; it is the audit trail | FR-008 |
-| DR-003 | Goal store (`runner/goals/*.json`) | A task's text and progress log, bound to a console PID | `hooks/goal.mjs` | internal | Archived to `runner/goals/done/` on completion or reap | FR-004 |
+| DR-003 | Directive store (`runner/directives/*.json`) | A task's text and progress log, bound to a console PID | `hooks/directive.mjs` | internal | Archived to `runner/directives/done/` on completion or reap | FR-004 |
 | DR-004 | Approvals log (`watcher/approvals.log`) | Record of every runbox script the watcher auto-ran | `watcher/clearbot.ps1` Invoke-AutoApprove | internal | Kept indefinitely | FR-010 |
 
 Rules: anything classified `PII` or `secret` must have a matching NFR — DR-001 is covered by NFR-001 (fail-closed guard) and the vault's by-name-not-by-value design.
@@ -190,7 +190,7 @@ This system was built before this PRD existed. The slice plan below is historica
 | SL-000 | Guard hook + engine | An agent tool call can be denied by a PreToolUse hook | FR-001, FR-002 | historical | - |
 | SL-001 | GUI control panel | Kyle can launch/stop/approve from a window instead of raw CLI | FR-010 | historical | SL-000 |
 | SL-002 | Launch lane | Concurrent automated `claude` spawns stop breaking transport | FR-003 | historical | SL-000 |
-| SL-003 | Goal loop | A task survives a context-limit `/clear` | FR-004, FR-005 | historical | SL-001 |
+| SL-003 | Directive loop | A task survives a context-limit `/clear` | FR-004, FR-005 | historical | SL-001 |
 | SL-004 | Reliability kernel | A headless, bounded, independently-verified harness run | FR-006, FR-007, FR-008 | historical | SL-000 |
 | SL-005 | Kernel scenario-enumeration hardening | 12 kernel modules audited for TOCTOU/uncaught-throw gaps; 8 real bugs fixed | NFR-002, NFR-003 | historical | SL-004 |
 | SL-006 | SDD rearchitecture (this change) | Repo adopts PRD-as-source-of-truth doc contract; OPEN-ISSUES.md ledger replaced by GitHub issues; dead code, redundant docs, and low-value tests removed | — | ~-2000 (net deletion) | SL-005 |
@@ -202,7 +202,7 @@ This system was built before this PRD existed. The slice plan below is historica
 | ACC | Agentic Command Center — this whole system's name | "the kernel" (one subsystem of ACC) |
 | Guard | The PreToolUse hook that denies risky file reads/writes | "guardhook" (the kernel's own, separate enforcement point) |
 | Kernel | The headless, bounded, independently-verified task runner under `kernel/` | The guard hook |
-| Goal | A working condition bound to a console PID that survives `/clear` | The unrelated third-party "Goal" Claude Code plugin (naming collision tracked in GitHub issue #12) |
+| Directive | A working condition bound to a console PID that survives `/clear`. Renamed from "goal" 2026-08-07 to stop colliding with the unrelated third-party Claude Code "Goal" plugin (GitHub issue #12) | The third-party "Goal" plugin, which is a different mechanism entirely |
 | Runbox | A folder where an agent leaves a script for a human to run deliberately | A queued prompt (a different handoff mechanism) |
 | Launch lane | The machine-wide semaphore serializing automated `claude` process spawns | The launch cap (`shim/`), which is an alert-only detector, not an enforcer |
 | Vault | The store of named secrets an agent's process env may receive by name, never by value | `config.json`'s `secrets` globs (files the guard blocks entirely) |
@@ -213,8 +213,8 @@ This system was built before this PRD existed. The slice plan below is historica
 
 | ID | Question | Blocks | Owner | Needed by | Answer |
 |---|---|---|---|---|---|
-| Q-001 | Should ACC's "goal" concept be renamed to avoid colliding with the third-party Claude Code "Goal" plugin? | FR-004 terminology | Kyle | when he locates the earlier naming decision | open — tracked in GitHub issue #12 |
-| Q-002 | Is the GUI's interactive-lane MessageBox/release path provably correct on a real Windows box? | NFR-002 confidence for the interactive (non-automated) launch path | Kyle | next Windows session | open — tracked in GitHub issue #11 |
+| Q-001 | Should ACC's "goal" concept be renamed to avoid colliding with the third-party Claude Code "Goal" plugin? | FR-004 terminology | Kyle | — | **answered 2026-08-07**: renamed to "Directive" throughout this repo (`hooks/goal.mjs` → `hooks/directive.mjs`, `runner/goals/` → `runner/directives/`, `policy.json`'s `goals` key → `directives`). Kyle still needs to rename the `~/.claude/skills/goal/` skill on his own machine — that path is outside this repo and outside what a cloud session can reach. |
+| Q-002 | Is the GUI's interactive-lane MessageBox/release path provably correct on a real Windows box? | NFR-002 confidence for the interactive (non-automated) launch path | Kyle | — | **answered 2026-08-07**: Kyle ran it live — Go/Stop/Start all work, busy-refusal popup renders correctly. Closed as GitHub issue #11. |
 
 ## 16. Change log
 

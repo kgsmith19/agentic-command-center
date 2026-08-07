@@ -38,13 +38,13 @@ graph TB
 
     P1(("P1: Guard tool calls"))
     P2(("P2: Run bounded kernel task"))
-    P3(("P3: Carry goal across /clear"))
+    P3(("P3: Carry directive across /clear"))
     P4(("P4: Serialize launches"))
     P5(("P5: Hand off blocked ops"))
 
     D1[("D1: vault.json")]
     D2[("D2: kernel ledger")]
-    D3[("D3: goal store")]
+    D3[("D3: directive store")]
     D4[("D4: lane slot state")]
     D5[("D5: runbox scripts")]
 
@@ -55,8 +55,8 @@ graph TB
     D1 -->|"F8: env values"| P2
     P2 -->|"F9: run record"| D2
     E2 -->|"F10: turn end / context state"| P3
-    P3 -->|"F11: goal read/write"| D3
-    D3 -->|"F12: injected goal text"| E2
+    P3 -->|"F11: directive read/write"| D3
+    D3 -->|"F12: injected directive text"| E2
     E1 -->|"F1: launch request"| P4
     P4 -->|"F13: slot read/write"| D4
     P1 -->|"F14: blocked-op description"| P5
@@ -98,7 +98,7 @@ graph TB
 |---|---|---|---|---|
 | P1 | Guard tool calls | Allow or deny an Edit/Write/Read/Bash call against secrets, protected paths, cell ownership | `hooks/guard.mjs`, `kernel/guardhook.mjs` | FR-001, FR-002 |
 | P2 | Run bounded kernel task | Execute one contract under a deny-by-default boundary and verify the result | `kernel/run.mjs` | FR-006, FR-007, FR-008 |
-| P3 | Carry goal across /clear | Bind, inject, and resume a goal on the same console | `hooks/goal.mjs` | FR-004, FR-005 |
+| P3 | Carry directive across /clear | Bind, inject, and resume a directive on the same console | `hooks/directive.mjs` | FR-004, FR-005 |
 | P4 | Serialize launches | Grant/refuse the one automated launch-lane slot | `hooks/lane.mjs` | FR-003 |
 | P5 | Hand off blocked ops | Turn a guard-denied or elevated operation into a reviewable script | AGENTS.md runbox convention, `watcher/clearbot.ps1` | FR-010 |
 
@@ -108,7 +108,7 @@ graph TB
 |---|---|---|---|---|---|---|---|
 | D1 | Vault | `vault.json`, plain JSON file | Named API keys/secrets | secret | Until removed | no | DR-001 |
 | D2 | Kernel ledger | `runner/ledger/*.jsonl` | Run records | internal | indefinite | no | DR-002 |
-| D3 | Goal store | `runner/goals/*.json` | Active/done goal state + logs | internal | until archived, then indefinite | no | DR-003 |
+| D3 | Directive store | `runner/directives/*.json` | Active/done directive state + logs | internal | until archived, then indefinite | no | DR-003 |
 | D4 | Lane slot state | `os.tmpdir()/acc-lane` | Owner pid + ttl per slot | internal | transient (until release/reap) | no | FR-003 |
 | D5 | Runbox | `runbox/`, `<project>/.guards/runbox` | Pending/handled human-approval scripts | internal | until archived to `.trash/` | no | FR-010 |
 
@@ -119,7 +119,7 @@ graph TB
 | F4 | E2 | P1 | Tool name + tool input | internal (may reference secret paths) | in-process hook payload (stdin) | no (localhost) | yes (TB-1) | FR-001 |
 | F7/F8 | P2 | D1 / P2 | Vault key names out, values back | secret | in-process | no (localhost) | no (D1 is inside the trust boundary) | DR-001 |
 | F9 | P2 | D2 | Run outcome + criteria results | internal | file append | no | no | DR-002 |
-| F12 | D3 | E2 | Injected goal text | internal | SessionStart hook payload | no | yes (TB-1) | FR-004 |
+| F12 | D3 | E2 | Injected directive text | internal | SessionStart hook payload | no | yes (TB-1) | FR-004 |
 
 ## 5. Trust boundaries
 
@@ -159,7 +159,7 @@ graph LR
 |---|---|---|---|---|---|---|---|
 | Vault key | Kyle (GUI upload) | D1 | `kernel/credentials.mjs` (by name) | The child process env of a run whose contract lists that key name | Kyle | Manual removal in the GUI | DR-001 |
 | Kernel run record | `kernel/run.mjs` | D2 | `kernel/ledger.mjs query` | Nobody outside this machine | Nobody — indefinite retention (audit trail) | Never (accepted, single-machine tool) | DR-002 |
-| Goal | `hooks/goal.mjs new` | D3 | SessionStart hook, GUI | Nobody outside this machine | `reapDeadGoals()` or explicit `done`/`blocked` | Console dead, or goal completed/blocked | DR-003 |
+| Directive | `hooks/directive.mjs new` | D3 | SessionStart hook, GUI | Nobody outside this machine | `reapDeadDirectives()` or explicit `done`/`blocked` | Console dead, or directive completed/blocked | DR-003 |
 
 ## 8. Change log
 

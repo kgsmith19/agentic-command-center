@@ -23,7 +23,7 @@ const REPO = path.resolve(HERE, "..");
 
 // Every powershell/cmd child this suite spawns below inherits process.env
 // unmodified (none pass an explicit `env:`), and clearbot.ps1 itself shells
-// out to `node hooks/goal.mjs` / `usage.mjs` / `engine.mjs` repeatedly per
+// out to `node hooks/directive.mjs` / `usage.mjs` / `engine.mjs` repeatedly per
 // -Once pass — so under `node hooks/covgate.mjs` (coverage-instrumented),
 // every one of those nested node invocations would inherit and dump into
 // the real run's live NODE_V8_COVERAGE directory WHILE it is still being
@@ -173,7 +173,7 @@ test("an off-table cd destination is refused and never typed", () => {
 
 // guards OI-003: the non-clear /cd settle used to be a hardcoded 1200ms that
 // failed a real-token repro; it now reads policy.json's tui.readySettleMs
-// (watcher/clearbot.ps1 Get-TuiReadyMs), the same dial hooks/goal.mjs's kick
+// (watcher/clearbot.ps1 Get-TuiReadyMs), the same dial hooks/directive.mjs's kick
 // delay falls back to. Get-AllowedPaths needs a real ROUTING.md match to let
 // a cd through at all, so this is the one test in the file that also needs
 // the ACC_ROUTING_MD override (mirrors hooks/route.mjs's own override) -
