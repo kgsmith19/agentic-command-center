@@ -219,8 +219,13 @@ test("POLICY() and LANE_DIR() fall back to their real defaults when the env vars
   delete process.env.ACC_POLICY;
   delete process.env.ACC_LANE_DIR;
   try {
-    const cfg = laneConfig(); // falls back to reading the REAL guards/policy.json
-    assert.ok(cfg.slots >= 1);
+    // Independent oracle: read the REAL repo policy.json directly, the same
+    // file laneConfig() must fall back to — proves the actual value, not
+    // merely "a number >= 1" (which a hardcoded stub would also satisfy).
+    const realPolicyPath = path.join(HERE_DIR, "..", "policy.json");
+    const real = JSON.parse(fs.readFileSync(realPolicyPath, "utf8"));
+    const cfg = laneConfig();
+    assert.equal(cfg.slots, real.lane.slots);
   } finally {
     process.env.ACC_POLICY = savedPolicy;
     process.env.ACC_LANE_DIR = savedLane;
@@ -263,7 +268,14 @@ test("acquireSlot works end to end with ACC_LANE_DIR genuinely unset (the real m
   delete process.env.ACC_LANE_DIR;
   try {
     const s = await acquireSlot("real-default-dir-probe");
+    // Must actually land under the real fallback (os.tmpdir()/acc-lane), not
+    // merely "not throw" (a stub returning {slot:0, release(){}} with no I/O
+    // at all would have passed the old assertion).
+    const realOwnerFile = path.join(os.tmpdir(), "acc-lane", `slot-${s.slot}`, "owner.json");
+    const owner = JSON.parse(fs.readFileSync(realOwnerFile, "utf8"));
+    assert.equal(owner.label, "real-default-dir-probe");
     s.release(); // clean up the real os.tmpdir()/acc-lane immediately — this sandbox has no other holder
+    assert.equal(fs.existsSync(realOwnerFile), false, "release must remove the real slot, not just report success");
   } finally {
     process.env.ACC_LANE_DIR = saved;
   }

@@ -5,6 +5,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Independent oracle for the two "unset env var falls back to the real repo"
+// tests below: computed the same way policy.mjs computes it (one level up
+// from this file's own directory), not imported from the module under test.
+const REAL_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-kernel-policy-"));
 process.env.ACC_POLICY = path.join(BASE, "policy.json");
@@ -59,7 +65,9 @@ test("kernelRoot falls back to the repo root when ACC_ROOT is unset", () => {
   const saved = process.env.ACC_ROOT;
   delete process.env.ACC_ROOT;
   try {
-    assert.ok(path.isAbsolute(kernelRoot()));
+    // Must resolve to the ACTUAL repo root, not merely "some absolute path"
+    // (a hardcoded unrelated absolute path would have passed the old assertion).
+    assert.equal(kernelRoot(), REAL_REPO_ROOT);
   } finally {
     process.env.ACC_ROOT = saved;
   }
@@ -69,7 +77,11 @@ test("loadKernelPolicy falls back to the repo policy.json when ACC_POLICY is uns
   const saved = process.env.ACC_POLICY;
   delete process.env.ACC_POLICY;
   try {
-    assert.doesNotThrow(() => loadKernelPolicy());
+    // Must actually read the real repo's policy.json, not merely "not throw"
+    // (a function hardcoded to return {} would have passed the old assertion).
+    const real = JSON.parse(fs.readFileSync(path.join(REAL_REPO_ROOT, "policy.json"), "utf8"));
+    const wantHarness = (real.kernel || {}).harness ?? KERNEL_DEFAULTS.harness;
+    assert.equal(loadKernelPolicy().harness, wantHarness);
   } finally {
     process.env.ACC_POLICY = saved;
   }
