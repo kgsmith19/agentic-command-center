@@ -703,6 +703,83 @@ test("AC-004 integration: a directive job's child carries ACC_DIRECTIVE; a file 
     "a file job must never masquerade as a directive session");
 });
 
+// ------------------------------------------------------------- pid-file singleton (SPEC-0005, FR-012)
+// Two runner loops on one directive was practically impossible while the only
+// launch path was a human's own console; the web Launch button makes it one
+// accidental double-click. The runner OWNS this invariant (the server's 409
+// pre-check is UX only): runLoop writes state/<job.name>.pid at entry, refuses
+// with exit 6 while that pid is alive, reclaims a stale file, and removes its
+// own in a finally.
+const pidFileFor = (j) => path.join(process.env.ACC_RUNNER_ROOT, "state", `${j.name}.pid`);
+
+test("singleton: a live pid refuses the second loop (exit 6) — no run, and the holder's file survives", async () => {
+  const j = job({ name: "single-live" });
+  fs.mkdirSync(path.dirname(pidFileFor(j)), { recursive: true });
+  fs.writeFileSync(pidFileFor(j), String(process.pid)); // this very test process: alive by construction
+  let called = false;
+  const code = await runLoop(j, false, { run: async () => { called = true; return { code: 0, result: "", err: "" }; } });
+  assert.equal(code, 6);
+  assert.equal(called, false, "a refused loop must never spawn a run");
+  assert.equal(fs.readFileSync(pidFileFor(j), "utf8"), String(process.pid),
+    "the loser must not unlink the holder's pid file on its way out");
+});
+
+test("singleton: a stale pid file (dead process, or garbage content) is reclaimed and the loop proceeds", async () => {
+  const dead = spawnSync("node", ["-e", ""], { env: { ...process.env, NODE_V8_COVERAGE: undefined } }).pid;
+  for (const stale of [String(dead), "not-a-pid"]) {
+    const j = job({ name: `single-stale-${stale === "not-a-pid" ? "junk" : "dead"}` });
+    board(j.workdir, j.statusFile, "DONE\n");
+    fs.mkdirSync(path.dirname(pidFileFor(j)), { recursive: true });
+    fs.writeFileSync(pidFileFor(j), stale);
+    const code = await runLoop(j, false, { run: async () => ({ code: 0, result: "", err: "" }) });
+    assert.equal(code, 0, `stale content ${JSON.stringify(stale)} must be reclaimed, not refused`);
+    assert.equal(fs.existsSync(pidFileFor(j)), false, "the reclaimed file must be released on exit");
+  }
+});
+
+test("singleton: the pid file carries this process's pid during the run and is released after", async () => {
+  const j = job({ name: "single-during" });
+  let seen = "";
+  const code = await runLoop(j, true, {
+    run: async () => {
+      seen = fs.readFileSync(pidFileFor(j), "utf8");
+      board(j.workdir, j.statusFile, "DONE\n");
+      return { code: 0, result: "", err: "" };
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(seen, String(process.pid), "the pid file must exist and name this loop while a run is in flight");
+  assert.equal(fs.existsSync(pidFileFor(j)), false, "a finished loop must release its pid file");
+});
+
+test("singleton: losing the reclaim re-create race (or an unremovable obstruction) refuses, never throws or loops", async () => {
+  // A DIRECTORY at the pid-file path is the deterministic stand-in for the
+  // narrow race where another starter re-creates the file between our unlink
+  // and our second wx attempt: the first wx fails EEXIST, the read yields no
+  // live pid, the unlink cannot clear it, and the second wx fails again —
+  // that path must land on "refuse" (exit 6), not an uncaught throw.
+  const j = job({ name: "single-obstructed" });
+  fs.mkdirSync(pidFileFor(j), { recursive: true });
+  let called = false;
+  const code = await runLoop(j, false, { run: async () => { called = true; return { code: 0, result: "", err: "" }; } });
+  assert.equal(code, 6);
+  assert.equal(called, false);
+  fs.rmdirSync(pidFileFor(j));
+});
+
+test("singleton: every early exit path releases the pid file too (stop file, red tier)", async () => {
+  const jStop = job({ name: "single-stop" });
+  fs.mkdirSync(path.join(process.env.ACC_RUNNER_ROOT, "stop"), { recursive: true });
+  fs.writeFileSync(path.join(process.env.ACC_RUNNER_ROOT, "stop", `${jStop.name}.stop`), "");
+  assert.equal(await runLoop(jStop, false, { run: async () => ({ code: 0, result: "", err: "" }) }), 4);
+  assert.equal(fs.existsSync(pidFileFor(jStop)), false);
+
+  const d = directive();
+  const jRed = loadJob(`directive:${d.id}`);
+  assert.equal(await runLoop(jRed, false, { run: async () => ({ code: 0, result: "", err: "" }), tier: () => "red" }), 5);
+  assert.equal(fs.existsSync(pidFileFor(jRed)), false);
+});
+
 test("liveTier: parses the check verb's JSON, and every failure shape reads green (documented fail-open parity with clearbot)", () => {
   const { liveTier } = runnerNs;
   assert.equal(liveTier(() => JSON.stringify({ tier: "red", weekTokens: 9 })), "red");

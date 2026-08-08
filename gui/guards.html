@@ -21,6 +21,19 @@
 <h3>Guards <span id="status"></span><button id="toggle"></button></h3>
 <p class="muted">Same engine as the desktop app (<code>hooks/engine.mjs</code>) — every change here is the same change there.</p>
 
+<fieldset><legend>Start work</legend>
+  <p class="muted">Describe the task. The Command Center suggests the folder, and GO hands it to a headless session that keeps restarting with fresh context until the work reports done.</p>
+  <textarea id="dirText" rows="3" style="width:98%" placeholder="What should Claude do?"></textarea><br>
+  <label>Folder <input type="text" id="dirCwd" style="width:340px"></label>
+  <span id="dirSuggest" class="muted"></span><br>
+  <span id="profiles"></span>
+  <button id="dirGo" style="font-weight:700">GO</button>
+  <span id="dirMsg" class="muted"></span>
+  <div id="laneLine" class="muted"></div>
+  <div style="margin-top:6px"><strong>Work in flight</strong></div>
+  <div id="dirList" class="muted"></div>
+</fieldset>
+
 <fieldset><legend>What Claude cannot touch</legend>
   <label>Secret patterns (never read or written)<br><select id="secrets" size="4"></select></label>
   <label>Locked paths (read-only)<br><select id="protected" size="4"></select></label>
@@ -181,6 +194,7 @@ async function refreshProcess() {
   $("autoApprove").checked = !!d.autoApprove;
   $("stopState").textContent = s.stopped ? "STOPPED — no new automated work will start." : "Running normally.";
   $("cleanupState").textContent = s.cleanupKilled ? "OFF — kill switch engaged." : "ON (or ready).";
+  fillProfiles(s.profiles);
 }
 $("dialsSave").onclick = async () => {
   const dials = {
@@ -206,8 +220,112 @@ $("ctlCleanupOn").onclick = () => control("cleanup-on");
 $("ctlCleanupOff").onclick = () => control("cleanup-off");
 $("ctlClearNow").onclick = () => confirm("This types /clear into your newest Claude Code session now. Continue?") && control("clear-now", { confirm: true });
 
+// --- start work (SPEC-0005) ---
+// Ported from guards-gui.ps1's Invoke-RouteSuggest: the router fills the
+// folder box on blur; a human override in the box always wins (GO sends
+// whatever the box holds).
+async function suggestFolder() {
+  const text = $("dirText").value.trim();
+  if (!text) return;
+  const r = await api("/api/route/suggest", { text: text.slice(0, 2000) });
+  if (r.path) {
+    $("dirCwd").value = r.path;
+    $("dirSuggest").textContent = `Folder set to ${r.label} — change it if wrong.`;
+  } else {
+    $("dirSuggest").textContent = "No clear match — set the folder yourself.";
+  }
+}
+$("dirText").onblur = suggestFolder;
+
+function fillProfiles(names) {
+  const wrap = $("profiles");
+  if (wrap.childElementCount || !names || !names.length) return;
+  names.forEach((n, i) => {
+    const l = document.createElement("label");
+    const radio = document.createElement("input");
+    radio.type = "radio"; radio.name = "profile"; radio.value = n; radio.checked = i === 0;
+    l.appendChild(radio);
+    l.appendChild(document.createTextNode(" " + n));
+    wrap.appendChild(l);
+  });
+}
+const profileValue = () => document.querySelector("input[name=profile]:checked")?.value || "";
+
+let openLogId = null;
+let logTimer = null;
+function toggleLog(id, pre) {
+  if (logTimer) { clearInterval(logTimer); logTimer = null; }
+  if (openLogId === id) { openLogId = null; refreshDirectives(); return; }
+  openLogId = id;
+  const load = async () => {
+    const r = await fetch("/api/directives/log?id=" + encodeURIComponent(id));
+    pre.textContent = r.ok ? await r.text() : "(no log yet)";
+  };
+  load();
+  logTimer = setInterval(load, 5000); // poll while open; cleared on close/re-render
+  pre.style.display = "block";
+}
+
+async function refreshDirectives() {
+  const list = await api("/api/directives");
+  const wrap = $("dirList");
+  wrap.innerHTML = "";
+  if (logTimer) { clearInterval(logTimer); logTimer = null; }
+  if (!Array.isArray(list) || !list.length) {
+    wrap.textContent = "(nothing in flight)";
+  } else {
+    for (const d of list) {
+      const row = document.createElement("div");
+      row.className = "dirRow";
+      row.style.margin = "4px 0";
+      const title = document.createElement("span");
+      title.textContent = `${d.running ? "● running" : "○ idle"}  ${d.id}  — ${String(d.text || "").split("\n")[0].slice(0, 90)}  (${d.cycles || 0} restarts)`;
+      title.style.color = d.running ? "#1a7a1a" : "";
+      row.appendChild(title);
+      const btn = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; row.appendChild(b); return b; };
+      const act = async (status, why) => {
+        const r = await api("/api/directives/status", { id: d.id, status, why });
+        $("dirMsg").textContent = r.error || `${d.id} → ${status}`;
+        $("dirMsg").className = r.error ? "err" : "ok";
+        await refreshDirectives();
+      };
+      btn("Mark finished", () => act("done", "finished from the Command Center"));
+      btn("Stop restarting", () => act("paused", ""));
+      const pre = document.createElement("pre");
+      pre.style.cssText = "display:none;white-space:pre-wrap;background:#f6f6f6;border:1px solid #ddd;padding:8px;max-height:240px;overflow:auto";
+      btn("View log", () => toggleLog(d.id, pre));
+      row.appendChild(pre);
+      wrap.appendChild(row);
+      if (openLogId === d.id) { openLogId = null; toggleLog(d.id, pre); } // keep an open tail open across re-renders
+    }
+  }
+  const lane = await api("/api/lane/status");
+  if (lane && lane.automation) {
+    const held = lane.automation.length;
+    $("laneLine").textContent =
+      `Launch lane: ${held ? held + " automated session(s) holding a slot" : "free"}` +
+      (lane.breaker && lane.breaker.tripped ? " — circuit breaker cooling down, new automated launches are held" : "");
+  }
+}
+
+$("dirGo").onclick = async () => {
+  const text = $("dirText").value.trim();
+  const cwd = $("dirCwd").value.trim();
+  if (!text) { $("dirMsg").textContent = "describe the task first"; $("dirMsg").className = "err"; return; }
+  if (!cwd) { $("dirMsg").textContent = "set the folder first"; $("dirMsg").className = "err"; return; }
+  const d = await api("/api/directives", { text, cwd, profile: profileValue() });
+  if (d.error) { $("dirMsg").textContent = d.error; $("dirMsg").className = "err"; return; }
+  const l = await api("/api/launch", { id: d.id });
+  $("dirMsg").textContent = l.error ? `created ${d.id} but not launched: ${l.error}` : `launched ${d.id}`;
+  $("dirMsg").className = l.error ? "err" : "ok";
+  if (!l.error) $("dirText").value = "";
+  await refreshDirectives();
+};
+
 refresh();
 refreshProcess();
+refreshDirectives();
+setInterval(refreshDirectives, 10000);
 </script>
 </body>
 </html>

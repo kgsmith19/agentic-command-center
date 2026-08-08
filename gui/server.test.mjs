@@ -658,3 +658,231 @@ test("control: cleanup-on when no kill-switch file exists is a no-op unlink, not
   assert.equal(r.status, 200);
   resetPolicy();
 });
+
+// ------------------------------------------------------------- launch API (SPEC-0005, FR-012)
+// The web Start-work surface. The directive store, router, and lane are the
+// REAL modules against sandboxed env (ACC_ROOT / ACC_ROUTING_MD /
+// ACC_LANE_DIR — each already honours it); only the runner is faked
+// (ACC_RUNNER), because the real one would spawn a claude. Ids are validated
+// against /^d-[A-Za-z0-9_-]{1,38}$/ BEFORE any path is built — the traversal
+// cases below prove no `../` shape ever reaches the filesystem.
+const LAUNCH_DIR = path.join(BASE, "launch");
+const FAKE_RUNNER = path.join(BASE, "fake-runner.mjs");
+const RUNNER_LOG = path.join(BASE, "runner-calls.jsonl");
+fs.writeFileSync(FAKE_RUNNER, `
+import fs from "node:fs";
+fs.appendFileSync(process.env.FAKE_RUNNER_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+`.trimStart());
+const runnerCalls = () => {
+  try { return fs.readFileSync(RUNNER_LOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); }
+  catch { return []; }
+};
+// A routing fixture whose signals are unambiguous: "guards"/"hook" scores the
+// first route, "react" the second, "zebra" nothing.
+const ROUTING_MD = path.join(BASE, "ROUTING.md");
+const ROUTE_A = path.join(BASE, "code", "guards");
+const ROUTE_B = path.join(BASE, "code", "web");
+fs.mkdirSync(ROUTE_A, { recursive: true });
+fs.mkdirSync(ROUTE_B, { recursive: true });
+fs.writeFileSync(ROUTING_MD, "# routes\n```json\n" + JSON.stringify({
+  routes: [
+    { label: "guards", path: ROUTE_A, signals: ["guards", "hook"] },
+    { label: "web", path: ROUTE_B, signals: ["react"] },
+  ],
+}) + "\n```\n");
+
+function resetLaunch() {
+  fs.rmSync(LAUNCH_DIR, { recursive: true, force: true });
+  fs.rmSync(RUNNER_LOG, { force: true });
+  fs.mkdirSync(LAUNCH_DIR, { recursive: true });
+  process.env.ACC_ROOT = LAUNCH_DIR;
+  process.env.ACC_ROUTING_MD = ROUTING_MD;
+  process.env.ACC_LANE_DIR = path.join(LAUNCH_DIR, "lane");
+  process.env.ACC_RUNNER = FAKE_RUNNER;
+  process.env.FAKE_RUNNER_LOG = RUNNER_LOG;
+  delete process.env.ACC_DIRECTIVES_DIR;
+  fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({
+    ...POLICY_BASE,
+    profiles: { _note: "fixture", Normal: { label: "std" }, Heavy: { label: "big" } },
+    lane: { slots: 1, minGapMs: 0, retries: 1, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 10 },
+  }, null, 2));
+}
+const lpost = (route, body, headers = {}) => fetch(`${base}${route}`, {
+  method: "POST", body: JSON.stringify(body),
+  headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
+});
+const newDirective = async (over = {}) => {
+  const cwd = over.cwd !== undefined ? over.cwd : fs.mkdtempSync(path.join(LAUNCH_DIR, "work-"));
+  const r = await lpost("/api/directives", { text: over.text ?? "fix the tests", cwd, profile: over.profile ?? "" });
+  return { r, j: r.status === 200 ? await r.json() : null };
+};
+const pidFile = (id) => path.join(LAUNCH_DIR, "runner", "state", `directive-${id}.pid`);
+
+test("AC-101: POST /api/route/suggest passes the router's verdict through (whitespace collapsed for argv safety)", async () => {
+  resetLaunch();
+  const r = await lpost("/api/route/suggest", { text: "  fix\nthe   guards hook  " });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.path, ROUTE_A);
+  assert.equal(j.label, "guards");
+  const miss = await (await lpost("/api/route/suggest", { text: "zebra zebra" })).json();
+  assert.equal(miss.path, null);
+});
+
+test("AC-102: suggest refuses a missing, empty, non-string, or oversize text before any exec", async () => {
+  resetLaunch();
+  for (const body of [{}, { text: "" }, { text: "   " }, { text: 42 }, { text: "x".repeat(2001) }]) {
+    assert.equal((await lpost("/api/route/suggest", body)).status, 400, JSON.stringify(body).slice(0, 40));
+  }
+});
+
+test("AC-103: POST /api/directives creates a real store entry — multi-line text survives byte-exact (the --text-file path)", async () => {
+  resetLaunch();
+  const text = 'line one\nline "two" with quotes\n\nline four';
+  const { r, j } = await newDirective({ text });
+  assert.equal(r.status, 200);
+  assert.match(j.id, /^d-/);
+  assert.equal(j.text, text, "newlines and quotes must survive the trip into the store");
+  assert.equal(j.status, "active");
+  const list = await (await fetch(`${base}/api/directives`)).json();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, j.id);
+});
+
+test("AC-104: create refuses bad text, a relative or nonexistent cwd, and an unknown profile — store untouched", async () => {
+  resetLaunch();
+  const good = fs.mkdtempSync(path.join(LAUNCH_DIR, "work-"));
+  for (const body of [
+    { text: "", cwd: good, profile: "" },
+    { text: "x".repeat(32769), cwd: good, profile: "" },
+    { text: "ok", cwd: "relative/dir", profile: "" },
+    { text: "ok", cwd: path.join(LAUNCH_DIR, "ghost"), profile: "" },
+    { text: "ok", cwd: good, profile: "Nope" },
+    { text: "ok", cwd: good, profile: "_note" },
+  ]) {
+    assert.equal((await lpost("/api/directives", body)).status, 400, JSON.stringify(body).slice(0, 60));
+  }
+  assert.deepEqual(await (await fetch(`${base}/api/directives`)).json(), [], "no refused create may reach the store");
+});
+
+test("AC-105: a known profile is accepted and lands on the directive", async () => {
+  resetLaunch();
+  const { r, j } = await newDirective({ profile: "Heavy" });
+  assert.equal(r.status, 200);
+  assert.equal(j.profile, "Heavy");
+});
+
+test("AC-106: GET /api/directives decorates each entry with live runner state from the pid file", async () => {
+  resetLaunch();
+  const { j } = await newDirective();
+  fs.mkdirSync(path.dirname(pidFile(j.id)), { recursive: true });
+  fs.writeFileSync(pidFile(j.id), String(process.pid)); // alive by construction
+  let list = await (await fetch(`${base}/api/directives`)).json();
+  assert.equal(list[0].running, true);
+  fs.writeFileSync(pidFile(j.id), "999999999"); // no such pid
+  list = await (await fetch(`${base}/api/directives`)).json();
+  assert.equal(list[0].running, false);
+  fs.rmSync(pidFile(j.id));
+  list = await (await fetch(`${base}/api/directives`)).json();
+  assert.equal(list[0].running, false);
+});
+
+test("AC-107: POST /api/directives/status marks done (archives) and paused; refusals never touch the store", async () => {
+  resetLaunch();
+  const { j } = await newDirective();
+  for (const body of [
+    { id: j.id, status: "dead" },
+    { id: j.id, status: "active" },
+    { id: "not-an-id", status: "done" },
+    { id: "d-" + "x".repeat(39), status: "done" },
+    { id: `d-ok/../../${j.id}`, status: "done" },
+    { id: j.id, status: "done", why: "two\nlines" },
+    { id: j.id, status: "done", why: "x".repeat(501) },
+  ]) {
+    assert.equal((await lpost("/api/directives/status", body)).status, 400, JSON.stringify(body).slice(0, 60));
+  }
+  assert.equal((await (await fetch(`${base}/api/directives`)).json()).length, 1, "refusals must leave it active");
+  const r = await lpost("/api/directives/status", { id: j.id, status: "done", why: "finished from the page" });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await (await fetch(`${base}/api/directives`)).json(), [], "done must archive out of the live list");
+});
+
+test("AC-108: GET /api/directives/log serves the live log, falls back to done/, bounds the tail, and 400s a traversal-shaped id", async () => {
+  resetLaunch();
+  const { j } = await newDirective({ text: "log me" });
+  let r = await fetch(`${base}/api/directives/log?id=${j.id}`);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /log me/);
+  // oversize log: only the last 16 KiB travel
+  const live = path.join(LAUNCH_DIR, "runner", "directives", `${j.id}.log.md`);
+  fs.appendFileSync(live, "PADDING\n".repeat(4096) + "THE-TAIL-MARKER\n");
+  r = await fetch(`${base}/api/directives/log?id=${j.id}`);
+  const body = await r.text();
+  assert.ok(body.length <= 16 * 1024 + 64, `tail must be bounded, got ${body.length}`);
+  assert.match(body, /THE-TAIL-MARKER/);
+  // done fallback — the padded log was archived wholesale, so its tail (not
+  // its long-scrolled-out header) is what must still be served from done/
+  await lpost("/api/directives/status", { id: j.id, status: "done" });
+  r = await fetch(`${base}/api/directives/log?id=${j.id}`);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /THE-TAIL-MARKER/);
+  // refusals: bad shape 400 (before any path build), unknown id 404
+  assert.equal((await fetch(`${base}/api/directives/log?id=..%2F..%2Fpolicy.json`)).status, 400);
+  assert.equal((await fetch(`${base}/api/directives/log?id=d-gone-aaaa`)).status, 404);
+});
+
+test("AC-109: POST /api/launch spawns the runner with directive:<id> — and 409s while a live pid holds it", async () => {
+  resetLaunch();
+  const { j } = await newDirective();
+  const r = await lpost("/api/launch", { id: j.id });
+  assert.equal(r.status, 200);
+  const out = await r.json();
+  assert.ok(out.pid > 0, "the response must name the spawned pid");
+  // the detached fake runner records its argv; poll briefly for the write
+  for (let i = 0; i < 40 && !runnerCalls().length; i++) await new Promise((res) => setTimeout(res, 50));
+  assert.deepEqual(runnerCalls().at(-1), [`directive:${j.id}`]);
+  // a live pid file refuses a second launch
+  fs.mkdirSync(path.dirname(pidFile(j.id)), { recursive: true });
+  fs.writeFileSync(pidFile(j.id), String(process.pid));
+  assert.equal((await lpost("/api/launch", { id: j.id })).status, 409);
+  // a stale pid file does not block
+  fs.writeFileSync(pidFile(j.id), "999999999");
+  assert.equal((await lpost("/api/launch", { id: j.id })).status, 200);
+});
+
+test("AC-110: launch refuses a malformed id before any path or spawn", async () => {
+  resetLaunch();
+  for (const id of ["", "nope", "d-", "d-has spaces", "d-" + "x".repeat(39), "d-a/../b", 42, null]) {
+    assert.equal((await lpost("/api/launch", { id })).status, 400, `id ${JSON.stringify(id)} must be refused`);
+  }
+  assert.equal(runnerCalls().length, 0, "no refused launch may spawn");
+});
+
+test("AC-111: GET /api/lane/status passes the real lane's JSON through", async () => {
+  resetLaunch();
+  const r = await fetch(`${base}/api/lane/status`);
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.ok(j.automation, "automation pool must be present");
+  assert.ok(j.interactive, "interactive pool must be present");
+  assert.ok("breaker" in j, "breaker state must be present");
+});
+
+test("AC-112: /api/process/status now names the launchable profiles (private keys filtered)", async () => {
+  resetLaunch();
+  const r = await fetch(`${base}/api/process/status`);
+  assert.equal(r.status, 200);
+  assert.deepEqual((await r.json()).profiles, ["Normal", "Heavy"]);
+  resetPolicy();
+});
+
+test("AC-113: every launch mutation demands X-ACC and local Origin", async () => {
+  resetLaunch();
+  const cwd = fs.mkdtempSync(path.join(LAUNCH_DIR, "work-"));
+  assert.equal((await lpost("/api/route/suggest", { text: "guards" }, { "X-ACC": "" })).status, 403);
+  assert.equal((await lpost("/api/directives", { text: "t", cwd, profile: "" }, { "X-ACC": "" })).status, 403);
+  assert.equal((await lpost("/api/directives/status", { id: "d-x-1", status: "done" }, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await lpost("/api/launch", { id: "d-x-1" }, { "X-ACC": "" })).status, 403);
+  assert.deepEqual(await (await fetch(`${base}/api/directives`)).json(), []);
+  assert.equal(runnerCalls().length, 0);
+});

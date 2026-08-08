@@ -9,8 +9,22 @@ import path from "node:path";
 const dir = process.env.ACC_GUI_E2E_DIR || fs.mkdtempSync(path.join(os.tmpdir(), "acc-gui-e2e-"));
 process.env.ACC_GUI_E2E_DIR = dir;
 
+// start-work.spec.mjs (SPEC-0005): a routing table whose signals are known to
+// the spec, anchored in the sandbox so the real C:\code\ROUTING.md is never
+// read. The route target must EXIST (the create route stats cwd), so it lives
+// in the sandbox too.
+const routeDir = path.join(dir, "code", "guards-target");
+fs.mkdirSync(routeDir, { recursive: true });
+fs.writeFileSync(path.join(dir, "ROUTING.md"), "# routes\n```json\n" + JSON.stringify({
+  routes: [{ label: "guards", path: routeDir, signals: ["guards", "hook"] }],
+}) + "\n```\n");
+
 export default defineConfig({
   testDir: "gui/e2e",
+  // One worker: every spec file shares the single ACC_GUI_E2E_DIR sandbox
+  // (policy.json, guards-state.json, directive store), so parallel workers
+  // would clobber each other's beforeEach seeds mid-test.
+  workers: 1,
   use: {
     baseURL: "http://127.0.0.1:43117",
     // ACC_PW_CHROMIUM: absolute path to a system Chromium, for environments
@@ -32,6 +46,12 @@ export default defineConfig({
       // process controls never read real spend or type into a console.
       ACC_USAGE: path.resolve("gui/e2e/fake-usage.e2e.mjs"),
       ACC_BUDGET: path.resolve("gui/e2e/fake-budget.e2e.mjs"),
+      // start-work.spec.mjs (SPEC-0005): fake runner (records argv, spawns
+      // nothing), sandboxed routing table and launch lane. The directive
+      // store needs no fake — hooks/directive.mjs already honours ACC_ROOT.
+      ACC_RUNNER: path.resolve("gui/e2e/fake-runner.e2e.mjs"),
+      ACC_ROUTING_MD: path.join(dir, "ROUTING.md"),
+      ACC_LANE_DIR: path.join(dir, "lane"),
     },
   },
 });

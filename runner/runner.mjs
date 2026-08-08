@@ -6,6 +6,8 @@
 //   node runner.mjs <job> --install  register Task Scheduler entry (job.schedule)
 //   node runner.mjs <job> --status   show recent log lines + alerts
 // Jobs live in runner/jobs/<job>.json — schema in README.md.
+// Loop exit codes: 0 done, 2 stuck, 3 maxRuns, 4 stop file, 5 red week tier,
+// 6 another loop already runs this job (pid-file singleton, SPEC-0005).
 
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -212,7 +214,53 @@ export function liveTier(exec = execFileSync) {
   }
 }
 
+// EPERM = the pid exists but belongs to another user: alive for our purposes.
+function pidAlive(pid) {
+  const n = Number(pid || 0);
+  if (!n) return false;
+  try { process.kill(n, 0); return true; } catch (e) { return e && e.code === "EPERM"; }
+}
+
+// One loop per job, machine-wide (SPEC-0005). Two runner loops on one
+// directive was practically impossible while the only launch path was a
+// human's own console; the web Launch button makes it one accidental
+// double-click, and two loops would double-spend tokens and interleave cycle
+// appends. The runner owns this invariant — the server's 409 is UX only.
+// Exclusive-create (wx), not check-then-write: a plain existsSync probe would
+// leave a window for two simultaneous starters to both conclude "free" (the
+// TOCTOU class hooks/directive.mjs's withLock already guards against).
+function claimPidFile(file) {
+  mkdirSync(dirname(file), { recursive: true });
+  try { writeFileSync(file, String(process.pid), { flag: "wx" }); return { ok: true }; } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  }
+  let holder = "";
+  try { holder = readFileSync(file, "utf8").trim(); } catch {}
+  if (pidAlive(holder)) return { ok: false, holder };
+  // Stale (dead pid or garbage): reclaim. Losing the re-create race means a
+  // live starter claimed it in the gap — that starter wins, we refuse.
+  try { unlinkSync(file); } catch {}
+  try { writeFileSync(file, String(process.pid), { flag: "wx" }); return { ok: true, reclaimed: holder }; } catch {
+    return { ok: false, holder: "a concurrent starter" };
+  }
+}
+
 export async function runLoop(job, once, { run = runOnce, tier = liveTier } = {}) {
+  const pidFile = join(ROOT, "state", job.name + ".pid");
+  const claim = claimPidFile(pidFile);
+  if (!claim.ok) {
+    log(job, `another loop already runs this job (pid ${claim.holder}) — refusing (exit 6)`);
+    return 6;
+  }
+  if (claim.reclaimed) log(job, `reclaimed a stale pid file (pid ${claim.reclaimed} is gone)`);
+  try {
+    return await runLoopInner(job, once, { run, tier });
+  } finally {
+    try { unlinkSync(pidFile); } catch {}
+  }
+}
+
+async function runLoopInner(job, once, { run, tier }) {
   let stuck = 0;
   for (let n = 1; n <= job.maxRuns; n++) {
     const stopFile = join(ROOT, "stop", job.name + ".stop");

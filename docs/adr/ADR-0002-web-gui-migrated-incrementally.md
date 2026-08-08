@@ -15,6 +15,8 @@ superseded_by: none
 > Condensed from `docs/superpowers/specs/2026-08-03-acc-oi-closure-design.md` (deleted; full text in git history), which resolved former OI-022.
 >
 > **Update 2026-08-07:** ADR-0004 converts this ADR's "incremental, no fixed date" pace into a finish-and-delete plan. The migration is now nearly complete — every tab except "Start work" is on the web (SPEC-0002/0003/0004). The "both shells indefinitely" consequence below no longer holds: `guards-gui.ps1` is deleted once SL-011 ports the last (launch) tab.
+>
+> **Amendment 2026-08-08 (ADR-0006):** the Start-work tab is now on the web too (SPEC-0005 PR-1), completing this migration — and its in-repo-plain-HTML trajectory is superseded: the UI's future is a separate repo (`agentic-command-center-ui`) with ACC serving its built dist same-origin. The in-repo pages this ADR produced stay until that repo reaches the parity criterion recorded in ADR-0006.
 
 ## Context
 

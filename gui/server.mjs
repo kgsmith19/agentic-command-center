@@ -12,8 +12,9 @@
 // never issues), Origin/Host must be local, and no CORS header ever leaves.
 import http from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadKernelPolicy, saveKernelPolicy } from "../kernel/policy.mjs";
 
@@ -39,6 +40,45 @@ const repoRoot = () => (process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT
 const policyFile = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
 const sliceStopFile = () => path.join(repoRoot(), "runner", "stop", "slice-runner.stop");
 const clearbotStopFile = () => path.join(repoRoot(), "watcher", "clearbot.stop");
+
+// --- launch surface (SPEC-0005, FR-012): the web Start-work tab -----------
+// Same shape as every block above: the server shells the real owners
+// (route.mjs, directive.mjs, lane.mjs, runner.mjs) and adds transport only.
+// The directive store and router honour ACC_ROOT/ACC_ROUTING_MD themselves,
+// so the only fake seam a test needs is the runner (a real one spawns claude).
+const routeScript = () => path.join(HERE, "..", "hooks", "route.mjs");
+const directiveScript = () => path.join(HERE, "..", "hooks", "directive.mjs");
+const laneScript = () => path.join(HERE, "..", "hooks", "lane.mjs");
+const runnerScript = () => process.env.ACC_RUNNER || path.join(HERE, "..", "runner", "runner.mjs");
+// Mirrors hooks/directive.mjs's own resolution (ACC_DIRECTIVES_DIR, then
+// ACC_ROOT) so this server reads logs from exactly the tree the store writes.
+const directivesDir = () => process.env.ACC_DIRECTIVES_DIR || path.join(repoRoot(), "runner", "directives");
+const runnerPidFile = (id) => path.join(repoRoot(), "runner", "state", `directive-${id}.pid`);
+
+// Ids travel in bodies/queries, never in the URL path, and are validated
+// against this shape BEFORE any filesystem path is built from one — the same
+// character set hooks/directive.mjs's safeId enforces, so a passing id can
+// never contain a separator, a dot, or anything traversal-shaped.
+const DIRECTIVE_ID_RE = /^d-[A-Za-z0-9_-]{1,38}$/;
+const validDirectiveId = (id) => typeof id === "string" && DIRECTIVE_ID_RE.test(id);
+const LOG_TAIL_CAP = 16 * 1024;
+
+// EPERM = the pid exists but belongs to another user: alive for our purposes
+// (same reading as the runner's own singleton check).
+const pidAlive = (pid) => {
+  const n = Number(pid || 0);
+  if (!n) return false;
+  try { process.kill(n, 0); return true; } catch (e) { return e && e.code === "EPERM"; }
+};
+// Is a runner loop live for this directive? Reads the pid file the runner's
+// singleton owns (runner/state/directive-<id>.pid). Purely a status read here;
+// the runner itself is the authority (it refuses a duplicate with exit 6).
+const runnerLive = (id) => {
+  try { return pidAlive(fs.readFileSync(runnerPidFile(id), "utf8").trim()); } catch { return false; }
+};
+// Launchable profile names from policy.json — underscore keys (_note) are
+// documentation, not profiles.
+const profileNames = (p) => Object.keys(p.profiles || {}).filter((k) => !k.startsWith("_"));
 
 // Run a node script; `stdin`, when given, is written and closed. This is the
 // ONLY channel a secret value ever travels (SPEC-0003): never argv, so it
@@ -264,6 +304,7 @@ export function handler(req, res) {
       let tier = null;
       try { tier = JSON.parse(check.stdout.trim()); } catch {}
       let dials = null;
+      let profiles = [];
       try {
         const p = JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^﻿/, ""));
         dials = {
@@ -272,9 +313,10 @@ export function handler(req, res) {
           maxFinders: p.review?.maxFinders, allow: p.subagents?.allow ?? [],
           autoApprove: !!p.autoApprove?.enabled,
         };
+        profiles = profileNames(p);
       } catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
       send(res, 200, {
-        tier, weekText: (week.stdout + week.stderr).trim(), dials,
+        tier, weekText: (week.stdout + week.stderr).trim(), dials, profiles,
         stopped: fs.existsSync(sliceStopFile()),
         cleanupKilled: fs.existsSync(clearbotStopFile()),
       });
@@ -294,6 +336,109 @@ export function handler(req, res) {
       fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n");
       fs.renameSync(tmp, policyFile());
       send(res, 200, { ok: true });
+    });
+  }
+  if (route === "/api/route/suggest" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      // Whitespace collapses to single spaces before the length check: the
+      // text becomes one argv token, so newlines/tabs must never reach it.
+      const text = typeof b.text === "string" ? b.text.replace(/\s+/g, " ").trim() : "";
+      if (!text || text.length > 2000) return send(res, 400, { error: "text must be 1..2000 characters" });
+      const r = await nodeExec(routeScript(), ["--text", text]);
+      try { return send(res, 200, JSON.parse(r.stdout)); }
+      catch { return send(res, 500, { error: (r.stdout + r.stderr).slice(-500) || `router exited ${r.code}` }); }
+    });
+  }
+  if (route === "/api/directives" && req.method === "GET") {
+    return (async () => {
+      const r = await nodeExec(directiveScript(), ["list"]);
+      let list;
+      try { list = JSON.parse(r.stdout); } catch { return send(res, 500, { error: (r.stderr || `directive list exited ${r.code}`).slice(-500) }); }
+      send(res, 200, list.map((d) => ({ ...d, running: runnerLive(d.id) })));
+    })();
+  }
+  if (route === "/api/directives" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      const text = typeof b.text === "string" ? b.text : "";
+      if (!text.trim() || text.length > 32768) return send(res, 400, { error: "text must be 1..32768 characters" });
+      // The runner refuses a cwd-less directive at launch (loadDirectiveJob),
+      // so a create with no real folder would only ever produce a dud entry —
+      // demand it here, where the human can still fix it.
+      if (typeof b.cwd !== "string" || !path.isAbsolute(b.cwd) || !fs.existsSync(b.cwd)) {
+        return send(res, 400, { error: "cwd must be an absolute path that exists (a headless run needs one)" });
+      }
+      let profiles;
+      try { profiles = profileNames(JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^﻿/, ""))); }
+      catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
+      const profile = b.profile === undefined || b.profile === "" ? "" : b.profile;
+      if (profile !== "" && !profiles.includes(profile)) return send(res, 400, { error: `unknown profile ${JSON.stringify(b.profile)}` });
+      // The text travels via a temp file (--text-file), the same proven path
+      // the WinForms GUI used: newlines and quotes never touch argv.
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "acc-directive-"));
+      try {
+        const tmp = path.join(tmpDir, "text.md");
+        fs.writeFileSync(tmp, text);
+        const args = ["new", "--text-file", tmp, "--cwd", b.cwd];
+        if (profile) args.push("--profile", profile);
+        const r = await nodeExec(directiveScript(), args);
+        let d;
+        try { d = JSON.parse(r.stdout); } catch {}
+        if (!d || !d.id) return send(res, 500, { error: (r.stdout + r.stderr).slice(-500) || `directive new exited ${r.code}` });
+        send(res, 200, d);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  }
+  if (route === "/api/directives/status" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, async (b) => {
+      if (!validDirectiveId(b.id)) return send(res, 400, { error: "invalid directive id" });
+      // done and paused are the two human verdicts this page offers; blocked/
+      // dead belong to the model and the runner respectively.
+      if (b.status !== "done" && b.status !== "paused") return send(res, 400, { error: `status must be "done" or "paused"` });
+      const why = b.why === undefined ? "" : b.why;
+      if (typeof why !== "string" || /[\r\n]/.test(why) || why.length > 500) {
+        return send(res, 400, { error: "why must be a single line of at most 500 characters" });
+      }
+      const args = [b.status, b.id];
+      if (why) args.push("--why", why);
+      const r = await nodeExec(directiveScript(), args);
+      send(res, 200, { code: r.code, out: (r.stdout + r.stderr).slice(-2000) });
+    });
+  }
+  if (route === "/api/directives/log" && req.method === "GET") {
+    const id = new URL(req.url, "http://localhost").searchParams.get("id") || "";
+    if (!validDirectiveId(id)) return send(res, 400, { error: "invalid directive id" });
+    // Live log first, then the archive setStatus moved it to.
+    for (const f of [path.join(directivesDir(), `${id}.log.md`), path.join(directivesDir(), "done", `${id}.log.md`)]) {
+      try {
+        return send(res, 200, fs.readFileSync(f, "utf8").slice(-LOG_TAIL_CAP), "text/plain; charset=utf-8");
+      } catch {}
+    }
+    return send(res, 404, { error: "no log for that directive" });
+  }
+  if (route === "/api/lane/status" && req.method === "GET") {
+    return (async () => {
+      const r = await nodeExec(laneScript(), ["status"]);
+      try { return send(res, 200, JSON.parse(r.stdout)); }
+      catch { return send(res, 500, { error: (r.stderr || `lane status exited ${r.code}`).slice(-500) }); }
+    })();
+  }
+  if (route === "/api/launch" && req.method === "POST") {
+    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
+    return readBody(req, res, (b) => {
+      if (!validDirectiveId(b.id)) return send(res, 400, { error: "invalid directive id" });
+      // UX pre-check only — the runner's own pid-file singleton (exit 6) owns
+      // the no-two-loops invariant; this 409 just tells the page why.
+      if (runnerLive(b.id)) return send(res, 409, { error: "a runner loop already holds this directive" });
+      const child = spawn(process.execPath, [runnerScript(), `directive:${b.id}`], {
+        detached: true, stdio: "ignore", cwd: repoRoot(),
+      });
+      child.unref();
+      send(res, 200, { ok: true, pid: child.pid });
     });
   }
   if (route === "/api/process/control" && req.method === "POST") {
