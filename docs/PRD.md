@@ -88,7 +88,7 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | Trigger | A run ends (over budget, or simply finished its turn) with the directive still active |
 | Main path | 1. The Stop hook captures the closing summary as the next cycle's handoff. 2. The runner relaunches `claude -p` with `ACC_DIRECTIVE=<id>` — the relaunch IS the context reset. 3. The new session's SessionStart hook injects the directive text, log tail, and done/blocked protocol. |
 | Success outcome | The fresh session continues the same directive with no human retyping context |
-| Failure paths | Identical consecutive summaries -> stuck brake (alert, exit 2); week token tier red -> runs held (exit 5); maxRuns/timeout ceilings |
+| Failure paths | Identical consecutive summaries -> stuck brake (alert, exit 2); week token tier red -> runs held (exit 5); per-directive hard ceiling hit -> loop halts with an alert/log entry (exit 7); maxRuns/timeout ceilings |
 | Frequency | Whenever a long task outruns one context window |
 | Traces to | FR-004, FR-005 |
 

@@ -27,6 +27,13 @@
   <label>Folder <input type="text" id="dirCwd" style="width:340px"></label>
   <span id="dirSuggest" class="muted"></span><br>
   <span id="profiles"></span>
+  <div style="margin:6px 0">
+    <label>Wall min <input type="number" min="0" step="any" id="dirWallClockMin" style="width:70px" placeholder="0"></label>
+    <label>Turns <input type="number" min="0" step="1" id="dirTurns" style="width:70px" placeholder="0"></label>
+    <label>Tokens <input type="number" min="0" step="1" id="dirTokens" style="width:90px" placeholder="0"></label>
+    <label>$ est <input type="number" min="0" step="any" id="dirDollars" style="width:70px" placeholder="0"></label>
+    <span class="muted">0 = unlimited</span>
+  </div>
   <button id="dirGo" style="font-weight:700">GO</button>
   <span id="dirMsg" class="muted"></span>
   <div id="laneLine" class="muted"></div>
@@ -110,6 +117,10 @@ function fill(sel, items, label) {
     o.textContent = o.value + (it.summary ? "  — " + it.summary : "");
     sel.appendChild(o);
   }
+  function setIfBlank(id, value) {
+    if ($(id).value) return;
+    $(id).value = value ?? "";
+  }
 }
 
 async function refresh() {
@@ -192,6 +203,11 @@ async function refreshProcess() {
   $("allow").value = (d.allow || []).join(", ");
   $("stopState").textContent = s.stopped ? "STOPPED — no new automated work will start." : "Running normally.";
   fillProfiles(s.profiles);
+  const db = s.directiveBudget || {};
+  setIfBlank("dirWallClockMin", db.wallClockMin || "");
+  setIfBlank("dirTurns", db.turns || "");
+  setIfBlank("dirTokens", db.tokens || "");
+  setIfBlank("dirDollars", db.dollars || "");
 }
 $("dialsSave").onclick = async () => {
   const dials = {
@@ -308,7 +324,13 @@ $("dirGo").onclick = async () => {
   if (!text) { $("dirMsg").textContent = "describe the task first"; $("dirMsg").className = "err"; return; }
   if (!cwd) { $("dirMsg").textContent = "set the folder first"; $("dirMsg").className = "err"; return; }
   const profile = document.querySelector("input[name=profile]:checked")?.value || "";
-  const d = await api("/api/directives", { text, cwd, profile });
+  const body = { text, cwd, profile };
+  for (const [key, id] of [["wallClockMin", "dirWallClockMin"], ["turns", "dirTurns"], ["tokens", "dirTokens"], ["dollars", "dirDollars"]]) {
+    const raw = $(id).value.trim();
+    if (!raw) continue;
+    body[key] = Number(raw);
+  }
+  const d = await api("/api/directives", body);
   if (d.error) { $("dirMsg").textContent = d.error; $("dirMsg").className = "err"; return; }
   const l = await api("/api/launch", { id: d.id });
   $("dirMsg").textContent = l.error ? `created ${d.id} but not launched: ${l.error}` : `launched ${d.id}`;

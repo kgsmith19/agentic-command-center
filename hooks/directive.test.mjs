@@ -44,6 +44,24 @@ test("a directive survives as a file and starts unbound", async () => {
   assert.equal(m.readDirective(g.id).text, "ship the thing");
 });
 
+test("a bad policy file falls back to no directive defaults", () => {
+  const policy = path.join(DIRECTIVES_DIR, "policy.json");
+  process.env.ACC_POLICY = policy;
+  fs.writeFileSync(policy, "{bad json");
+  const g = m.createDirective({ text: "ship the thing" });
+  assert.deepEqual(g.budget, { wallClockMin: 0, turns: 0, tokens: 0, dollars: 0 });
+});
+
+test("a directive stores its hard ceiling and starts with no session history", () => {
+  const g = m.createDirective({
+    text: "ship the thing",
+    budget: { wallClockMin: 30, turns: 12, tokens: 3456, dollars: 7.5 },
+  });
+  assert.deepEqual(g.budget, { wallClockMin: 30, turns: 12, tokens: 3456, dollars: 7.5 });
+  assert.deepEqual(g.sessionIds, []);
+  assert.match(fs.readFileSync(m.logPath(g.id), "utf8"), /hard ceiling: wall 30 min, turns 12, tokens 3456, \$7.5 est/);
+});
+
 test("multi-line directive text round-trips intact (OI-004: text never becomes keystrokes)", async () => {
   const text = "line one\nline two\n\n- a bullet\n- another";
   const g = m.createDirective({ text });
@@ -64,6 +82,7 @@ test("binding by ACC_DIRECTIVE records the session; re-binding the same session 
   assert.equal(b1.sessionId, SID(1));
   const b2 = m.bindSession({ sessionId: SID(1), directiveId: g.id });
   assert.equal(b2.sessionId, SID(1), "same session re-firing SessionStart changes nothing");
+  assert.deepEqual(b2.sessionIds, [SID(1)]);
 });
 
 test("a finished directive is never adopted", async () => {
@@ -203,6 +222,7 @@ test("OI-006: a real UUID sessionId still rebinds normally (the headless-resume 
   const adopted = m.bindSession({ sessionId: SID(32), directiveId: g.id });
   assert.equal(adopted.id, g.id);
   assert.equal(adopted.sessionId, SID(32), "each fresh runner session rebinds by ACC_DIRECTIVE");
+  assert.deepEqual(adopted.sessionIds, [SID(31), SID(32)]);
 });
 
 // --- direct unit coverage for the remaining exported helpers ---------------
@@ -250,6 +270,14 @@ test("CLI: main() 'new' creates a directive via --text and prints it", () => {
   const printed = JSON.parse(runMain(["new", "--text", "cli directive"]));
   assert.equal(printed.text, "cli directive");
   assert.ok(m.readDirective(printed.id));
+});
+
+test("CLI: main() 'new' accepts hard-ceiling flags", () => {
+  const printed = JSON.parse(runMain([
+    "new", "--text", "cli directive",
+    "--wall-clock-min", "45", "--turns", "20", "--tokens", "5000", "--dollars", "6.25",
+  ]));
+  assert.deepEqual(printed.budget, { wallClockMin: 45, turns: 20, tokens: 5000, dollars: 6.25 });
 });
 
 test("CLI: main() with no subcommand defaults to 'list', printing active directives as JSON", () => {
