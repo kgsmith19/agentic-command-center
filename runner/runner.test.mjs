@@ -29,6 +29,8 @@ const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-runner-test-"));
 process.env.ACC_RUNNER_ROOT = path.join(BASE, "runnerroot");
 process.env.ACC_LANE_DIR = path.join(BASE, "lane");
 process.env.ACC_POLICY = path.join(BASE, "policy.json");
+process.env.CLAUDE_CONFIG_DIR = path.join(BASE, "claude");
+process.env.ACC_SCAN_CACHE = path.join(BASE, "scan-cache.json");
 fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ lane: { slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 5, backoffCapMs: 20, pollMs: 20 } }));
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -54,6 +56,34 @@ function job(overrides = {}) {
     bootstrap: "do the thing", maxStuck: 3, maxRuns: 5, runTimeoutMin: 180,
     ...overrides,
   };
+}
+
+function usageTurn(ts, { input = 0, out = 0 } = {}) {
+  return JSON.stringify({
+    type: "assistant",
+    timestamp: ts,
+    message: {
+      model: "claude-opus-5",
+      usage: {
+        input_tokens: input,
+        output_tokens: out,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      content: [{ type: "text", text: "ok" }],
+    },
+  });
+}
+
+function writeSessionTranscript(sid, lines, subLines = []) {
+  const proj = path.join(process.env.CLAUDE_CONFIG_DIR, "projects", "proj");
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, `${sid}.jsonl`), lines.join("\n") + "\n");
+  if (subLines.length) {
+    const sub = path.join(proj, sid, "subagents");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "agent-1.jsonl"), subLines.join("\n") + "\n");
+  }
 }
 
 // ------------------------------------------------------------- loadJob
@@ -554,7 +584,7 @@ const { loadDirectiveJob, directiveState } = runnerNs;
 
 function directive(over = {}) {
   const cwd = over.cwd !== undefined ? over.cwd : fs.mkdtempSync(path.join(BASE, "dwork-"));
-  return D.createDirective({ text: over.text ?? "fix the tests", cwd });
+  return D.createDirective({ text: over.text ?? "fix the tests", cwd, profile: over.profile, budget: over.budget });
 }
 
 test("AC-001: loadJob('directive:<id>') synthesizes a job from the store with file-job defaults", () => {
@@ -618,6 +648,18 @@ test("AC-005: the loop ends 0 when the directive itself reports done", async () 
   assert.equal(calls, 1);
 });
 
+test("AC-005: if the directive leaves active status between preflight checks, the loop returns 0 without spawning", async () => {
+  const d = directive();
+  const j = loadJob(`directive:${d.id}`);
+  let calls = 0;
+  const code = await runLoop(j, false, {
+    run: async () => { calls++; return { code: 0, result: "", err: "" }; },
+    tier: () => { D.setStatus(d.id, "done", "finished just before launch"); return "green"; },
+  });
+  assert.equal(code, 0);
+  assert.equal(calls, 0);
+});
+
 test("AC-006: identical consecutive summaries trip the stuck brake (alert + exit 2)", async () => {
   const d = directive();
   const j = { ...loadJob(`directive:${d.id}`), maxStuck: 2, maxRuns: 10 };
@@ -658,6 +700,67 @@ test("AC-008: a red week tier holds the loop — no run, alert, exit 5", async (
   });
   assert.equal(code, 5);
   assert.equal(calls, 0, "a red tier must stop the run before any spawn");
+});
+
+test("AC-009: a directive wall-clock ceiling shrinks the next run timeout to the remaining budget", async () => {
+  const d = directive({ budget: { wallClockMin: 1 } });
+  const file = path.join(process.env.ACC_ROOT, "runner", "directives", `${d.id}.json`);
+  const onDisk = JSON.parse(fs.readFileSync(file, "utf8"));
+  onDisk.createdAt = new Date(Date.now() - 30_000).toISOString();
+  fs.writeFileSync(file, JSON.stringify(onDisk, null, 2) + "\n");
+  const j = loadJob(`directive:${d.id}`);
+  let seenTimeout = 0;
+  const code = await runLoop(j, true, {
+    run: async (runJob) => {
+      seenTimeout = runJob.runTimeoutMin;
+      D.setStatus(d.id, "done", "finished");
+      return { code: 0, result: "done", err: "" };
+    },
+  });
+  assert.equal(code, 0);
+  assert.ok(seenTimeout < 1 && seenTimeout > 0.4, `expected ~0.5 min remaining, got ${seenTimeout}`);
+});
+
+test("AC-009: a directive turn ceiling clamps the next run's --max-turns to the remaining budget", async () => {
+  const d = directive({ budget: { turns: 3 } });
+  const sid = "00000000-0000-4000-8000-000000000111";
+  D.bindSession({ sessionId: sid, directiveId: d.id });
+  writeSessionTranscript(sid, [
+    usageTurn("2026-08-01T00:00:00.000Z", { input: 10, out: 1 }),
+    usageTurn("2026-08-01T00:01:00.000Z", { input: 20, out: 2 }),
+  ]);
+  const j = loadJob(`directive:${d.id}`);
+  let seenTurns = 0;
+  const code = await runLoop(j, true, {
+    run: async (runJob) => {
+      seenTurns = runJob.maxTurns;
+      D.setStatus(d.id, "done", "finished");
+      return { code: 0, result: "done", err: "" };
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(seenTurns, 1);
+});
+
+test("AC-009: token/dollar directive ceilings halt the loop before another run starts (alert + exit 7)", async () => {
+  const d = directive({ budget: { tokens: 100, dollars: 0.001 } });
+  const sid = "00000000-0000-4000-8000-000000000222";
+  D.bindSession({ sessionId: sid, directiveId: d.id });
+  writeSessionTranscript(sid, [
+    usageTurn("2026-08-01T00:00:00.000Z", { input: 90, out: 20 }),
+  ]);
+  const j = loadJob(`directive:${d.id}`);
+  let called = false;
+  const code = await runLoop(j, false, {
+    run: async () => { called = true; return { code: 0, result: "", err: "" }; },
+  });
+  assert.equal(code, 7);
+  assert.equal(called, false, "a spent-out directive must halt before the next launch");
+  const alerts = fs.readdirSync(path.join(process.env.ACC_RUNNER_ROOT, "alerts"))
+    .filter((f) => f.startsWith(j.name + "-"));
+  assert.ok(alerts.length >= 1);
+  assert.match(D.logTail(d.id, 5000), /HALTED/);
+  assert.match(D.logTail(d.id, 5000), /token ceiling reached/);
 });
 
 test("AC-010: --install on a directive job is refused", () => {

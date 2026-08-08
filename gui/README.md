@@ -54,7 +54,7 @@ non-zero engine exit is a result, not a transport error.
 ### Spending / process (SPEC-0004)
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/process/status` | — | `{tier, weekText, dials{softK,hardK,amberTokens,redTokens,maxFinders,allow[]}, profiles[], stopped}` |
+| GET | `/api/process/status` | — | `{tier, weekText, dials{softK,hardK,amberTokens,redTokens,maxFinders,allow[]}, profiles[], directiveBudget{wallClockMin,turns,tokens,dollars}, stopped}` |
 | POST | `/api/process/dials` | all dials, validated | `{ok}`; bad dial → 400, policy.json byte-untouched; unowned policy blocks always preserved |
 | POST | `/api/process/control` | `{action}` ∈ stop/resume/fanout | `{ok...}` or `{code, out}` |
 
@@ -63,7 +63,7 @@ non-zero engine exit is a result, not a transport error.
 |---|---|---|---|
 | POST | `/api/route/suggest` | `{text}` 1..2000 chars after whitespace-collapse | router verdict `{path, label, score, reason, parent}` or `{path: null, ...}` |
 | GET | `/api/directives` | — | active directives, each decorated with `running` (live runner pid-file check) |
-| POST | `/api/directives` | `{text 1..32768, cwd absolute+existing, profile ∈ policy profiles or ""}` | the created directive JSON; text travels via a temp file so newlines survive byte-exact |
+| POST | `/api/directives` | `{text 1..32768, cwd absolute+existing, profile ∈ policy profiles or "", wallClockMin?, turns?, tokens?, dollars?}` — numeric ceiling fields are non-negative, `0`/omitted = unlimited | the created directive JSON; text travels via a temp file so newlines survive byte-exact |
 | POST | `/api/directives/status` | `{id, status ∈ done\|paused, why? single-line ≤500}` | `{code, out}`; `done` archives the directive |
 | POST | `/api/directives/note` | `{id, text 1..4000}` | `{code, out}`; appends to the log (never touches status) so the next SessionStart's tail carries it — steer a running directive without restarting it |
 | GET | `/api/directives/log?id=` | — | `text/plain` tail (last 16 KiB), falling back to the `done/` archive; bad id shape → 400, unknown id → 404 |

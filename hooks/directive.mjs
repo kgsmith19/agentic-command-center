@@ -46,6 +46,41 @@ function doneDir() {
 
 const nowIso = () => new Date().toISOString();
 
+function normalizeBudgetValue(value, { name, integer = false } = {}) {
+  if (value === undefined || value === null || value === "") return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a non-negative number`);
+  if (integer && !Number.isInteger(n)) throw new Error(`${name} must be a whole number`);
+  return n;
+}
+
+function defaultBudget() {
+  try {
+    const raw = fs.readFileSync(process.env.ACC_POLICY || path.join(HERE, "..", "policy.json"), "utf8").replace(/^\uFEFF/, "");
+    return JSON.parse(raw).directives?.budget || {};
+  } catch {
+    return {};
+  }
+}
+
+export function normalizeDirectiveBudget(budget = {}, defaults = defaultBudget()) {
+  return {
+    wallClockMin: normalizeBudgetValue(budget.wallClockMin ?? defaults.wallClockMin, { name: "wallClockMin" }),
+    turns: normalizeBudgetValue(budget.turns ?? defaults.turns, { name: "turns", integer: true }),
+    tokens: normalizeBudgetValue(budget.tokens ?? defaults.tokens, { name: "tokens", integer: true }),
+    dollars: normalizeBudgetValue(budget.dollars ?? defaults.dollars, { name: "dollars" }),
+  };
+}
+
+export function budgetSummary(budget = {}) {
+  const parts = [];
+  if (budget.wallClockMin > 0) parts.push(`wall ${budget.wallClockMin} min`);
+  if (budget.turns > 0) parts.push(`turns ${budget.turns}`);
+  if (budget.tokens > 0) parts.push(`tokens ${budget.tokens}`);
+  if (budget.dollars > 0) parts.push(`$${budget.dollars} est`);
+  return parts.join(", ");
+}
+
 function ensureDirs() {
   fs.mkdirSync(directivesDir(), { recursive: true });
   fs.mkdirSync(doneDir(), { recursive: true });
@@ -148,10 +183,11 @@ export function directiveForSession(sessionId) {
   return activeDirectives().find((g) => g.sessionId === sessionId) || null;
 }
 
-export function createDirective({ text, cwd, profile }) {
+export function createDirective({ text, cwd, profile, budget }) {
   ensureDirs();
   const t = String(text || "").trim();
   if (!t) throw new Error("a directive needs text");
+  const normalizedBudget = normalizeDirectiveBudget(budget);
   const iso = new Date().toISOString(); // 2026-07-31T04:10:27.123Z
   const id =
     "d-" +
@@ -167,14 +203,18 @@ export function createDirective({ text, cwd, profile }) {
     profile: profile || "",
     status: "active",
     sessionId: "",
+    sessionIds: [],
     cycles: 0,
+    budget: normalizedBudget,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
   write(directive);
   fs.writeFileSync(
     logPath(id),
-    `# Directive ${id}\n\n${t}\n\n- folder: ${directive.cwd || "(not set)"}\n- profile: ${directive.profile || "(default)"}\n- opened: ${directive.createdAt}\n\n## Progress\n\n`
+    `# Directive ${id}\n\n${t}\n\n- folder: ${directive.cwd || "(not set)"}\n- profile: ${directive.profile || "(default)"}\n- opened: ${directive.createdAt}\n` +
+      (budgetSummary(normalizedBudget) ? `- hard ceiling: ${budgetSummary(normalizedBudget)}\n` : "") +
+      "\n## Progress\n\n"
   );
   return directive;
 }
@@ -203,7 +243,11 @@ export function bindSession({ sessionId, cwd, directiveId }) {
     // A non-UUID id (garbage, or simply absent) never touches sessionId (OI-006)
     // -- it is inert, not "no-op with side effects".
     const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
-    if (validId !== null) directive.sessionId = validId;
+    if (validId !== null) {
+      directive.sessionId = validId;
+      directive.sessionIds = Array.isArray(directive.sessionIds) ? directive.sessionIds : [];
+      if (!directive.sessionIds.includes(validId)) directive.sessionIds.push(validId);
+    }
     if (!directive.cwd && cwd) directive.cwd = cwd;
   });
 }
@@ -289,6 +333,15 @@ export function textFromArgs(argv) {
   return arg(argv, "--text");
 }
 
+function budgetFromArgs(argv) {
+  return {
+    wallClockMin: arg(argv, "--wall-clock-min"),
+    turns: arg(argv, "--turns"),
+    tokens: arg(argv, "--tokens"),
+    dollars: arg(argv, "--dollars"),
+  };
+}
+
 // Positional id, falling back to the single active directive. Every command a MODEL
 // is told to run takes an explicit id (SessionStart injects it), so this fallback
 // only serves a human at a prompt.
@@ -308,6 +361,7 @@ export function main() {
       text: textFromArgs(argv),
       cwd: arg(argv, "--cwd"),
       profile: arg(argv, "--profile"),
+      budget: budgetFromArgs(argv),
     });
     console.log(JSON.stringify(g));
     return;
@@ -344,7 +398,7 @@ export function main() {
     return;
   }
   console.log(
-    "usage: directive.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id]"
+    "usage: directive.mjs new (--text T | --text-file F) [--cwd D] [--profile P] [--wall-clock-min N] [--turns N] [--tokens N] [--dollars N] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id]"
   );
 }
 

@@ -13,7 +13,8 @@ import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { withLaunchSlot, retryTransport } from "../hooks/lane.mjs";
 import { spawnSpec } from "../hooks/cmdline.mjs";
-import { readDirective, appendCycle, lastCycleBody, KICK_TEXT } from "../hooks/directive.mjs";
+import { readDirective, appendCycle, lastCycleBody, KICK_TEXT, logPath } from "../hooks/directive.mjs";
+import { directiveSpend } from "../hooks/directive-spend.mjs";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync,
   renameSync, statSync, unlinkSync, writeFileSync,
@@ -28,6 +29,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // live runner/logs a real board depends on.
 const ROOT = process.env.ACC_RUNNER_ROOT ? resolve(process.env.ACC_RUNNER_ROOT) : HERE;
 const LOG_CAP = 1024 * 1024;
+const CLAUDE_MAX_TURNS = 200;
 
 // A directive-backed job (SPEC-0001, FR-011): the directive store supplies
 // workdir and identity; the bootstrap is only the kick constant because
@@ -41,7 +43,7 @@ export function loadDirectiveJob(id) {
   if (!d.cwd) throw new Error(`directive "${id}" has no working folder (cwd) — a headless run needs one`);
   return {
     name: `directive-${id}`, workdir: d.cwd, bootstrap: KICK_TEXT, directiveId: id,
-    profile: d.profile || "", maxStuck: 3, maxRuns: 100, runTimeoutMin: 180,
+    profile: d.profile || "", maxStuck: 3, maxRuns: 100, runTimeoutMin: 180, maxTurns: CLAUDE_MAX_TURNS,
   };
 }
 
@@ -134,7 +136,7 @@ export function runClaudeOnce(job) {
       "-p",
       "--permission-mode", "bypassPermissions",
       "--output-format", "json",
-      "--max-turns", "200",
+      "--max-turns", String(job.maxTurns || CLAUDE_MAX_TURNS),
     ];
     const sp = spawnSpec("claude", args);
     const opts = {
@@ -262,6 +264,58 @@ export async function runLoop(job, once, { run = runOnce, tier = liveTier } = {}
   }
 }
 
+function fmtSpend(n) {
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+function directiveBudgetState(job) {
+  if (!job.directiveId) return null;
+  const directive = readDirective(job.directiveId);
+  if (!directive || directive.status !== "active") return { done: true };
+  const budget = directive.budget || {};
+  const spend = directiveSpend(directive.sessionIds || []);
+  const breaches = [];
+  let runTimeoutMin = job.runTimeoutMin;
+  let maxTurns = job.maxTurns || CLAUDE_MAX_TURNS;
+
+  if (budget.wallClockMin > 0) {
+    const remainingMs = budget.wallClockMin * 60 * 1000 - (Date.now() - Date.parse(directive.createdAt || 0));
+    if (remainingMs <= 0) breaches.push(`wall-clock ceiling reached (${budget.wallClockMin} min)`);
+    else runTimeoutMin = Math.min(runTimeoutMin, remainingMs / 60000);
+  }
+  if (budget.turns > 0) {
+    const remainingTurns = budget.turns - spend.turns;
+    if (remainingTurns <= 0) breaches.push(`turn ceiling reached (${spend.turns}/${budget.turns})`);
+    else maxTurns = Math.min(maxTurns, remainingTurns);
+  }
+  if (budget.tokens > 0 && spend.tokens >= budget.tokens) {
+    breaches.push(`token ceiling reached (${spend.tokens}/${budget.tokens})`);
+  }
+  if (budget.dollars > 0 && spend.dollars >= budget.dollars) {
+    breaches.push(`dollar ceiling reached ($${fmtSpend(spend.dollars)}/$${fmtSpend(budget.dollars)} est)`);
+  }
+
+  return {
+    directive,
+    budget,
+    spend,
+    breach: breaches.join("; "),
+    runTimeoutMin,
+    maxTurns: Math.max(1, Math.floor(maxTurns)),
+  };
+}
+
+function haltDirective(job, reason) {
+  alert(job, `${reason} — halting directive loop (exit 7)`);
+  try {
+    appendFileSync(
+      logPath(job.directiveId),
+      `\n### HALTED - ${new Date().toISOString()}\n${reason}\n`
+    );
+  } catch {}
+  return 7;
+}
+
 async function runLoopInner(job, once, { run, tier }) {
   let stuck = 0;
   for (let n = 1; n <= job.maxRuns; n++) {
@@ -283,14 +337,24 @@ async function runLoopInner(job, once, { run, tier }) {
       alert(job, "week token tier is RED — holding headless directive runs (exit 5)");
       return 5;
     }
-    log(job, `run ${n}/${job.maxRuns} starting (stuck ${stuck}/${job.maxStuck})`);
+    let runJob = job;
+    if (job.directiveId) {
+      const ceiling = directiveBudgetState(job);
+      if (ceiling?.done) {
+        log(job, "directive left active status — complete");
+        return 0;
+      }
+      if (ceiling?.breach) return haltDirective(job, ceiling.breach);
+      runJob = { ...job, runTimeoutMin: ceiling.runTimeoutMin, maxTurns: ceiling.maxTurns };
+    }
+    log(runJob, `run ${n}/${job.maxRuns} starting (stuck ${stuck}/${job.maxStuck})`);
     // Every run goes through the machine-wide launch lane (hooks/lane.mjs):
     // one automated session at a time across runner + e2e, paced starts, and
     // transport-only retries — the econnreset class dies here, and a session
     // that fails for a REAL reason still fails exactly as before.
-    const { code, result, err } = await run(job);
-    log(job, `run ${n} exited ${code}; tail: ${result.slice(-400).replaceAll("\n", " | ")}`);
-    if (err) log(job, `stderr tail: ${err.replaceAll("\n", " | ")}`);
+    const { code, result, err } = await run(runJob);
+    log(runJob, `run ${n} exited ${code}; tail: ${result.slice(-400).replaceAll("\n", " | ")}`);
+    if (err) log(runJob, `stderr tail: ${err.replaceAll("\n", " | ")}`);
     // The run's closing summary becomes the next fresh context's continuity
     // (budget.mjs injects it as the log tail) AND the stuck signal
     // (directiveState hashes it). Archived-mid-run is fine: appendCycle
@@ -300,6 +364,10 @@ async function runLoopInner(job, once, { run, tier }) {
     if (after.done) {
       log(job, "queue complete");
       return 0;
+    }
+    if (job.directiveId) {
+      const ceiling = directiveBudgetState(job);
+      if (ceiling?.breach) return haltDirective(job, ceiling.breach);
     }
     stuck = after.hash === before.hash ? stuck + 1 : 0;
     if (stuck >= job.maxStuck) {

@@ -114,6 +114,23 @@ const runnerLive = (id) => {
 // Launchable profile names from policy.json — underscore keys (_note) are
 // documentation, not profiles.
 const profileNames = (p) => Object.keys(p.profiles || {}).filter((k) => !k.startsWith("_"));
+function readDirectiveBudget(body) {
+  const raw = {
+    wallClockMin: body.wallClockMin,
+    turns: body.turns,
+    tokens: body.tokens,
+    dollars: body.dollars,
+  };
+  const out = {};
+  for (const [key, integer] of [["wallClockMin", false], ["turns", true], ["tokens", true], ["dollars", false]]) {
+    if (raw[key] === undefined || raw[key] === null || raw[key] === "") continue;
+    if (typeof raw[key] !== "number" || !Number.isFinite(raw[key]) || raw[key] < 0 || (integer && !Number.isInteger(raw[key]))) {
+      throw new Error(`${key} must be a non-negative${integer ? " whole" : ""} number`);
+    }
+    out[key] = raw[key];
+  }
+  return out;
+}
 
 // Run a node script; `stdin`, when given, is written and closed. This is the
 // ONLY channel a secret value ever travels (SPEC-0003): never argv, so it
@@ -349,7 +366,7 @@ export function handler(req, res) {
       };
       const profiles = profileNames(p);
       send(res, 200, {
-        tier, weekText: (week.stdout + week.stderr).trim(), dials, profiles,
+        tier, weekText: (week.stdout + week.stderr).trim(), dials, profiles, directiveBudget: p.directives?.budget || {},
         stopped: fs.existsSync(sliceStopFile()),
       });
     })();
@@ -402,6 +419,8 @@ export function handler(req, res) {
       const profiles = profileNames(policy);
       const profile = b.profile === undefined || b.profile === "" ? "" : b.profile;
       if (profile !== "" && !profiles.includes(profile)) return send(res, 400, { error: `unknown profile ${JSON.stringify(b.profile)}` });
+      let budget;
+      try { budget = readDirectiveBudget(b); } catch (e) { return send(res, 400, { error: e.message }); }
       // The text travels via a temp file (--text-file), the same proven path
       // the WinForms GUI used: newlines and quotes never touch argv.
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "acc-directive-"));
@@ -410,6 +429,9 @@ export function handler(req, res) {
         fs.writeFileSync(tmp, text);
         const args = ["new", "--text-file", tmp, "--cwd", b.cwd];
         if (profile) args.push("--profile", profile);
+        for (const [flag, value] of [["--wall-clock-min", budget.wallClockMin], ["--turns", budget.turns], ["--tokens", budget.tokens], ["--dollars", budget.dollars]]) {
+          if (value !== undefined) args.push(flag, String(value));
+        }
         const r = await nodeExec(directiveScript(), args);
         let d;
         try { d = JSON.parse(r.stdout); } catch {}
