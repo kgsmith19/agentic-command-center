@@ -21,6 +21,30 @@ stdin framing can't be forged. The web spending dials do a read-merge-write of
 allowlisted action map (no browser string becomes argv). The `/approve` skill
 (`~/.claude/skills/approve/`) is the user's in-chat Run button.
 
+## Shared engineering standard
+
+This repo is migrated against `kgsmith19/agent-engineering-standard`, pinned
+at the sha in `.agent/standard.lock` — bump that file explicitly to upgrade,
+never track the standard's moving branch. Machine-readable facts (verified
+commands, CI jobs, risk defaults, protected paths) live in
+`.agent/project.yaml`. The standard's docs stay in its own repo, not copied
+here; this section only maps its vocabulary onto what this repo already has,
+since most of it predates the standard and already satisfies its intent:
+
+| Standard concept | This repo's equivalent |
+|---|---|
+| Product Truth (PRD) | `docs/PRD.md` (rule 1 of `rules/00-CORE.md`'s source-of-truth order) |
+| SPEC | `specs/active/*.md` / `specs/done/*.md` (`rules/05-SPECS.md`) |
+| ADR | `docs/adr/ADR-NNNN-*.md` |
+| Durable work item | a GitHub Issue — already the practice here, not new |
+| Evidence / RED → GREEN | "Testing doctrine" below + `rules/06-TESTS.md` + `specs/TEST-LEDGER.md` |
+| Risk levels (R0–R4) | not yet labeled on Issues (see `.agent/project.yaml`); `rules/00-CORE.md`'s halt conditions (H1–H10) cover the same ground today — an unset variable, a missing test, a new dependency, a destructive action, all halt and ask rather than proceed |
+| Protect the control plane | this file, `rules/`, the guard/vault/kernel evaluators — an implementing agent does not weaken or bypass them mid-slice; see "What the guard enforces" below |
+| Least privilege / autonomy | this repo's own halt conditions + the guard's protected-path list (`config.json`) + the runbox handoff for anything touching guard machinery or `~/.claude/settings.json` |
+
+Do not create a second work-tracking system, a second PRD, or a second rules
+file to satisfy the standard — extend what is here.
+
 ## What the guard enforces (in order)
 
 1. **Secrets** — files whose basename matches a `secrets` glob in `config.json`
