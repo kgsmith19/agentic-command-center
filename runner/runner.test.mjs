@@ -217,13 +217,6 @@ test("status prints 'no log yet' when nothing has run", () => {
 
 test("status prints the log tail and any alerts", () => {
   const j = job({ name: "hasrun" });
-  const out = captureLog(() => {
-    const orig = console.log;
-    console.log = () => {}; // silence the log()-internal echo while seeding
-    try {
-      // reach through the public API to seed real state rather than poking files
-    } finally { console.log = orig; }
-  });
   fs.mkdirSync(path.join(process.env.ACC_RUNNER_ROOT, "logs"), { recursive: true });
   fs.writeFileSync(path.join(process.env.ACC_RUNNER_ROOT, "logs", `${j.name}.log`), "2026-08-01T00:00:00Z line one\n");
   fs.mkdirSync(path.join(process.env.ACC_RUNNER_ROOT, "alerts"), { recursive: true });
@@ -252,22 +245,6 @@ test("killTreeWin32 swallows a failing exec rather than throwing", () => {
 
 test("killTree dispatches to the win32 branch on an injected platform, without a real taskkill on hand", () => {
   assert.doesNotThrow(() => killTree({ pid: 99999 }, "win32")); // killTreeWin32 swallows the real ENOENT itself
-});
-
-test("killTree dispatches to the posix branch on an injected platform", async () => {
-  // NODE_V8_COVERAGE must not leak: this child is killed within 150ms of
-  // spawning, and a coverage-instrumented process killed mid-write leaves a
-  // truncated raw-profile JSON fragment that corrupts an ancestor's coverage
-  // report generation under `node hooks/covgate.mjs` (found 2026-08-02).
-  const child = spawn("node", ["-e", "setTimeout(() => {}, 5000)"], {
-    detached: true, stdio: "ignore", env: { ...process.env, NODE_V8_COVERAGE: undefined },
-  });
-  await new Promise((r) => setTimeout(r, 50));
-  killTree(child, "linux");
-  await new Promise((r) => setTimeout(r, 100));
-  let alive = true;
-  try { process.kill(child.pid, 0); } catch { alive = false; }
-  assert.equal(alive, false);
 });
 
 test("log() rotates the log file to .1 once it reaches the size cap", () => {

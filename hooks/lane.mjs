@@ -22,32 +22,13 @@
 //      launches hold until the breaker cools down instead of retrying into a
 //      known-bad API.
 //
-// THE SECOND JAM (2026-08-01): the above only ever wrapped AUTOMATED headless
-// launches (runner.mjs, e2e). Kyle's interactive launches (his own terminals
-// Go button, Terminal tab) spawned `claude` with zero coordination at all —
-// confirmed by grep, no `lane.mjs` import anywhere in that file. Pressing Go
-// while runner.mjs or e2e held the automation slot (or while Kyle had another
-// manual terminal open) could put 2-3+ concurrent streams on the wire with no
-// pacing between them — the same failure shape, just from a path nothing here
-// was watching. Fix: a second, fully independent CATEGORY —  "interactive" —
-// with its own slot dir and its own pacing, so automation and interactive
-// launches never compete for the same slot. Neither queues behind the other;
-// each is still capped against itself. The breaker is shared (it reflects
-// real API health, not who's asking) but only BLOCKS automation — a human who
-// already decided to launch should be warned, never queued, per the original
-// design note below.
-//
-// A category is just a subdirectory of the lane root: omit it (or pass
-// undefined) and behavior is byte-identical to the original automation-only
-// lane — same paths, same tests. Pass "interactive" (or any other string) to
-// get a fully separate slot pool with its own dials (policy.json `lane.
-// interactive`, falling back to the shared `lane` dials for anything it
-// doesn't override).
-//
-// Interactive launches deliberately do NOT take the AUTOMATION lane — a human
-// launch must never queue behind a three-hour runner hold; humans are
-// self-pacing, loops are not. They DO now take their own interactive lane, so
-// two GUI-launched sessions can't stack on each other either.
+// Interactive launches (Kyle's own terminals) deliberately do NOT take this
+// lane — a human launch must never queue behind a three-hour runner hold;
+// humans are self-pacing, loops are not. The machine-wide `lane.total` cap
+// (shim/claude.cmd + gate(), ADR-0003) is the ceiling that still covers them.
+// (A second "interactive" slot category existed for the WinForms GUI's Go
+// button; it was deleted with that GUI — SPEC-0005/ADR-0005 — when its last
+// caller went.)
 //
 // STATE lives OUTSIDE ACC_ROOT, in os.tmpdir()/acc-lane (override:
 // ACC_LANE_DIR — the lane's own tests sandbox with it). This is deliberate:
@@ -85,26 +66,14 @@ const DEFAULTS = {
   breakerThreshold: 3,      // this many transport failures in the window...
   breakerWindowMs: 5 * 60 * 1000,   // ...trips the breaker...
   breakerCooldownMs: 2 * 60 * 1000, // ...for this long since the LAST failure.
-  breakerBlocking: true,    // does a tripped breaker hold NEW acquires in this
-                             // category? automation: yes. interactive: no
-                             // (see acquireSlot's bypassBreaker option) —
-                             // policy.json can override per category.
 };
 
-// laneConfig() — no category — is byte-identical to the original: reads the
-// flat `lane` object from policy.json. laneConfig(category) additionally
-// layers `lane[category]` on top, so `lane.interactive` can override just the
-// dials that differ (slots, minGapMs, breakerBlocking) while inheriting
-// everything else (retries, backoff shape, breaker window) from the shared
-// block. A category key with no matching object in policy.json (or none at
-// all) is simply ignored — every category always falls back to DEFAULTS.
-export function laneConfig(category) {
+// Reads the flat `lane` object from policy.json over DEFAULTS, per call —
+// dial edits apply on the next acquire with no restart.
+export function laneConfig() {
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(POLICY(), "utf8").replace(/^﻿/, "")).lane || {}; } catch {}
-  const base = { ...DEFAULTS, ...raw };
-  if (!category) return base;
-  const scoped = (raw && typeof raw[category] === "object" && raw[category]) || {};
-  return { ...base, ...scoped };
+  return { ...DEFAULTS, ...raw };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -132,12 +101,7 @@ function isStale(slotDir) {
   return Date.now() - Date.parse(o.at || 0) > ttl;
 }
 
-// `pid` defaults to the calling process — the normal in-process acquire path.
-// The CLI (bottom of file) passes an explicit pid so a short-lived `node
-// hooks/lane.mjs try-acquire` invocation can hand a slot to a LONG-LIVED
-// process it doesn't own (a GUI-spawned claude session) without holding the
-// slot open itself.
-function tryTake(slotDir, label, ttlMs, pid = process.pid) {
+function tryTake(slotDir, label, ttlMs) {
   try {
     fs.mkdirSync(slotDir);
   } catch {
@@ -147,40 +111,28 @@ function tryTake(slotDir, label, ttlMs, pid = process.pid) {
   }
   fs.writeFileSync(
     path.join(slotDir, "owner.json"),
-    JSON.stringify({ pid, label, at: new Date().toISOString(), ttlMs })
+    JSON.stringify({ pid: process.pid, label, at: new Date().toISOString(), ttlMs })
   );
   return true;
 }
 
-// The root directory a category's slots live under. No category (undefined)
-// is the lane root itself — this is what keeps every pre-existing automation
-// path and test byte-identical to before categories existed.
-function categoryRoot(category) {
-  return category ? path.join(LANE_DIR(), category) : LANE_DIR();
-}
-
-// Everyone currently holding a slot in a category — for wait logs and the
-// statusline. No category = automation (the original, pre-category root).
-export function laneStatus(category) {
-  const dir = categoryRoot(category);
+// Everyone currently holding a slot — for wait logs and the statusline.
+export function laneStatus() {
   let names = [];
-  try { names = fs.readdirSync(dir).filter((n) => n.startsWith("slot-")); } catch {}
-  return names.map((n) => ({ slot: n, ...(ownerOf(path.join(dir, n)) || {}) }));
+  try { names = fs.readdirSync(LANE_DIR()).filter((n) => n.startsWith("slot-")); } catch {}
+  return names.map((n) => ({ slot: n, ...(ownerOf(path.join(LANE_DIR(), n)) || {}) }));
 }
 
-// The full picture for the CLI / GUI status display: both known categories
-// plus breaker state, in one call.
+// The full picture for the CLI / GUI status display.
 export function laneStatusAll() {
-  return { automation: laneStatus(), interactive: laneStatus("interactive"), breaker: breakerState() };
+  return { automation: laneStatus(), breaker: breakerState() };
 }
 
 // Start pacing. Read-modify-write with no lock: with slots=1 it is exact; with
 // slots>1 a race can only SHORTEN one gap, never stack launches on a tick,
-// which is all the gap is for. Paced PER CATEGORY (its own last-start.json)
-// so an interactive launch is never paced against automation's clock or vice
-// versa.
-async function paceStart(cfg, onLog, root) {
-  const stamp = path.join(root, "last-start.json");
+// which is all the gap is for.
+async function paceStart(cfg, onLog) {
+  const stamp = path.join(LANE_DIR(), "last-start.json");
   let last = 0;
   try { last = Number(JSON.parse(fs.readFileSync(stamp, "utf8")).t) || 0; } catch {}
   const wait = last + cfg.minGapMs - Date.now();
@@ -236,15 +188,8 @@ export function breakerReset() {
   try { fs.rmSync(breakerFile(), { force: true }); } catch {}
 }
 
-// Hold new acquires open while the breaker is tripped (blocking categories,
-// i.e. automation) or just log a warning and proceed (non-blocking
-// categories, i.e. interactive — a human already decided to launch).
+// Hold new acquires open while the breaker is tripped.
 async function waitForBreaker(cfg, onLog) {
-  if (cfg.breakerBlocking === false) {
-    const b = breakerState();
-    if (b.tripped) onLog?.(`lane: circuit breaker open (${b.count} transport failures in the last ${Math.round(b.windowMs / 1000)}s) — proceeding anyway`);
-    return;
-  }
   let noted = false;
   for (;;) {
     const b = breakerState();
@@ -258,10 +203,9 @@ async function waitForBreaker(cfg, onLog) {
 }
 
 // ---------------------------------------------------------------- acquire
-export async function acquireSlot(label, { ttlMs, onLog, category } = {}) {
-  const cfg = laneConfig(category);
-  const root = categoryRoot(category);
-  fs.mkdirSync(root, { recursive: true });
+export async function acquireSlot(label, { ttlMs, onLog } = {}) {
+  const cfg = laneConfig();
+  fs.mkdirSync(LANE_DIR(), { recursive: true });
   const ttl = ttlMs || cfg.slotTtlMs;
 
   await waitForBreaker(cfg, onLog);
@@ -269,9 +213,9 @@ export async function acquireSlot(label, { ttlMs, onLog, category } = {}) {
   let lastNote = 0;
   for (;;) {
     for (let i = 0; i < Math.max(1, cfg.slots); i++) {
-      const slotDir = path.join(root, `slot-${i}`);
+      const slotDir = path.join(LANE_DIR(), `slot-${i}`);
       if (tryTake(slotDir, label, ttl)) {
-        await paceStart(cfg, onLog, root);
+        await paceStart(cfg, onLog);
         return {
           slot: i,
           release: () => { try { fs.rmSync(slotDir, { recursive: true, force: true }); } catch {} },
@@ -280,7 +224,7 @@ export async function acquireSlot(label, { ttlMs, onLog, category } = {}) {
     }
     if (Date.now() - lastNote > 15000) {
       lastNote = Date.now();
-      const held = laneStatus(category).map((s) => `${s.label || "?"}(${s.pid || "?"})`).join(", ");
+      const held = laneStatus().map((s) => `${s.label || "?"}(${s.pid || "?"})`).join(", ");
       onLog?.(`lane: waiting for a slot — held by ${held || "unknown"}`);
     }
     await sleep(cfg.pollMs + Math.floor(Math.random() * cfg.pollMs));
@@ -310,7 +254,7 @@ export function transportFailure(text) {
 //   failed(r) — is this result a failure at all (default: r.code !== 0)
 //   textOf(r) — where the failure text lives (default: err + result)
 export async function retryTransport(label, run, opts = {}) {
-  const cfg = laneConfig(opts.category);
+  const cfg = laneConfig();
   const attempts = Math.max(1, (opts.retries ?? cfg.retries) + 1);
   const failed = opts.failed || ((r) => !r || r.code !== 0);
   const textOf = opts.textOf || ((r) => `${r?.err || ""} ${r?.result || ""}`);
@@ -389,12 +333,8 @@ export function countCappedProcesses(exePaths, listProcesses = queryClaudeProces
 }
 
 function laneLabelForPid(pid) {
-  const all = laneStatusAll();
-  for (const list of [all.automation, all.interactive]) {
-    const hit = list.find((s) => Number(s.pid) === Number(pid));
-    if (hit) return hit.label || null;
-  }
-  return null;
+  const hit = laneStatus().find((s) => Number(s.pid) === Number(pid));
+  return hit ? hit.label || null : null;
 }
 
 // The gate: ok:true means "let it through" (default — every unconfigured or
@@ -434,75 +374,14 @@ export function formatHolders(holders) {
 }
 
 // ------------------------------------------------------------------- CLI
-// `node hooks/lane.mjs <cmd> ...` — single-shot, NON-BLOCKING commands for
-// callers that cannot import ESM directly (external scripts shell out to
-// this). Every command prints one line of JSON to stdout and exits
-// immediately; nothing here polls or waits, because a GUI click must never
-// hang on a subprocess. The two-step try-acquire/reown handshake exists
-// because at the moment a GUI launch reserves a slot it doesn't yet know the
-// real child pid — it reserves under its own (short-lived) pid first, then
-// re-owns the slot to the actual claude pid once spawned, so the
-// slot naturally frees itself when THAT process exits, not when the GUI does.
-export function tryAcquireOnce(category, label, pid, ttlMs) {
-  const cat = category || undefined;
-  const cfg = laneConfig(cat);
-  const root = categoryRoot(cat);
-  fs.mkdirSync(root, { recursive: true });
-  const ttl = Number(ttlMs) > 0 ? Number(ttlMs) : cfg.slotTtlMs;
-  for (let i = 0; i < Math.max(1, cfg.slots); i++) {
-    const slotDir = path.join(root, `slot-${i}`);
-    if (tryTake(slotDir, label, ttl, Number(pid) || process.pid)) return { ok: true, slot: i };
-  }
-  return { ok: false, slot: null, held: laneStatus(cat) };
-}
-
-export function reownSlot(category, slotIndex, newPid) {
-  const root = categoryRoot(category || undefined);
-  const slotDir = path.join(root, `slot-${slotIndex}`);
-  const o = ownerOf(slotDir);
-  if (!o) return { ok: false, reason: "no such slot/owner" };
-  o.pid = Number(newPid) || o.pid;
-  try {
-    fs.writeFileSync(path.join(slotDir, "owner.json"), JSON.stringify(o));
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, reason: String(e && e.message || e) };
-  }
-}
-
-export function releaseSlot(category, slotIndex) {
-  const root = categoryRoot(category || undefined);
-  const slotDir = path.join(root, `slot-${slotIndex}`);
-  try { fs.rmSync(slotDir, { recursive: true, force: true }); return { ok: true }; } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
-}
-
-// "-" and "automation" both mean "no category" (the original automation
-// root) — CLI callers always pass an explicit category token, so there needs
-// to be a spellable way to say "the default one".
-function normalizeCategory(c) {
-  return c && c !== "-" && c !== "automation" ? c : undefined;
-}
-
+// `node hooks/lane.mjs <cmd>` — single-shot commands for callers that cannot
+// import ESM directly (the web GUI shells `status`). One line of JSON to
+// stdout, exits immediately. (The try-acquire/reown/release handshake that
+// served the WinForms GUI died with it — SPEC-0005.)
 export function runCli(argv) {
-  const [cmd, ...args] = argv;
-  switch (cmd) {
-    case "status":
-      return laneStatusAll();
-    case "try-acquire": {
-      const [category, label, pid, ttlMs] = args;
-      return tryAcquireOnce(normalizeCategory(category), label, pid, ttlMs);
-    }
-    case "reown": {
-      const [category, slot, newPid] = args;
-      return reownSlot(normalizeCategory(category), Number(slot), newPid);
-    }
-    case "release": {
-      const [category, slot] = args;
-      return releaseSlot(normalizeCategory(category), Number(slot));
-    }
-    default:
-      return { ok: false, reason: `unknown command: ${cmd}` };
-  }
+  const [cmd] = argv;
+  if (cmd === "status") return laneStatusAll();
+  return { ok: false, reason: `unknown command: ${cmd}` };
 }
 
 const isMain = (() => {

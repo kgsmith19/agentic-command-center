@@ -21,7 +21,7 @@ import { effectiveCeilings, checkpointVerdict, updateAfterRun, readAutonomy } fr
 import { loadKernelPolicy } from "./policy.mjs";
 
 export function newRunId() {
-  const t = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "T");
+  const t = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
   return `r-${t}-${randomBytes(3).toString("hex")}`;
 }
 

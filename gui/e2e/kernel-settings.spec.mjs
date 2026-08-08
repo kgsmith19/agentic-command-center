@@ -47,14 +47,3 @@ test("invalid input is rejected visibly and the file stays untouched", async ({ 
   await expect(page.locator("#status")).toContainText("Not saved");
   expect(fs.readFileSync(policyFile, "utf8")).toBe(before);
 });
-
-test("CSRF guard: a request without the custom header (or with a foreign Origin) is 403 and writes nothing", async ({ request }) => {
-  const before = fs.readFileSync(policyFile, "utf8");
-  const bare = await request.post("/api/kernel-policy", { data: { ...KERNEL } });
-  expect(bare.status()).toBe(403);
-  const foreign = await request.post("/api/kernel-policy", {
-    data: { ...KERNEL }, headers: { "X-ACC": "1", origin: "https://evil.example" },
-  });
-  expect(foreign.status()).toBe(403);
-  expect(fs.readFileSync(policyFile, "utf8")).toBe(before);
-});

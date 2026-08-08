@@ -50,7 +50,7 @@ const good = () => ({
 });
 const fakeAdapter = (over = {}) => ({
   id: "fake", identity: () => ({ name: "fake", version: "1.0.0" }),
-  startTask: async () => ({ pid: 1, done: Promise.resolve({ code: 0, events: [] }), stop: async () => {} }),
+  startTask: async () => ({ pid: 1, done: Promise.resolve({ code: 0, events: [] }) }),
   sendStep: async () => {}, readState: () => ({ toolCalls: 0, tokens: 0, texts: [], sessionId: null }),
   stopTask: async () => {}, ...over,
 });
@@ -176,7 +176,7 @@ function recordingAdapter({ onLaunch, exitCode = 0, events = [] } = {}) {
       startTask: async (opts) => {
         Object.assign(seen, opts);
         if (onLaunch) await onLaunch(opts);
-        return { pid: 1, events, done: Promise.resolve({ code: exitCode, events }), stop: async () => {} };
+        return { pid: 1, events, done: Promise.resolve({ code: exitCode, events }) };
       },
       sendStep: async () => {}, stopTask: async () => {},
       readState: (evts) => ({ toolCalls: evts.length, tokens: 42, texts: [], sessionId: "s" }),

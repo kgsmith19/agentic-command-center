@@ -35,13 +35,12 @@ setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2
 
 const {
   acquireSlot, withLaunchSlot, transportFailure, retryTransport, laneStatus, laneConfig,
-  laneStatusAll, recordTransportFailure, breakerState, breakerReset,
-  tryAcquireOnce, reownSlot, releaseSlot, runCli,
+  laneStatusAll, recordTransportFailure, breakerState, breakerReset, runCli,
   isUtilityInvocation, countCappedProcesses, gate, queryClaudeProcesses, formatHolders,
 } = await import("./lane.mjs");
 
 const LANE = process.env.ACC_LANE_DIR;
-const slotDir = (i, category) => path.join(category ? path.join(LANE, category) : LANE, `slot-${i}`);
+const slotDir = (i) => path.join(LANE, `slot-${i}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
@@ -301,84 +300,6 @@ test("config falls back to defaults when policy.json is unreadable", () => {
   fs.writeFileSync(process.env.ACC_POLICY, saved);
 });
 
-// ============================================================= categories
-// The 2026-08-01 hardening: interactive (GUI) launches get their own slot
-// pool, fully isolated from automation's — neither queues behind the other.
-
-test("laneConfig(category) layers policy.lane.<category> over the shared lane dials", () => {
-  setPolicy({
-    slots: 1, minGapMs: 999, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20,
-    interactive: { slots: 1, minGapMs: 0, breakerBlocking: false },
-  });
-  const auto = laneConfig();
-  const inter = laneConfig("interactive");
-  assert.equal(auto.minGapMs, 999);
-  assert.equal(inter.minGapMs, 0, "category override wins");
-  assert.equal(inter.retries, 2, "unset dials fall back to the shared lane block");
-  assert.equal(inter.breakerBlocking, false);
-  assert.equal(auto.breakerBlocking, true, "categories never leak into each other");
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
-});
-
-test("laneConfig(category) falls back to shared defaults when the category is entirely absent", () => {
-  const cfg = laneConfig("nonexistent-category");
-  assert.equal(cfg.slots, 1);
-});
-
-test("automation and interactive slots are physically separate directories and never contend", async () => {
-  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20, interactive: { slots: 1, minGapMs: 0 } });
-  const a = await acquireSlot("auto-holder"); // no category = automation
-  let interDone = false;
-  const i = acquireSlot("gui-holder", { category: "interactive" }).then((s) => { interDone = true; return s; });
-  await sleep(100);
-  assert.equal(interDone, true, "interactive must NOT queue behind automation's held slot");
-  assert.equal(fs.existsSync(slotDir(0)), true, "automation slot dir");
-  assert.equal(fs.existsSync(slotDir(0, "interactive")), true, "interactive slot dir, separate path");
-  a.release();
-  (await i).release();
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
-});
-
-test("a second interactive acquire DOES queue behind the first (interactive is still capped against itself)", async () => {
-  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20, interactive: { slots: 1, minGapMs: 0 } });
-  const a = await acquireSlot("gui-1", { category: "interactive" });
-  let bDone = false;
-  const b = acquireSlot("gui-2", { category: "interactive" }).then((s) => { bDone = true; return s; });
-  await sleep(100);
-  assert.equal(bDone, false, "two interactive launches must not run concurrently either");
-  a.release();
-  (await b).release();
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
-});
-
-test("pacing is independent per category (interactive minGapMs never delays automation or vice versa)", async () => {
-  setPolicy({ slots: 1, minGapMs: 200, pollMs: 20, interactive: { slots: 1, minGapMs: 0 } });
-  await withLaunchSlot("auto-1", async () => {}); // primes automation's last-start.json
-  const t0 = Date.now();
-  await withLaunchSlot("gui-1", async () => {}, { category: "interactive" });
-  assert.ok(Date.now() - t0 < 150, `interactive launch should not inherit automation's 200ms pacing, took ${Date.now() - t0}ms`);
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
-});
-
-test("laneStatus(category) reports only that category's holders", async () => {
-  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20, interactive: { slots: 1, minGapMs: 0 } });
-  const a = await acquireSlot("auto-x");
-  const i = await acquireSlot("gui-x", { category: "interactive" });
-  assert.equal(laneStatus().length, 1);
-  assert.equal(laneStatus().find((s) => s.label === "auto-x") !== undefined, true);
-  assert.equal(laneStatus("interactive").length, 1);
-  assert.equal(laneStatus("interactive").find((s) => s.label === "gui-x") !== undefined, true);
-  a.release();
-  i.release();
-});
-
-test("laneStatusAll() reports both categories plus breaker state in one call", async () => {
-  const s = laneStatusAll();
-  assert.ok(Array.isArray(s.automation));
-  assert.ok(Array.isArray(s.interactive));
-  assert.equal(typeof s.breaker.tripped, "boolean");
-});
-
 // ================================================================= jitter
 test("retry backoff is full jitter — delay can land anywhere from 0 up to the exponential ceiling, not just the top half", async () => {
   setPolicy({ slots: 1, minGapMs: 0, retries: 21, backoffBaseMs: 1000, backoffCapMs: 1000, pollMs: 20 });
@@ -472,27 +393,6 @@ test("a tripped breaker HOLDS new automation acquires until it clears", async ()
   }
 });
 
-test("a tripped breaker only WARNS an interactive acquire — never blocks a human", async () => {
-  breakerReset();
-  setPolicy({
-    slots: 1, minGapMs: 0, pollMs: 20, breakerThreshold: 1, breakerWindowMs: 60000, breakerCooldownMs: 60000,
-    interactive: { slots: 1, minGapMs: 0, breakerBlocking: false },
-  });
-  try {
-    recordTransportFailure("econnreset");
-    assert.equal(breakerState().tripped, true);
-    const logs = [];
-    const t0 = Date.now();
-    const s = await acquireSlot("gui-despite-breaker", { category: "interactive", onLog: (m) => logs.push(m) });
-    assert.ok(Date.now() - t0 < 200, "interactive must proceed immediately, not wait out the (60s) cooldown");
-    assert.ok(logs.some((m) => m.includes("circuit breaker open")), "still logs a warning");
-    s.release();
-  } finally {
-    breakerReset();
-    setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
-  }
-});
-
 test("breakerReset() clears state outright", () => {
   recordTransportFailure("econnreset");
   breakerReset();
@@ -525,91 +425,25 @@ test("recordTransportFailure swallows a write failure rather than throwing", () 
 });
 
 test("acquireSlot's 'held by' note falls back to '?' for a slot whose owner has no label", async () => {
-  const r = tryAcquireOnce("interactive", "", process.pid, 60000);
-  assert.equal(r.ok, true);
+  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20 });
+  fs.mkdirSync(slotDir(0), { recursive: true });
+  fs.writeFileSync(path.join(slotDir(0), "owner.json"), JSON.stringify({ pid: process.pid, at: new Date().toISOString(), ttlMs: 60000 }));
   const logs = [];
-  const p = acquireSlot("waiter-on-nameless-owner", { category: "interactive", onLog: (m) => logs.push(m) })
-    .then((s) => s.release());
+  const p = acquireSlot("waiter-on-nameless-owner", { onLog: (m) => logs.push(m) }).then((s) => s.release());
   await sleep(120);
   assert.ok(logs.some((m) => m.includes("held by ?(")), `expected a "?" label fallback, got: ${logs.join(" | ")}`);
-  releaseSlot("interactive", r.slot);
+  fs.rmSync(slotDir(0), { recursive: true, force: true });
   await p;
 });
 
 // ==================================================================== CLI
-test("tryAcquireOnce takes a slot under an EXPLICIT pid, not the caller's own", () => {
-  const r = tryAcquireOnce("interactive", "gui-cli", 424242, 60000);
-  assert.equal(r.ok, true);
-  const owner = JSON.parse(fs.readFileSync(path.join(slotDir(r.slot, "interactive"), "owner.json"), "utf8"));
-  assert.equal(owner.pid, 424242);
-  releaseSlot("interactive", r.slot);
-});
-
-test("tryAcquireOnce reports ok:false and who's holding it, without waiting, when the slot is busy", async () => {
-  setPolicy({ slots: 1, minGapMs: 0, pollMs: 20, interactive: { slots: 1, minGapMs: 0 } });
-  const held = await acquireSlot("holder", { category: "interactive" });
-  const r = tryAcquireOnce("interactive", "second-try", 999, 60000);
-  assert.equal(r.ok, false);
-  assert.equal(r.held[0].label, "holder");
-  held.release();
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
-});
-
-test("reownSlot hands an existing slot to a new pid; releaseSlot frees it", () => {
-  const r = tryAcquireOnce("interactive", "reown-me", 111, 60000);
-  const reowned = reownSlot("interactive", r.slot, 222);
-  assert.equal(reowned.ok, true);
-  const owner = JSON.parse(fs.readFileSync(path.join(slotDir(r.slot, "interactive"), "owner.json"), "utf8"));
-  assert.equal(owner.pid, 222);
-  const released = releaseSlot("interactive", r.slot);
-  assert.equal(released.ok, true);
-  assert.equal(fs.existsSync(slotDir(r.slot, "interactive")), false);
-});
-
-test("reownSlot on a slot that doesn't exist reports ok:false, not a throw", () => {
-  const r = reownSlot("interactive", 99, 111);
-  assert.equal(r.ok, false);
-});
-
-// Skipped as root: chmod 0444 does not bind uid 0, so the write this test
-// needs to FAIL succeeds and the test reds falsely — the exact "1 known
-// root-permission artifact under sandboxed CI" PRD MET-001 carried. The
-// fault-injection is only meaningful where file modes actually deny.
-test("reownSlot reports ok:false, not a throw, when owner.json can't be written", { skip: process.getuid?.() === 0 }, () => {
-  const r = tryAcquireOnce("interactive", "readonly-owner", 111, 60000);
-  const ownerFile = path.join(slotDir(r.slot, "interactive"), "owner.json");
-  fs.chmodSync(ownerFile, 0o444);
-  try {
-    const reowned = reownSlot("interactive", r.slot, 222);
-    assert.equal(reowned.ok, false);
-    assert.ok(reowned.reason, "must name why");
-  } finally {
-    fs.chmodSync(ownerFile, 0o666);
-    releaseSlot("interactive", r.slot);
-  }
-});
-
-test("runCli dispatches status/try-acquire/reown/release, and rejects an unknown command", () => {
+test("runCli answers status and rejects an unknown command", () => {
   const status = runCli(["status"]);
   assert.ok(Array.isArray(status.automation));
-
-  const acquired = runCli(["try-acquire", "interactive", "cli-e2e", "333", "60000"]);
-  assert.equal(acquired.ok, true);
-
-  const reowned = runCli(["reown", "interactive", String(acquired.slot), "444"]);
-  assert.equal(reowned.ok, true);
-
-  const released = runCli(["release", "interactive", String(acquired.slot)]);
-  assert.equal(released.ok, true);
-
-  assert.equal(runCli(["not-a-real-command"]).ok, false);
-});
-
-test("runCli try-acquire with '-' or 'automation' targets the automation root, not a literal subfolder", () => {
-  const r = runCli(["try-acquire", "-", "cli-automation-root", "555", "60000"]);
-  assert.equal(r.ok, true);
-  assert.equal(fs.existsSync(path.join(LANE, "-")), false, "must not create a folder literally named '-'");
-  releaseSlot(undefined, r.slot);
+  assert.ok("breaker" in status);
+  const bad = runCli(["frobnicate"]);
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /unknown command/);
 });
 
 test("the CLI entry point (node hooks/lane.mjs status) runs for real as a subprocess and prints JSON", () => {

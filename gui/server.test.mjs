@@ -27,10 +27,12 @@ beforeEach(resetPolicy);
 after(() => { srv.close(); fs.rmSync(BASE, { recursive: true, force: true }); });
 
 const good = () => ({ ...KERNEL, budget: { ...KERNEL.budget, toolCalls: 150 } });
-const post = (body, headers = {}) => fetch(`${base}/api/kernel-policy`, {
+// One JSON-POST helper for every group; each group aliases it for readability.
+const jpost = (route, body, headers = {}) => fetch(`${base}${route}`, {
   method: "POST", body: JSON.stringify(body),
   headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
 });
+const post = (body, headers = {}) => jpost("/api/kernel-policy", body, headers);
 
 test("GET / serves the kernel page", async () => {
   const r = await fetch(`${base}/`);
@@ -196,10 +198,7 @@ function resetEngine() {
   }));
 }
 
-const gpost = (route, body, headers = {}) => fetch(`${base}${route}`, {
-  method: "POST", body: JSON.stringify(body),
-  headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
-});
+const gpost = jpost;
 
 test("AC-001: GET /api/guards/status passes the engine's status JSON through", async () => {
   resetEngine();
@@ -356,7 +355,6 @@ if (argv[0] === "vault-import") {
   resetEngine();
   process.env.ACC_ENGINE = FAKE_ENGINE;
 }
-const RESTORE_FAKE = fs.existsSync(FAKE_ENGINE) ? fs.readFileSync(FAKE_ENGINE, "utf8") : null;
 
 test("AC-001/PROP-001: a value's ONLY sink is engine stdin — never argv, never the response", async () => {
   withVaultFake();
@@ -425,18 +423,6 @@ test("AC-006: vault routes demand X-ACC and local Origin like every mutating rou
   assert.equal(engineCalls().length, 0);
 });
 
-test("AC-007: an engine failure surfaces as code+out, which by engine contract names only keys", async () => {
-  withVaultFake();
-  // A single well-formed pair whose engine run we force to fail by clearing
-  // list.json is not how vault-import fails; instead send a pair the fake
-  // stores fine, then assert the success shape. Failure shape is covered by
-  // the generic engine-failure test; here we assert no value in the tail.
-  const r = await gpost("/api/guards/vault-import", { pairs: [{ key: "TOK", value: "zzz-secret" }] });
-  const j = await r.json();
-  assert.ok(!JSON.stringify(j).includes("zzz-secret"));
-});
-
-if (RESTORE_FAKE) after(() => { try { fs.writeFileSync(FAKE_ENGINE, RESTORE_FAKE); } catch {} });
 
 // ------------------------------------------------------------- process/spending API (SPEC-0004)
 // Fake usage + budget scripts record argv; policy.json lives in the sandbox
@@ -468,10 +454,7 @@ function resetProc() {
   process.env.FAKE_BUDGET_LOG = BUDGET_LOG;
   fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify(POLICY_BASE, null, 2));
 }
-const ppost = (route, body, headers = {}) => fetch(`${base}${route}`, {
-  method: "POST", body: JSON.stringify(body),
-  headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
-});
+const ppost = jpost;
 
 test("AC-001: GET /api/process/status returns tier, week text, dials, and control state", async () => {
   resetProc();
@@ -483,7 +466,6 @@ test("AC-001: GET /api/process/status returns tier, week text, dials, and contro
   assert.equal(j.dials.softK, 400);
   assert.deepEqual(j.dials.allow, ["Explore"]);
   assert.equal(j.stopped, false);
-  resetPolicy(); // restore the kernel-policy fixture other tests rely on
 });
 
 test("AC-002/PROP-001: saving dials updates the owned blocks and leaves every other key byte-identical", async () => {
@@ -500,7 +482,6 @@ test("AC-002/PROP-001: saving dials updates the owned blocks and leaves every ot
   assert.deepEqual(after.kernel, before.kernel);
   assert.deepEqual(after.rates, before.rates);
   assert.equal(after._comment, before._comment);
-  resetPolicy();
 });
 
 test("AC-003: an invalid dial is refused and policy.json is left untouched", async () => {
@@ -515,7 +496,6 @@ test("AC-003: an invalid dial is refused and policy.json is left untouched", asy
     assert.equal(r.status, 400, JSON.stringify(bad));
   }
   assert.equal(fs.readFileSync(process.env.ACC_POLICY, "utf8"), before, "no bad dial may write");
-  resetPolicy();
 });
 
 test("AC-004: control stop writes the slice-runner stop file", async () => {
@@ -523,7 +503,6 @@ test("AC-004: control stop writes the slice-runner stop file", async () => {
   const r = await ppost("/api/process/control", { action: "stop" });
   assert.equal(r.status, 200);
   assert.ok(fs.existsSync(path.join(PROC_DIR, "runner", "stop", "slice-runner.stop")));
-  resetPolicy();
 });
 
 test("AC-005/AC-006: resume and fanout invoke the right budget verb", async () => {
@@ -531,7 +510,6 @@ test("AC-005/AC-006: resume and fanout invoke the right budget verb", async () =
   await ppost("/api/process/control", { action: "resume" });
   await ppost("/api/process/control", { action: "fanout" });
   assert.deepEqual(budgetCalls(), [["unstop"], ["fanout", "30"]]);
-  resetPolicy();
 });
 
 test("AC-009: an action outside the allowlist (incl. a prototype key) is refused, nothing invoked", async () => {
@@ -541,14 +519,12 @@ test("AC-009: an action outside the allowlist (incl. a prototype key) is refused
     assert.equal(r.status, 400, `action "${action}" must be refused`);
   }
   assert.equal(budgetCalls().length, 0);
-  resetPolicy();
 });
 
 test("AC-010: process routes demand X-ACC and local Origin", async () => {
   resetProc();
   assert.equal((await ppost("/api/process/dials", { softK: 1, hardK: 2, amberTokens: 0, redTokens: 0, maxFinders: 1, allow: [] }, { "X-ACC": "" })).status, 403);
   assert.equal((await ppost("/api/process/control", { action: "stop" }, { origin: "https://evil.example" })).status, 403);
-  resetPolicy();
 });
 
 test("status: an unreadable policy.json is a 500, and a non-JSON tier degrades to null", async () => {
@@ -563,7 +539,6 @@ test("status: an unreadable policy.json is a 500, and a non-JSON tier degrades t
   assert.equal(r2.status, 200);
   assert.equal((await r2.json()).tier, null);
   fs.writeFileSync(FAKE_USAGE, `const a=process.argv.slice(2);\nif(a[0]==="check")console.log(JSON.stringify({tier:"green"}));else console.log("TOTAL $0.00");\n`);
-  resetPolicy();
 });
 
 test("status: policy blocks that are absent surface as undefined dials, not a crash", async () => {
@@ -574,7 +549,6 @@ test("status: policy blocks that are absent surface as undefined dials, not a cr
   assert.equal(r.status, 200);
   const j = await r.json();
   assert.deepEqual(j.dials.allow, []);
-  resetPolicy();
 });
 
 test("dials: an unreadable policy.json is a 500", async () => {
@@ -582,21 +556,16 @@ test("dials: an unreadable policy.json is a 500", async () => {
   fs.rmSync(process.env.ACC_POLICY);
   const r = await ppost("/api/process/dials", { softK: 1, hardK: 2, amberTokens: 0, redTokens: 0, maxFinders: 1, allow: [] });
   assert.equal(r.status, 500);
-  resetPolicy();
 });
 
 test("control: a non-string action is refused", async () => {
   resetProc();
   assert.equal((await ppost("/api/process/control", { action: 42 })).status, 400);
   assert.equal((await ppost("/api/process/control", {})).status, 400);
-  resetPolicy();
 });
 
-test("vault-import surfaces an engine failure as code+out (no value in the tail)", async () => {
-  // A stdin with no '=' makes the real-shaped fake exit 1 naming no keys.
-  withVaultFake();
-  const r = await gpost("/api/guards/vault-import", { pairs: [{ key: "K", value: "v-secret" }] });
-  // The withVaultFake stores fine; to force failure, point at a fake that always fails:
+test("AC-007: vault-import surfaces an engine failure as code+out (no value in the tail)", async () => {
+  resetEngine();
   fs.writeFileSync(FAKE_ENGINE, `process.stderr.write("no KEY=VALUE lines found on stdin"); process.exit(1);\n`);
   const r2 = await gpost("/api/guards/vault-import", { pairs: [{ key: "K", value: "v-secret" }] });
   assert.equal(r2.status, 200);
@@ -653,10 +622,7 @@ function resetLaunch() {
     lane: { slots: 1, minGapMs: 0, retries: 1, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 10 },
   }, null, 2));
 }
-const lpost = (route, body, headers = {}) => fetch(`${base}${route}`, {
-  method: "POST", body: JSON.stringify(body),
-  headers: { "content-type": "application/json", "X-ACC": "1", ...headers },
-});
+const lpost = jpost;
 const newDirective = async (over = {}) => {
   const cwd = over.cwd !== undefined ? over.cwd : fs.mkdtempSync(path.join(LAUNCH_DIR, "work-"));
   const r = await lpost("/api/directives", { text: over.text ?? "fix the tests", cwd, profile: over.profile ?? "" });
@@ -809,8 +775,7 @@ test("AC-111: GET /api/lane/status passes the real lane's JSON through", async (
   const r = await fetch(`${base}/api/lane/status`);
   assert.equal(r.status, 200);
   const j = await r.json();
-  assert.ok(j.automation, "automation pool must be present");
-  assert.ok(j.interactive, "interactive pool must be present");
+  assert.ok(Array.isArray(j.automation), "automation pool must be present");
   assert.ok("breaker" in j, "breaker state must be present");
 });
 
@@ -819,7 +784,6 @@ test("AC-112: /api/process/status now names the launchable profiles (private key
   const r = await fetch(`${base}/api/process/status`);
   assert.equal(r.status, 200);
   assert.deepEqual((await r.json()).profiles, ["Normal", "Heavy"]);
-  resetPolicy();
 });
 
 // ------------------------------------------------------------- --ui-dist static serving (SPEC-0006, ADR-0006)

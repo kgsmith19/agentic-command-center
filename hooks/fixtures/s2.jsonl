@@ -1,2 +1,0 @@
-{"type":"assistant","isSidechain":false,"timestamp":"2026-07-30T15:25:52.154Z","message":{"model":"claude-opus-5","content":[{"type":"text","text":"start"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":34998,"output_tokens":100}}}
-{"type":"assistant","isSidechain":false,"timestamp":"2026-07-30T15:25:52.154Z","message":{"model":"claude-opus-5","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":39998,"output_tokens":100}}}

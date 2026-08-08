@@ -7,7 +7,6 @@ runner/directives/
 runner/stop/
 runner/alerts/
 runner/jobs/
-runner/prompts/
 watcher/*.log
 *.bak*
 watcher/claude-cap-watch.state.json

@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 const PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
-const POLICY_PATH = process.env.ACC_POLICY || "C:/code/guards/policy.json";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const POLICY_PATH = process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
 const CACHE_PATH =
   process.env.ACC_SCAN_CACHE || path.join(HERE, "..", "runner", "state", "scan-cache.json");
 
@@ -431,9 +431,10 @@ function cmdSessions(project, top) {
 // Tokens inside the TIER window: the rolling 7 days, but never reaching back
 // past week.effectiveFrom. Reporting above still shows the true 7 days; only the
 // tier is bounded, so the kill switch cannot fire retroactively on burn from
-// before the budget discipline existed. Must match budget.mjs weekTier() or the
-// statusline and GUI will disagree with what enforcement actually does.
-function tierWindowTotal(project) {
+// before the budget discipline existed. budget.mjs's weekTier() calls THESE
+// exports (plus its own 10-minute cache), so enforcement, statusline, and GUI
+// cannot disagree — the copy that once lived in budget.mjs is gone.
+export function tierWindowTotal(project) {
   const from = Date.parse(loadPolicy().week.effectiveFrom || "") || 0;
   const since = Math.max(Date.now() - 7 * 864e5, from);
   const main = emptyAgg();
@@ -445,7 +446,7 @@ function tierWindowTotal(project) {
   return totalTokens(main) + totalTokens(sub);
 }
 
-function tierFor(weekTokens) {
+export function tierFor(weekTokens) {
   const w = loadPolicy().week;
   const red = w.redTokens || 0;
   const amber = w.amberTokens || 0;
@@ -457,29 +458,6 @@ function tierFor(weekTokens) {
 
 function cmdCheck(project) {
   console.log(JSON.stringify(tierFor(tierWindowTotal(project))));
-}
-
-function cmdContext(file) {
-  if (!file) {
-    console.error("usage: usage.mjs context <transcript_path>");
-    process.exit(1);
-  }
-  console.log(JSON.stringify({ context: contextOf(file), startContext: startContextOf(file) }));
-}
-
-// Verifies clears are real: lists sessions by start context.
-function cmdClears(project) {
-  const sessions = scan({ since: Date.now() - 7 * 864e5, project })
-    .map((s) => ({ sid: s.sid, start: startContextOf(s.mainFile), end: contextOf(s.mainFile), ts: s.lastTs }))
-    .sort((a, b) => a.ts - b.ts);
-  console.log("SESSION START/END CONTEXT (a real clear starts at baseline, ~10-20k)");
-  console.log("-".repeat(60));
-  for (const s of sessions)
-    console.log(
-      `  ${s.sid.slice(0, 8)}  start ${fmtK(s.start).padStart(6)}  ->  end ${fmtK(s.end).padStart(6)}   ${
-        s.ts ? new Date(s.ts).toISOString().slice(5, 16).replace("T", " ") : "?"
-      }`
-    );
 }
 
 // ---------------------------------------------------------------- cli
@@ -504,17 +482,11 @@ if (isMain) {
     case "sessions":
       cmdSessions(project, Number(getFlag("--top", 10)));
       break;
-    case "context":
-      cmdContext(argv[1]);
-      break;
     case "check":
       cmdCheck(project);
       break;
-    case "clears":
-      cmdClears(project);
-      break;
     default:
-      console.log("usage.mjs week|sessions [--top N]|context <file>|check|clears  [--project <substr>]");
+      console.log("usage.mjs week|sessions [--top N]|check  [--project <substr>]");
       process.exit(cmd ? 1 : 0);
   }
 }

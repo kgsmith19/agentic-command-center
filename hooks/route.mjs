@@ -50,7 +50,7 @@ function loadTable() {
 const norm = (p) => path.resolve(p).replace(/[\\/]+$/, "").toLowerCase();
 const isUnder = (child, parent) => {
   const c = norm(child), p = norm(parent);
-  return c === p || c.startsWith(p + path.sep.toLowerCase()) || c.startsWith(p + "\\");
+  return c === p || c.startsWith(p + path.sep) || c.startsWith(p + "\\");
 };
 
 // A signal is a regex when it contains regex metacharacters (the table uses
@@ -137,27 +137,22 @@ function hook() {
   // force rather than re-deciding on no evidence.
   if (!r.path) return;
 
-  // Fire on every prompt, but only when what we would SAY changes. Dedupe on the
-  // last emission, not merely the last path: a blocked prompt whose cd never took
-  // must fall back to the advisory line rather than going silent and leaving the
-  // session with no scope at all.
+  // Fire on every prompt, but stay silent while the verdict hasn't moved —
+  // a task switch re-scopes; ten prompts about one thing cost one line.
   let prev = {};
   try { prev = JSON.parse(fs.readFileSync(latch, "utf8")); } catch {}
-  const last = prev.path || null;
-  const samePath = last && norm(last) === norm(r.path);
-  if (samePath && prev.mode === "advise") return;
+  if (prev.path && norm(prev.path) === norm(r.path)) return;
 
   const cwd = p.cwd || process.cwd();
-  const save = (mode, extra) =>
-    fs.writeFileSync(latch, JSON.stringify({ path: r.path, mode, ...extra }));
+  const save = () => fs.writeFileSync(latch, JSON.stringify({ path: r.path }));
 
   // Already living in the routed folder: the session is scoped by cwd, nothing
   // to say and nothing to type.
-  if (norm(r.path) === norm(cwd)) { try { save("advise"); } catch {} return; }
+  if (norm(r.path) === norm(cwd)) { try { save(); } catch {} return; }
 
   try {
     fs.mkdirSync(STATE, { recursive: true });
-    save("advise");
+    save();
   } catch {}
 
   const inCwd = isUnder(r.path, cwd);

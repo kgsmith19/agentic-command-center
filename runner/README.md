@@ -41,9 +41,11 @@ Design constraints (deliberate):
 - Stop conditions are the job's, not the model's: done-marker, stuck-N
   (alert file in alerts/), maxRuns, per-run timeout. Alerts + exit codes
   (2 stuck, 3 maxRuns, 4 graceful stop: create stop/<job>.stop, honored
-  between runs, 5 red week tier held a directive job) are the operator
-  surface; logs rotate at 1 MiB.
-- One loop instance per job at a time; nothing here mutates guards state
+  between runs, 5 red week tier held a directive job, 6 another loop already
+  runs this job — the pid-file singleton in state/<job>.pid, SPEC-0005) are
+  the operator surface; logs rotate at 1 MiB.
+- One loop instance per job at a time (enforced: exclusive-create pid file
+  in state/, exit 6 for the loser); nothing here mutates guards state
   (config/vault untouched) — the runner only reads its own folder and the
   job workdir's status file.
 

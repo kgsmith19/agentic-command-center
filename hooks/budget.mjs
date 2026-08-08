@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadPolicy, contextOf, startContextOf, applyProfile } from "./usage.mjs";
+import { loadPolicy, contextOf, startContextOf, applyProfile, tierFor, tierWindowTotal } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, directiveForSession } from "./directive.mjs";
 import { resolveRoot } from "./root.mjs";
 
@@ -27,6 +27,8 @@ const DIRECTIVESDIR = path.join(ROOT, "runner", "directives");
 const HEADLESS = process.env.CLAUDE_CODE_RUNNER === "1";
 
 const K = (n) => Math.round(n / 1000) + "k";
+const approaching = (ctx, hardK) =>
+  `[ACC ctx ${K(ctx)}/${hardK}k] Approaching the context budget. Finish the unit of work you are on; do not start new work. Keep detail in scratchpad files, not in context.`;
 
 function readStdin() {
   try {
@@ -79,81 +81,24 @@ const allow = () => process.exit(0);
 // ------------------------------------------------------------- kill switch
 
 // Rolling-7-day tier without re-scanning every project on every hook fire:
-// cached for 10 minutes in state/tier.json.
+// cached for 10 minutes in state/tier.json. The scan itself is usage.mjs's
+// (bucket-cached, effectiveFrom-bounded — tierWindowTotal's comment explains
+// why the window never reaches back past the day the discipline landed), so
+// enforcement, the statusline, and the GUI all read ONE authority instead of
+// the drift-prone copy that used to live here.
 function weekTier(policy) {
-  const red = policy.week.redTokens || 0;
-  const amber = policy.week.amberTokens || 0;
-  if (!red && !amber) return { tier: "green", weekTokens: 0, pct: 0 };
+  if (!(policy.week.redTokens || 0) && !(policy.week.amberTokens || 0)) return { tier: "green", weekTokens: 0, pct: 0 };
   const cacheFile = path.join(STATE, "tier.json");
   const cached = readJson(cacheFile, null);
   if (cached && Date.now() - cached.ts < 6e5) return cached;
-  let weekTokens = 0;
+  let out;
   try {
-    // The rolling window must not reach back past the day the discipline landed.
-    // Without this the tier fires RETROACTIVELY on pre-ACC burn: the measured
-    // baseline week was 2.35B against a 1.8B red line, so arming the switch put
-    // it instantly at 131% of red and would have stopped the runner and blocked
-    // subagents for work that had not happened yet. Reporting (usage.mjs week)
-    // still shows the true rolling 7 days - this bound is for the TIER only.
-    const from = Date.parse(policy.week.effectiveFrom || "") || 0;
-    const since = Math.max(Date.now() - 7 * 864e5, from);
-    weekTokens = scanWeek(since);
+    out = { ...tierFor(tierWindowTotal()), ts: Date.now() };
   } catch {
     return { tier: "green", weekTokens: 0, pct: 0 };
   }
-  const tier = red && weekTokens >= red ? "red" : amber && weekTokens >= amber ? "amber" : "green";
-  const out = { tier, weekTokens, pct: red ? (weekTokens / red) * 100 : 0, ts: Date.now() };
-  try {
-    fs.writeFileSync(cacheFile, JSON.stringify(out));
-  } catch {}
+  try { fs.writeFileSync(cacheFile, JSON.stringify(out)); } catch {}
   return out;
-}
-
-// Minimal week scan (kept here so the hook does not pull the whole report path).
-function scanWeek(since) {
-  const projects = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects");
-  let total = 0;
-  const walk = (dir, depth) => {
-    if (depth > 3) return;
-    let entries = [];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) walk(p, depth + 1);
-      else if (e.name.endsWith(".jsonl")) {
-        let st;
-        try {
-          st = fs.statSync(p);
-        } catch {
-          continue;
-        }
-        if (st.mtimeMs < since) continue;
-        for (const line of fs.readFileSync(p, "utf8").split("\n")) {
-          if (!line || line.charCodeAt(0) !== 123) continue;
-          let o;
-          try {
-            o = JSON.parse(line);
-          } catch {
-            continue;
-          }
-          const u = o.type === "assistant" && o.message && o.message.usage;
-          if (!u) continue;
-          if (o.timestamp && Date.parse(o.timestamp) < since) continue;
-          total +=
-            (u.input_tokens || 0) +
-            (u.cache_creation_input_tokens || 0) +
-            (u.cache_read_input_tokens || 0) +
-            (u.output_tokens || 0);
-        }
-      }
-    }
-  };
-  walk(projects, 0);
-  return total;
 }
 
 function stopRunner(policy) {
@@ -199,7 +144,7 @@ function lastAssistantText(transcript) {
 // the work is finished, so the two exit commands are stated as the last thing in
 // the block, in full, with the id already substituted - there is no id to look
 // up and no ambiguity about what "done" means.
-function directiveContext(p, policy) {
+function directiveContext(p) {
   const directive = bindSession({
     sessionId: p.session_id,
     cwd: p.cwd,
@@ -271,7 +216,7 @@ function onSessionStart(p, policy) {
   // launch and on every fresh runner cycle. Failing here costs auto-resume
   // and nothing else - hooks fail open.
   try {
-    const directive = directiveContext(p, policy);
+    const directive = directiveContext(p);
     if (directive) lines.push(directive);
   } catch {}
 
@@ -297,10 +242,7 @@ function onUserPromptSubmit(p, policy) {
   const ctx = contextOf(p.transcript_path);
   const { softK, hardK } = policy.context;
   if (ctx < softK * 1000) allow();
-  inject(
-    "UserPromptSubmit",
-    `[ACC ctx ${K(ctx)}/${hardK}k] Approaching the context budget. Finish the unit of work you are on; do not start new work. Keep detail in scratchpad files, not in context.`
-  );
+  inject("UserPromptSubmit", approaching(ctx, hardK));
 }
 
 // The continuous watcher. Stop only fires at turn boundaries and
@@ -329,10 +271,7 @@ function onPostToolUse(p, policy) {
       ensureDirs();
       fs.writeFileSync(f, JSON.stringify({ band }));
     } catch {}
-    inject(
-      "PostToolUse",
-      `[ACC ctx ${K(ctx)}/${hardK}k] Approaching the context budget. Finish the unit of work you are on and do not start new work. Keep detail in scratchpad files, not in context.`
-    );
+    inject("PostToolUse", approaching(ctx, hardK));
   }
 
   // Over the ceiling: every tool call, until the session ends. ~40 tokens each

@@ -265,7 +265,6 @@ async function refreshDirectives() {
   } else {
     for (const d of list) {
       const row = document.createElement("div");
-      row.className = "dirRow";
       row.style.margin = "4px 0";
       const title = document.createElement("span");
       title.textContent = `${d.running ? "● running" : "○ idle"}  ${d.id}  — ${String(d.text || "").split("\n")[0].slice(0, 90)}  (${d.cycles || 0} restarts)`;

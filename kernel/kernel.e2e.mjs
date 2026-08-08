@@ -48,7 +48,7 @@ function sandbox() {
 }
 
 // Same contract both scenarios; only writeRoots differs — that IS the deny
-// proof (plan Task 19 step 4).
+// proof.
 function contractFor(sb, writeRoots) {
   const target = path.join(sb.workDir, "target.txt");
   return {
@@ -140,15 +140,15 @@ async function scenario2() {
 // Neither scenario is allowed to leave a mark on the live ACC goal-loop state
 // this kernel effort shares a repo with. A user-level hook firing inside a
 // kernel run would show up here — if it does, this is NOT fixed silently
-// (plan Task 19 step 4): it is ledgered and reported instead.
+//: it is ledgered and reported instead.
 function checkNoPollution(before) {
-  const after = listSafe(path.join(REPO, "runner", "goals"));
+  const after = listSafe(path.join(REPO, "runner", "directives"));
   const pass = JSON.stringify(before) === JSON.stringify(after);
-  report("pollution", "no new file appears under the LIVE runner/goals/ during kernel runs", pass,
+  report("pollution", "no new file appears under the LIVE runner/directives/ during kernel runs", pass,
     `before: ${JSON.stringify(before)}\nafter:  ${JSON.stringify(after)}`);
 }
 
-const liveGoalsBefore = listSafe(path.join(REPO, "runner", "goals"));
+const liveGoalsBefore = listSafe(path.join(REPO, "runner", "directives"));
 await scenario1();
 await scenario2();
 checkNoPollution(liveGoalsBefore);

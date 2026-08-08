@@ -4,7 +4,7 @@ status: active
 created: 2026-08-07
 updated: 2026-08-08
 owner: Kyle Smith
-version: 1.4.0
+version: 1.4.1
 ---
 
 # Agentic Command Center PRD
@@ -237,6 +237,7 @@ Forward plan (the ADR-0004 consolidation program — one Node core, delete the s
 |---|---|---|---|---|
 | 2026-08-07 | 1.0.0 | Initial PRD, written retroactively against the existing system. `OPEN-ISSUES.md` retired in favor of GitHub issues; its two genuinely open entries became issues #11 and #12. | Rearchitect the repo onto an SDD documentation contract and start a simplification pass. | All |
 | 2026-08-07 | 1.1.0 | Added FR-011 (headless directive continuity) and the ADR-0004 forward slice plan (SL-007…SL-012): consolidate onto one Node core, finish the web-GUI migration, retire the keystroke stack and WinForms. | Kyle's rearchitecture directive — fewer files, fewer languages, one mechanism per concern. | FR-011, FR-004, FR-005, §13 |
+| 2026-08-08 | 1.4.1 | Strict leanness pass over every line (Kyle's order): the WinForms-era interactive lane category deleted from `hooks/lane.mjs`+policy (its only caller died with the GUI — `/api/lane/status` loses the `interactive` field, contract updated both repos); `budget.mjs`'s duplicate week scan replaced by usage.mjs's cached authority; dead CLI verbs (`usage context/clears`), dead fixtures, dead policy keys (`promptOptimizer`, `review.localFullSuiteInReview`, `lane.breakerBlocking`), duplicated test helpers, and the kernel e2e's silently-vacuous `runner/goals` pollution check (renamed dir) all fixed. ~700 LOC net deleted across both repos. | Leaner is safer: every deleted line is one an unattended session can no longer trip on. | §13, gui/README.md contract |
 | 2026-08-08 | 1.4.0 | Added SL-014 (SPEC-0006): `--ui-dist`/`ACC_UI_DIST` serves the UI repo's built dist same-origin with resolved-path containment; built-ins stay until parity. | The ACC half of ADR-0006 — the new React UI repo (`agentic-command-center-ui`) needs a same-origin host to keep the loopback/no-CORS security model. | FR-010, FR-012, §13 |
 | 2026-08-08 | 1.3.0 | SPEC-0005 PR-2 (the demolition): keystroke/ConPTY/WinForms stack deleted per ADR-0005 — FR-004, DR-004, CON-004 retired; FR-005/FR-009 ACs reworded to the headless path; NFR-007 re-targeted to runner liveness; UC-001/UC-002, scope 4.1, OOS-006, CON-001, DR-001/DR-003 updated; SL-009/010/011/012 closed; checkpoint board moved to cwd-relative `.acc/BOARD.md`. | The destination (web launch + headless loop, PR-1) was live; keeping two continuity mechanisms violated one-mechanism-per-concern. | FR-004, FR-005, FR-009, NFR-007, NFR-008, DR-003, DR-004, CON-001, CON-004, §4, §5, §13 |
 | 2026-08-08 | 1.2.0 | Added FR-012 (web launch surface) + SL-013, delivered by SPEC-0005 PR-1. ADR-0005 supersedes ADR-0001's deletion-behind-F1 sequencing (Kyle's order); ADR-0006 moves the UI's future to a separate repo (`agentic-command-center-ui`) with ACC as headless core + loopback API. The keystroke-stack demolition (SPEC-0005 PR-2) will retire FR-004's console mechanism and rewrite the affected FR/NFR/DR/CON rows in its own commit. | Kyle's 2026-08-07 restructure order: web launch surface now, keystroke stack deleted now, modern UI in its own repo. | FR-012, §13, ADR-0005, ADR-0006 |
