@@ -7,12 +7,14 @@ updated: 2026-08-07
 owner: Kyle Smith
 traces: [FR-004, UC-002]
 supersedes: none
-superseded_by: none
+superseded_by: ADR-0005 (sequencing clause only)
 ---
 
 # ADR-0001: Retire the ConPTY/keystroke continuity channel in favor of the headless runner
 
 > Condensed from `docs/2026-08-03-acc-adversarial-review.md` (deleted; full text in git history). Raised 2026-08-03; **accepted in direction by Kyle 2026-08-07** ("we need to migrate it to something much much much better as what we are doing is not that great"). Direction is decided; the migration itself is future work with its own spec — nothing has been deleted yet.
+>
+> **Amendment 2026-08-08 (ADR-0005):** the sequencing note below ("deletion happens behind the F1 proof, never ahead of it") is superseded — Kyle ordered deletion ahead of the proof, with the accepted risks recorded in ADR-0005. The migration direction, the mechanism, and the reversal trigger in this ADR all stand; SL-008/F1 re-targets from "gate for deletion" to "prove FR-011 done". The spec this ADR required is `specs/active/SPEC-0005-headless-launch-and-keystroke-retirement.md`.
 
 ## Context
 
