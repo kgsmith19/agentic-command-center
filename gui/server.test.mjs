@@ -719,6 +719,26 @@ test("AC-107: POST /api/directives/status marks done (archives) and paused; refu
   assert.deepEqual(await (await fetch(`${base}/api/directives`)).json(), [], "done must archive out of the live list");
 });
 
+test("AC-114: POST /api/directives/note appends steering text to the log without touching status, and validates first", async () => {
+  resetLaunch();
+  const { j } = await newDirective();
+  for (const body of [
+    { id: "not-an-id", text: "focus here" },
+    { id: `d-ok/../../${j.id}`, text: "focus here" },
+    { id: j.id, text: "" },
+    { id: j.id, text: "   " },
+    { id: j.id, text: "x".repeat(4001) },
+  ]) {
+    assert.equal((await lpost("/api/directives/note", body)).status, 400, JSON.stringify(body).slice(0, 60));
+  }
+  const r = await lpost("/api/directives/note", { id: j.id, text: "focus on the retry path\nignore the flaky one" });
+  assert.equal(r.status, 200);
+  const logRes = await fetch(`${base}/api/directives/log?id=${j.id}`);
+  assert.match(await logRes.text(), /focus on the retry path\nignore the flaky one/);
+  const list = await (await fetch(`${base}/api/directives`)).json();
+  assert.equal(list[0].status, "active", "a note must never change status");
+});
+
 test("AC-108: GET /api/directives/log serves the live log, falls back to done/, bounds the tail, and 400s a traversal-shaped id", async () => {
   resetLaunch();
   const { j } = await newDirective({ text: "log me" });

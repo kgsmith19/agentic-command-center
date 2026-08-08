@@ -436,6 +436,26 @@ export function handler(req, res) {
       send(res, 200, { code: r.code, out: (r.stdout + r.stderr).slice(-2000) });
     });
   }
+  if (route === "/api/directives/note" && req.method === "POST") {
+    return readBody(req, res, async (b) => {
+      if (!validDirectiveId(b.id)) return send(res, 400, { error: "invalid directive id" });
+      const text = typeof b.text === "string" ? b.text.trim() : "";
+      if (!text || text.length > 4000) return send(res, 400, { error: "text must be 1..4000 characters" });
+      // Steer a running directive without restarting it: appended to the
+      // directive's log, so the next SessionStart's logTail() carries it into
+      // the next cycle. Same --text-file path /api/directives (create) uses —
+      // newlines/quotes never touch argv.
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "acc-note-"));
+      try {
+        const tmp = path.join(tmpDir, "note.md");
+        fs.writeFileSync(tmp, text);
+        const r = await nodeExec(directiveScript(), ["log", b.id, "--text-file", tmp]);
+        send(res, 200, { code: r.code, out: (r.stdout + r.stderr).slice(-500) });
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  }
   if (route === "/api/directives/log" && req.method === "GET") {
     const id = new URL(req.url, "http://localhost").searchParams.get("id") || "";
     if (!validDirectiveId(id)) return send(res, 400, { error: "invalid directive id" });

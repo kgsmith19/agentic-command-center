@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, tierFor, tierWindowTotal } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, directiveForSession } from "./directive.mjs";
 import { resolveRoot, readStdinJson } from "./root.mjs";
+import { notify } from "./notify.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, directives) at a
@@ -96,8 +97,14 @@ function stopRunner(policy) {
   if (!policy.runner.stopOnRed) return;
   try {
     const stopDir = path.join(ROOT, "runner", "stop");
+    const stopFile = path.join(stopDir, "slice-runner.stop");
+    // The stop-file's own prior absence IS the "haven't notified for this trip
+    // yet" latch — no separate state needed. `unstop` removes it, so the next
+    // red trip notifies again.
+    const first = !fs.existsSync(stopFile);
     fs.mkdirSync(stopDir, { recursive: true });
-    fs.writeFileSync(path.join(stopDir, "slice-runner.stop"), `red tier ${new Date().toISOString()}\n`);
+    fs.writeFileSync(stopFile, `red tier ${new Date().toISOString()}\n`);
+    if (first) notify("ACC kill switch", "Weekly spend hit the RED line — automated runs stopped.");
   } catch {}
 }
 

@@ -279,6 +279,12 @@ async function refreshDirectives() {
       };
       btn("Mark finished", () => act("done", "finished from the Command Center"));
       btn("Stop restarting", () => act("paused", ""));
+      btn("Guide", async () => {
+        const text = prompt(`Guidance for ${d.id} — picked up on the next resume, no restart needed:`);
+        if (!text || !text.trim()) return;
+        const r = await api("/api/directives/note", { id: d.id, text: text.trim() });
+        showResult($("dirMsg"), r, `${d.id} ← note added`);
+      });
       const pre = document.createElement("pre");
       pre.style.cssText = "display:none;white-space:pre-wrap;background:#f6f6f6;border:1px solid #ddd;padding:8px;max-height:240px;overflow:auto";
       btn("View log", () => toggleLog(d.id, pre));

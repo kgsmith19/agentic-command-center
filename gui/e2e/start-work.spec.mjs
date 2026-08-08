@@ -96,6 +96,17 @@ test("Mark finished archives the directive out of the live list, for real", asyn
   expect(archived).toHaveLength(1);
 });
 
+test("Guide appends a note to the log without touching status or restarting", async ({ page }) => {
+  await go(page, "a guards hook task to steer");
+  const id = liveIds()[0];
+  page.once("dialog", (d) => d.accept("focus on the retry path first, ignore the flaky one"));
+  await page.getByRole("button", { name: "Guide" }).click();
+  await expect(page.locator("#dirMsg")).toContainText("note added");
+  const log = fs.readFileSync(path.join(dirsDir, `${id}.log.md`), "utf8");
+  expect(log).toContain("focus on the retry path first, ignore the flaky one");
+  expect(JSON.parse(fs.readFileSync(path.join(dirsDir, `${id}.json`), "utf8")).status).toBe("active");
+});
+
 test("View log shows the live tail, including lines appended after opening", async ({ page }) => {
   await go(page, "a guards hook task with a log");
   const id = liveIds()[0];
