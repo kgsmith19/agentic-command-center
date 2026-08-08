@@ -4,7 +4,7 @@ status: active
 created: 2026-08-07
 updated: 2026-08-08
 owner: Kyle Smith
-version: 1.4.1
+version: 1.5.0
 ---
 
 # Agentic Command Center PRD
@@ -121,6 +121,8 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | FR-010 | The system must let a human hand off any operation the guard blocks or that needs elevated rights, as a reviewable script the human runs deliberately. | Must | Given a guard-denied edit to protected machinery, when an agent needs it done, then it writes a runbox script instead of failing silently. | UC-001 | done |
 | FR-011 | The system must run a bound directive to completion headless — no console, no keystrokes — resuming across fresh contexts via the directive log, and holding all runs while the week token tier is red. | Must | Given an active directive with a working folder, when the runner is pointed at it, then each run receives the directive context (text, progress log, done/blocked protocol) and the loop ends only when the directive's own status leaves `active` — and given a red week tier, no run starts. | UC-002 | in-progress |
 | FR-012 | The system must let Kyle create, route, launch, watch, and close a headless directive entirely from the web GUI, with at most one runner loop per directive machine-wide. | Must | Given the `/guards` page and a task description, when Kyle presses GO, then a directive exists in the store with the routed (or overridden) folder, a runner loop starts for it, the page shows its live/idle state and log tail, and a second launch of the same directive is refused (HTTP 409 / runner exit 6) while the first loop lives. | UC-001, UC-002 | done |
+| FR-013 | A directive must carry a `tags` array; the routing verdict label is added automatically at creation time; the Command Center list must be filterable by tag. | Should | Given a directive created with task text that routes to `guards`, when the list is viewed, then the directive has at least the `guards` tag; filtering by `guards` shows it and hides unrelated directives. | UC-001 | not-started |
+| FR-014 | A directive must carry a `doneWhen` field (natural language); the directive context injected into each session must include it so the model can self-evaluate completion without Kyle re-explaining the goal. | Should | Given a directive with `doneWhen: "the failing test is green and the PR is merged"`, when a new session starts for that directive, then the injected context includes the `doneWhen` text alongside the directive text and log tail. | UC-002 | not-started |
 
 **Priority values:** `Must` (product does not exist without it), `Should` (product is materially worse without it), `Could` (nice, cut it first), `Won't` (recorded so it is not re-litigated).
 
@@ -235,6 +237,7 @@ Forward plan (the ADR-0004 consolidation program — one Node core, delete the s
 
 | Date | Version | Change | Reason | Affected IDs |
 |---|---|---|---|---|
+| 2026-08-08 | 1.5.0 | Added FR-013 (directive tags + Command Center filtering) and FR-014 (directive `doneWhen` field injected into session context), sourced from issue #17's future-direction clarification. | Thread 2 (better categories) and thread 3 (more autonomy) from Kyle's 2026-08-07 remark, interpreted and scoped in `docs/notes/2026-08-08-future-direction-unpacked.md`. | FR-013, FR-014 |
 | 2026-08-07 | 1.0.0 | Initial PRD, written retroactively against the existing system. `OPEN-ISSUES.md` retired in favor of GitHub issues; its two genuinely open entries became issues #11 and #12. | Rearchitect the repo onto an SDD documentation contract and start a simplification pass. | All |
 | 2026-08-07 | 1.1.0 | Added FR-011 (headless directive continuity) and the ADR-0004 forward slice plan (SL-007…SL-012): consolidate onto one Node core, finish the web-GUI migration, retire the keystroke stack and WinForms. | Kyle's rearchitecture directive — fewer files, fewer languages, one mechanism per concern. | FR-011, FR-004, FR-005, §13 |
 | 2026-08-08 | 1.4.1 | Strict leanness pass over every line (Kyle's order): the WinForms-era interactive lane category deleted from `hooks/lane.mjs`+policy (its only caller died with the GUI — `/api/lane/status` loses the `interactive` field, contract updated both repos); `budget.mjs`'s duplicate week scan replaced by usage.mjs's cached authority; dead CLI verbs (`usage context/clears`), dead fixtures, dead policy keys (`promptOptimizer`, `review.localFullSuiteInReview`, `lane.breakerBlocking`), duplicated test helpers, and the kernel e2e's silently-vacuous `runner/goals` pollution check (renamed dir) all fixed. ~700 LOC net deleted across both repos. | Leaner is safer: every deleted line is one an unattended session can no longer trip on. | §13, gui/README.md contract |
