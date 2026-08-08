@@ -1,4 +1,8 @@
-# Routine product work stays zero-approval. Only the engineering control plane requires owner review.
+# Protect only mechanisms whose weakening could make PR Gate falsely green.
+/package.json @kgsmith19
+/hooks/covgate.mjs @kgsmith19
+
+# Canonical control-plane ownership tail. Keep these final non-comment rules.
 /.github/workflows/ @kgsmith19
 /.github/CODEOWNERS @kgsmith19
 /.agent/ @kgsmith19
