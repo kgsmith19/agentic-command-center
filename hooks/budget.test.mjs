@@ -26,6 +26,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { main as runBudgetMain, weekTier, lastAssistantText, runAsMain } from "./budget.mjs";
+import { applyProfile } from "./usage.mjs";
 // directive.mjs resolves its store from ACC_ROOT/ACC_DIRECTIVES_DIR on every call, not
 // at import time (see hooks/directive.mjs), specifically so a single shared import
 // works across many tests each pointed at their own sandbox -- important here
@@ -119,17 +120,7 @@ function runHookRaw(sb, input, envExtra = {}, argv = []) {
     old[k] = process.env[k];
     process.env[k] = String(v);
   }
-  const base = JSON.parse(fs.readFileSync(sb.policyPath, "utf8"));
-  const profile = String(env.ACC_PROFILE || "").trim();
-  const prof = profile && base.profiles ? base.profiles[profile] : null;
-  const policy = prof
-    ? {
-        ...base,
-        context: { ...base.context, ...(prof.context || {}) },
-        subagents: { ...base.subagents, ...(prof.subagents || {}) },
-        activeProfile: profile,
-      }
-    : base;
+  const policy = applyProfile(JSON.parse(fs.readFileSync(sb.policyPath, "utf8")));
   let out = "";
   let err = "";
   let code = null;
