@@ -11,10 +11,11 @@
 // request, no clearbot — the message tells the human to /clear and names the
 // exact headless resume command instead.
 //
-// The hook process.exit()s on every path, so each case runs it as a child
-// process and asserts on stdout plus the files it leaves in a throwaway
-// ACC_ROOT tree. Policy comes from a sandbox file via ACC_POLICY so live dial
-// edits can never change what these tests mean.
+// Most cases call budget.mjs by direct import (main() + injected IO), so
+// covgate can see coverage in this file. A small subprocess group remains to
+// prove the real wrapper contract end-to-end (stdio + exit code). Policy comes
+// from a sandbox file via ACC_POLICY so live dial edits can never change what
+// these tests mean.
 //
 // Run: node --test hooks/budget.test.mjs
 import { test } from "node:test";
@@ -24,6 +25,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { main as runBudgetMain, weekTier, lastAssistantText, runAsMain } from "./budget.mjs";
 // directive.mjs resolves its store from ACC_ROOT/ACC_DIRECTIVES_DIR on every call, not
 // at import time (see hooks/directive.mjs), specifically so a single shared import
 // works across many tests each pointed at their own sandbox -- important here
@@ -100,7 +102,64 @@ function writeTranscript(sb, sid, ctxTokens) {
   return f;
 }
 
-function runHook(sb, input, envExtra = {}) {
+function runHookRaw(sb, input, envExtra = {}, argv = []) {
+  const env = {
+    ACC_ROOT: sb.root,
+    ACC_POLICY: sb.policyPath,
+    ACC_DIRECTIVES_DIR: "",
+    ACC_PROFILE: "",
+    ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
+    CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
+    CLAUDE_CODE_RUNNER: "",
+    ACC_DIRECTIVE: "",
+    ...envExtra,
+  };
+  const old = {};
+  for (const [k, v] of Object.entries(env)) {
+    old[k] = process.env[k];
+    process.env[k] = String(v);
+  }
+  const base = JSON.parse(fs.readFileSync(sb.policyPath, "utf8"));
+  const profile = String(env.ACC_PROFILE || "").trim();
+  const prof = profile && base.profiles ? base.profiles[profile] : null;
+  const policy = prof
+    ? {
+        ...base,
+        context: { ...base.context, ...(prof.context || {}) },
+        subagents: { ...base.subagents, ...(prof.subagents || {}) },
+        activeProfile: profile,
+      }
+    : base;
+  let out = "";
+  let err = "";
+  let code = null;
+  const io = {
+    out: (s) => { out += s; },
+    err: (s) => { err += s; },
+    exit: (c) => { code = c; throw new Error(`__exit__${c}`); },
+  };
+  try {
+    try {
+      runBudgetMain({ argv, payload: input, io, policy });
+    } catch (e) {
+      if (!String(e && e.message || "").startsWith("__exit__")) throw e;
+    }
+  } finally {
+    for (const k of Object.keys(env)) {
+      if (old[k] === undefined) delete process.env[k];
+      else process.env[k] = old[k];
+    }
+  }
+  return { out, err, code };
+}
+
+function runHook(sb, input, envExtra = {}, argv = []) {
+  const r = runHookRaw(sb, input, envExtra, argv);
+  assert.equal(r.code, 0, r.err || "budget hook did not exit cleanly");
+  return r.out;
+}
+
+function runHookSubprocess(sb, input, envExtra = {}) {
   return execFileSync("node", [HOOK], {
     input: JSON.stringify(input),
     env: {
@@ -123,6 +182,22 @@ function runStop(sb, { sid, transcript, active, profile }) {
   return runHook(
     sb,
     { hook_event_name: "Stop", session_id: sid, transcript_path: transcript, stop_hook_active: !!active, cwd: sb.root },
+    { ACC_PROFILE: profile || "" }
+  );
+}
+
+function runPrompt(sb, { sid, transcript, profile }) {
+  return runHook(
+    sb,
+    { hook_event_name: "UserPromptSubmit", session_id: sid, transcript_path: transcript, cwd: sb.root },
+    { ACC_PROFILE: profile || "" }
+  );
+}
+
+function runPostTool(sb, { sid, transcript, profile }) {
+  return runHook(
+    sb,
+    { hook_event_name: "PostToolUse", session_id: sid, transcript_path: transcript, cwd: sb.root },
     { ACC_PROFILE: profile || "" }
   );
 }
@@ -269,4 +344,196 @@ test("SessionStart without ACC_DIRECTIVE injects the budget lines only — no wi
   assert.match(out, /Context budget: soft 40k, hard 50k/);
   assert.doesNotMatch(out, /clearbot|watcher/i);
   assert.ok(!fs.existsSync(statePath(sb, sid, "window")));
+});
+
+test("SessionStart includes profile framing when active", () => {
+  const sb = sandbox({
+    profiles: { Normal: { subagents: { allow: ["Explore"], maxPerSession: 6 } } },
+  });
+  const sid = "s-profile-start";
+  const out = runSessionStart(sb, sid, { ACC_PROFILE: "Normal" });
+  assert.match(out, /\[ACC\] Profile: Normal/);
+});
+
+test("SessionStart resumed directive includes progress-tail framing", () => {
+  const sb = sandbox();
+  const sid = SID(9);
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_DIRECTIVES_DIR = "";
+  const g = gm.createDirective({ text: "resume me", cwd: sb.root });
+  gm.appendCycle(g.id, { sessionId: sid, ctx: 50000, text: "cycle-1" });
+  const out = runSessionStart(sb, sid, { ACC_DIRECTIVE: g.id });
+  assert.match(out, /RESUMED - this is continuation 2/);
+  assert.match(out, /Progress so far/);
+});
+
+test("UserPromptSubmit warns at or above softK", () => {
+  const sb = sandbox();
+  const sid = "s-prompt-warn";
+  const t = writeTranscript(sb, sid, 40000);
+  const out = runPrompt(sb, { sid, transcript: t });
+  assert.match(out, /Approaching the context budget/);
+});
+
+test("PostToolUse warns once per band and escalates over hardK", () => {
+  const sb = sandbox();
+  const sid = "s-posttool";
+  const under = writeTranscript(sb, sid, 45000);
+  const warn1 = runPostTool(sb, { sid, transcript: under });
+  assert.match(warn1, /Approaching the context budget/);
+  const warn2 = runPostTool(sb, { sid, transcript: under });
+  assert.equal(warn2.trim(), "", "same band is suppressed");
+  const over = writeTranscript(sb, sid, 70000);
+  const out = runPostTool(sb, { sid, transcript: over });
+  assert.match(out, /OVER BUDGET/);
+});
+
+test("headless waiting-guard blocks a waiting stop before checkpoint", () => {
+  const sb = sandbox();
+  const sid = "s-waiting";
+  const t = path.join(sb.root, `${sid}.jsonl`);
+  fs.writeFileSync(
+    t,
+    turn(10000, "I will resume when CI is green") + "\n"
+  );
+  const board = path.join(sb.root, ".acc", "BOARD.md");
+  fs.mkdirSync(path.dirname(board), { recursive: true });
+  fs.writeFileSync(board, "board");
+  fs.writeFileSync(statePath(sb, sid, "start"), JSON.stringify({ mtime: Number.MAX_SAFE_INTEGER, sf: board }));
+  const out = runHook(
+    sb,
+    { hook_event_name: "Stop", session_id: sid, transcript_path: t, stop_hook_active: false, cwd: sb.root },
+    { CLAUDE_CODE_RUNNER: "1" }
+  );
+  assert.match(out, /Nothing re-invokes a headless \(-p\) session/);
+});
+
+test("PreToolUse Agent path enforces allowlist, cap, and red-tier kill switch", () => {
+  const sb = sandbox({
+    week: { amberTokens: 1, redTokens: 2, effectiveFrom: "" },
+    subagents: { mode: "allowlist", allow: ["Explore"], maxPerSession: 1, exploreMaxReportLines: 80 },
+  });
+  fs.mkdirSync(path.join(sb.root, "runner", "state"), { recursive: true });
+  const tierFile = path.join(sb.root, "runner", "state", "tier.json");
+  fs.writeFileSync(tierFile, JSON.stringify({ tier: "green", weekTokens: 0, ts: Date.now() }));
+  const denyPayload = { hook_event_name: "PreToolUse", session_id: "s-agent-deny", tool_name: "Agent", tool_input: { subagent_type: "task" } };
+  const allowPayload = { hook_event_name: "PreToolUse", session_id: "s-agent-cap", tool_name: "Agent", tool_input: { subagent_type: "Explore" } };
+
+  let r = runHookRaw(sb, denyPayload);
+  assert.equal(r.code, 2);
+  assert.match(r.err, /not on the allowlist/);
+
+  r = runHookRaw(sb, allowPayload);
+  assert.equal(r.code, 0);
+  r = runHookRaw(sb, allowPayload);
+  assert.equal(r.code, 2);
+  assert.match(r.err, /Subagent cap reached/);
+
+  fs.writeFileSync(tierFile, JSON.stringify({ tier: "red", weekTokens: 3_000_000, ts: Date.now() }));
+  r = runHookRaw(sb, allowPayload);
+  assert.equal(r.code, 2);
+  assert.match(r.err, /KILL SWITCH/);
+  assert.ok(fs.existsSync(path.join(sb.root, "runner", "stop", "slice-runner.stop")));
+});
+
+test("main CLI fanout/unstop helpers mutate state files", () => {
+  const sb = sandbox();
+  const stopDir = path.join(sb.root, "runner", "stop");
+  fs.mkdirSync(stopDir, { recursive: true });
+  fs.writeFileSync(path.join(stopDir, "slice-runner.stop"), "x");
+  fs.mkdirSync(path.join(sb.root, "runner", "state"), { recursive: true });
+  fs.writeFileSync(path.join(sb.root, "runner", "state", "tier.json"), "{}");
+
+  const fanout = runHookRaw(sb, {}, {}, ["fanout", "5"]);
+  assert.equal(fanout.code, null, "CLI helper returns without exit()");
+  assert.ok(fs.existsSync(path.join(sb.root, "runner", "state", "fanout.json")));
+
+  const unstop = runHookRaw(sb, {}, {}, ["unstop"]);
+  assert.equal(unstop.code, null, "CLI helper returns without exit()");
+  assert.ok(!fs.existsSync(path.join(sb.root, "runner", "stop", "slice-runner.stop")));
+  assert.ok(!fs.existsSync(path.join(sb.root, "runner", "state", "tier.json")));
+});
+
+test("main allow paths: unknown events and non-Agent PreToolUse fall through to allow", () => {
+  const sb = sandbox();
+  const unknown = runHookRaw(sb, { hook_event_name: "SomethingElse", session_id: "s-unknown" });
+  assert.equal(unknown.code, 0);
+  const nonAgent = runHookRaw(sb, { hook_event_name: "PreToolUse", tool_name: "Bash", session_id: "s-nonagent" });
+  assert.equal(nonAgent.code, 0);
+});
+
+test("weekTier populates cache and lastAssistantText tolerates malformed lines", () => {
+  const sb = sandbox({ week: { amberTokens: 1, redTokens: 2, effectiveFrom: "" } });
+  const oldRoot = process.env.ACC_ROOT;
+  process.env.ACC_ROOT = sb.root;
+  try {
+    const tier = weekTier({ week: { amberTokens: 1, redTokens: 2 } });
+    assert.equal(typeof tier.tier, "string");
+    assert.ok(fs.existsSync(path.join(sb.root, "runner", "state", "tier.json")));
+    const transcript = path.join(sb.root, "bad.jsonl");
+    fs.writeFileSync(transcript, "{\"oops\"\n" + turn(10000, "") + "\n");
+    assert.equal(lastAssistantText(transcript), "");
+    const fallback = weekTier(
+      { week: { amberTokens: 1, redTokens: 2 } },
+      { readJson: () => null, tierFor: () => { throw new Error("no scan"); }, tierWindowTotal: () => ({}) }
+    );
+    assert.equal(fallback.tier, "green");
+    const noWrite = weekTier(
+      { week: { amberTokens: 1, redTokens: 2 } },
+      {
+        readJson: () => null,
+        tierFor: () => ({ tier: "amber", weekTokens: 12, pct: 50 }),
+        tierWindowTotal: () => ({}),
+        writeFileSync: () => { throw new Error("disk"); },
+      }
+    );
+    assert.equal(noWrite.tier, "amber");
+  } finally {
+    if (oldRoot === undefined) delete process.env.ACC_ROOT;
+    else process.env.ACC_ROOT = oldRoot;
+  }
+});
+
+test("runAsMain fail-open path logs and exits 0", () => {
+  const sb = sandbox();
+  const oldRoot = process.env.ACC_ROOT;
+  process.env.ACC_ROOT = sb.root;
+  let exited = null;
+  try {
+    runAsMain({
+      run: () => { throw new Error("boom"); },
+      exit: (code) => { exited = code; },
+    });
+    assert.equal(exited, 0);
+    const log = fs.readFileSync(path.join(sb.root, "runner", "logs", "budget-errors.log"), "utf8");
+    assert.match(log, /boom/);
+  } finally {
+    if (oldRoot === undefined) delete process.env.ACC_ROOT;
+    else process.env.ACC_ROOT = oldRoot;
+  }
+});
+
+test("subprocess wrapper still emits Stop block payload end-to-end", () => {
+  const sb = sandbox();
+  const sid = "s-wrapper-stop";
+  const t = writeTranscript(sb, sid, 60000);
+  const out = runHookSubprocess(
+    sb,
+    { hook_event_name: "Stop", session_id: sid, transcript_path: t, stop_hook_active: false, cwd: sb.root }
+  );
+  assert.match(out, /"decision":"block"/);
+});
+
+test("subprocess wrapper still returns exit 2 for denied Agent spawns", () => {
+  const sb = sandbox();
+  assert.throws(
+    () =>
+      runHookSubprocess(sb, {
+        hook_event_name: "PreToolUse",
+        session_id: "s-wrapper-pretool",
+        tool_name: "Agent",
+        tool_input: { subagent_type: "task" },
+      }),
+    /Subagent type "task" is not on the allowlist/
+  );
 });
