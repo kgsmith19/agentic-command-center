@@ -23,6 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveRoot, isMainModule } from "./root.mjs";
+import { notify } from "./notify.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -260,6 +261,7 @@ export function setStatus(id, status, why) {
     try {
       fs.appendFileSync(logPath(id), `\n### ${status.toUpperCase()} - ${nowIso()}\n${why || ""}\n`);
     } catch {}
+    notify(`ACC directive ${status}`, `${id}: ${(directive.text || "").slice(0, 120)}`);
     // Archive so the live directory only ever holds work in flight.
     try {
       ensureDirs();
@@ -321,7 +323,11 @@ export function main() {
   }
   if (cmd === "log") {
     const id = resolveId(argv);
-    const text = arg(argv, "--text") || argv.slice(1).filter((a) => !/^d-/.test(a)).join(" ");
+    // --text-file exists so the web guidance box (gui/server.mjs
+    // /api/directives/note) can append multi-line text the same safe way
+    // `new` already does — textFromArgs handles both --text-file and --text;
+    // the positional-words fallback stays for a human typing at a prompt.
+    const text = textFromArgs(argv) || argv.slice(1).filter((a) => !/^d-/.test(a)).join(" ");
     const g = readDirective(id);
     if (!g) return console.log("no active directive");
     try {

@@ -276,6 +276,14 @@ test("CLI: main() 'log' appends via --text or trailing positional words, and ref
   assert.match(m.logTail(g.id, 10000), /trailing positional words/);
 });
 
+test("CLI: main() 'log' also accepts --text-file, the same multi-line-safe path 'new' uses (web guidance box)", () => {
+  const g = m.createDirective({ text: "t" });
+  const f = path.join(DIRECTIVES_DIR, "note.txt");
+  fs.writeFileSync(f, "focus on the retry path first\nignore the flaky one for now", "utf8");
+  runMain(["log", g.id, "--text-file", f]);
+  assert.match(m.logTail(g.id, 10000), /focus on the retry path first\nignore the flaky one for now/);
+});
+
 test("CLI: main() 'done'/'blocked'/'paused' set status via resolveId, and refuse without a resolvable id", () => {
   assert.equal(runMain(["done"]), "no active directive (pass the id)");
 
