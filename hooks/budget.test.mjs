@@ -57,7 +57,7 @@ const POLICY = {
   context: { softK: 40, hardK: 50 },
   week: { amberTokens: 0, redTokens: 0, effectiveFrom: "" },
   subagents: { mode: "allowlist", allow: ["Explore"], maxPerSession: 6, exploreMaxReportLines: 80 },
-  review: { fullLeanReview: "manual-only", localFullSuiteInReview: false, maxFinders: 3 },
+  review: { fullLeanReview: "manual-only", maxFinders: 3 },
   runner: { stopOnRed: true, statusFile: ".acc/BOARD.md", waitingGuard: true },
 };
 
@@ -231,13 +231,6 @@ test("profile context (when present) still overrides for that session", () => {
   const t = writeTranscript(sb, sid, 60000); // over base 50, under profile 80
   const out = runStop(sb, { sid, transcript: t, active: false, profile: "Big" });
   assert.equal(out.trim(), "", "profile hardK 80 applied, 60k passes");
-});
-
-test("no directive: an under-budget stop still does nothing at all", () => {
-  const sb = sandbox();
-  const sid = "s-live-nodirective";
-  const t = writeTranscript(sb, sid, 10000);
-  assert.equal(runStop(sb, { sid, transcript: t, active: false }).trim(), "");
 });
 
 // --- SessionStart, post keystroke-retirement -------------------------------

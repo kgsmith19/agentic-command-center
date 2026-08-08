@@ -203,11 +203,11 @@ test("a tightened autonomy factor shrinks the per-fire ceiling to EXACTLY effect
   assert.equal(rows.at(-1).autonomyFactor, 0.5, "…and the factor that produced it");
 });
 
-test("absent autonomy state means base ceiling, corrupt autonomy state fails closed", () => {
-  stage(); // no autonomy file
+test("corrupt autonomy state fails closed", () => {
+  // (The absent-state half this test once carried duplicated the sequential
+  // tool-call-ceiling test above — beforeEach(stage) guarantees no autonomy
+  // file there either.)
   const read = () => fire({ tool_name: "Read", tool_input: { file_path: path.join(BASE, "work", "a.txt") } });
-  for (let i = 0; i < 3; i++) assert.equal(read().code, 0); // contract.budget.toolCalls = 3
-  assert.equal(read().code, 2);
   stage();
   fs.mkdirSync(path.dirname(L.autonomyFile()), { recursive: true });
   fs.writeFileSync(L.autonomyFile(), "{ not json");

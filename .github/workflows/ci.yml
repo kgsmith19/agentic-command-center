@@ -128,7 +128,7 @@ jobs:
         run: Remove-Item -Recurse -Force -ErrorAction SilentlyContinue 'C:\code'
 
   gui-e2e:
-    name: GUI e2e (Playwright, kernel settings)
+    name: GUI e2e (Playwright)
     runs-on: ubuntu-latest
     # No `needs` — parallel with the other jobs, same doctrine as
     # windows-integration. Fully sandboxed: playwright.config.mjs points

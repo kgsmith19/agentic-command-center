@@ -31,8 +31,7 @@ const BASE_POLICY = {
   context: { softK: 40, hardK: 50 },
   week: { amberTokens: 0, redTokens: 0, effectiveFrom: "" },
   subagents: { mode: "allowlist", allow: ["Explore"], maxPerSession: 6, exploreMaxReportLines: 80 },
-  review: { fullLeanReview: "manual-only", localFullSuiteInReview: false, maxFinders: 3 },
-};
+  };
 
 function sandbox(policy) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "acc-statusline-"));

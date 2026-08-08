@@ -68,10 +68,9 @@ export async function startTask({
       detached: process.platform !== "win32", // see killTree
       env: {
         ...process.env, ...env,
-        // Must not leak into the harness: ACC_PTY would make it masquerade as
-        // the embedded terminal session, and NODE_V8_COVERAGE left behind by a
-        // coverage run corrupts the report when the child is killed mid-write.
-        ACC_PTY: "", NODE_V8_COVERAGE: undefined,
+        // NODE_V8_COVERAGE must not leak into the harness: left behind by a
+        // coverage run it corrupts the report when the child is killed mid-write.
+        NODE_V8_COVERAGE: undefined,
         CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0",
       },
     };
@@ -135,7 +134,6 @@ export function readState(events) {
   let toolCalls = 0;
   let tokens = 0;
   let sessionId = null;
-  const texts = [];
   for (const e of events || []) {
     if (!e || typeof e !== "object") continue;
     if (e.session_id) sessionId = e.session_id;
@@ -148,7 +146,6 @@ export function readState(events) {
     for (const block of e.message.content || []) {
       if (!block || typeof block !== "object") continue;
       if (block.type === "tool_use") toolCalls++;
-      else if (block.type === "text") texts.push(block.text);
     }
     const u = e.message.usage;
     if (u) {
@@ -156,7 +153,7 @@ export function readState(events) {
         (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     }
   }
-  return { toolCalls, tokens, texts, sessionId };
+  return { toolCalls, tokens, sessionId };
 }
 
 // Continue the SAME harness session with more input. v1's orchestrator runs

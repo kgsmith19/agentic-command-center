@@ -18,7 +18,7 @@ here; any route change lands in the same commit as its edit to this file.
 ## Security model (all routes)
 
 - Binds `127.0.0.1` only. `Host` must be local, `Origin` absent or local — otherwise 403.
-- Every mutating (POST) route additionally demands the header `X-ACC: 1` (unsettable cross-origin without a CORS grant this server never issues). No CORS header ever leaves.
+- Every POST demands the header `X-ACC: 1`, enforced once globally in the handler (unsettable cross-origin without a CORS grant this server never issues) — an unknown POST without it is 403, not 404. No CORS header ever leaves.
 - Bodies are JSON, capped at 64 KiB (over-cap connections are destroyed unparsed).
 - The server holds zero business logic: it shells the real owners (`hooks/engine.mjs`, `hooks/budget.mjs`, `hooks/usage.mjs`, `hooks/route.mjs`, `hooks/directive.mjs`, `hooks/lane.mjs`, `runner/runner.mjs`, `kernel/policy.mjs`) via `execFile` — never a shell, never a browser string as a path or flag.
 - Directive ids match `/^d-[A-Za-z0-9_-]{1,38}$/` and are validated **before** any path is built from one.
@@ -54,9 +54,9 @@ non-zero engine exit is a result, not a transport error.
 ### Spending / process (SPEC-0004)
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/process/status` | — | `{tier, weekText, dials{softK,hardK,amberTokens,redTokens,maxFinders,allow[],autoApprove}, profiles[], stopped, cleanupKilled}` |
+| GET | `/api/process/status` | — | `{tier, weekText, dials{softK,hardK,amberTokens,redTokens,maxFinders,allow[]}, profiles[], stopped}` |
 | POST | `/api/process/dials` | all dials, validated | `{ok}`; bad dial → 400, policy.json byte-untouched; unowned policy blocks always preserved |
-| POST | `/api/process/control` | `{action}` ∈ stop/resume/fanout/cleanup-on/cleanup-off, or `{action:"clear-now", confirm:true}` | `{ok...}` or `{code, out}` |
+| POST | `/api/process/control` | `{action}` ∈ stop/resume/fanout | `{ok...}` or `{code, out}` |
 
 ### Launch / directives (SPEC-0005)
 | Method | Path | Body / query | Returns |
@@ -66,7 +66,7 @@ non-zero engine exit is a result, not a transport error.
 | POST | `/api/directives` | `{text 1..32768, cwd absolute+existing, profile ∈ policy profiles or ""}` | the created directive JSON; text travels via a temp file so newlines survive byte-exact |
 | POST | `/api/directives/status` | `{id, status ∈ done\|paused, why? single-line ≤500}` | `{code, out}`; `done` archives the directive |
 | GET | `/api/directives/log?id=` | — | `text/plain` tail (last 16 KiB), falling back to the `done/` archive; bad id shape → 400, unknown id → 404 |
-| GET | `/api/lane/status` | — | `{automation: [slots...], interactive: [slots...], breaker: {tripped, count, ...}}` |
+| GET | `/api/lane/status` | — | `{automation: [slots...], breaker: {tripped, count, ...}}` |
 | POST | `/api/launch` | `{id}` | `{ok, pid}`; 409 while a live runner loop holds the directive (the runner's own pid-file singleton is the real invariant — exit 6) |
 
 ## Env seams (tests / sandboxing)

@@ -207,20 +207,19 @@ test("readState counts real tool calls and tokens from the stream (AC-A6)", () =
   assert.equal(s.toolCalls, 3);
   assert.equal(s.tokens, 24);
   assert.equal(s.sessionId, "sid-9");
-  assert.deepEqual(s.texts, ["working"]);
 });
 
 test("readState carries NO verdict field — the harness cannot report its own pass (AC-A6, AC-V5)", () => {
   const s = A.readState(STREAM);
-  assert.deepEqual(Object.keys(s).sort(), ["sessionId", "texts", "tokens", "toolCalls"]);
+  assert.deepEqual(Object.keys(s).sort(), ["sessionId", "tokens", "toolCalls"]);
   assert.equal(JSON.stringify(s).includes("all tests pass"), false,
     "the harness's own success claim must not survive into kernel state");
 });
 
 test("readState tolerates an empty or malformed stream", () => {
-  assert.deepEqual(A.readState([]), { toolCalls: 0, tokens: 0, texts: [], sessionId: null });
+  assert.deepEqual(A.readState([]), { toolCalls: 0, tokens: 0, sessionId: null });
   assert.equal(A.readState([{ type: "assistant" }, null]).toolCalls, 0);
-  assert.deepEqual(A.readState(undefined), { toolCalls: 0, tokens: 0, texts: [], sessionId: null });
+  assert.deepEqual(A.readState(undefined), { toolCalls: 0, tokens: 0, sessionId: null });
 });
 
 test("OI-019: readState tolerates a malformed (null or non-object) content block instead of crashing (AC-A6 fault tolerance)", () => {
@@ -236,7 +235,6 @@ test("OI-019: readState tolerates a malformed (null or non-object) content block
     null, "not an object", 42, { type: "text", text: "hi" }, { type: "tool_use", name: "Read", input: {} },
   ] } }]);
   assert.equal(s.toolCalls, 1);
-  assert.deepEqual(s.texts, ["hi"]);
 });
 
 test("readState tolerates an assistant message with no content array and full usage fields", () => {

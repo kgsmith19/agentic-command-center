@@ -31,17 +31,12 @@ beforeEach(() => {
   fs.mkdirSync(DIRECTIVES_DIR, { recursive: true });
 });
 
-async function loadDirective() {
-  return { m, dir: DIRECTIVES_DIR };
-}
-
 // Real Claude Code session ids are always UUIDs (OI-006's bindSession guard
 // rejects anything else as a rebind source), so every id used to exercise
 // the rebind/adoption path below must actually look like one.
 const SID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 test("a directive survives as a file and starts unbound", async () => {
-  const { m } = await loadDirective();
   const g = m.createDirective({ text: "ship the thing", cwd: "C:/code", profile: "Normal" });
   assert.match(g.id, /^d-\d{8}-/);
   assert.equal(g.status, "active");
@@ -50,23 +45,20 @@ test("a directive survives as a file and starts unbound", async () => {
 });
 
 test("multi-line directive text round-trips intact (OI-004: text never becomes keystrokes)", async () => {
-  const { m } = await loadDirective();
   const text = "line one\nline two\n\n- a bullet\n- another";
   const g = m.createDirective({ text });
   assert.equal(m.readDirective(g.id).text, text);
 });
 
 test("--text-file carries a multi-line directive the command line could not (GUI path)", async () => {
-  const { m, dir } = await loadDirective();
   const text = "rebuild the screen\n\n- keep the tabs\n- one green button\n";
-  const f = path.join(dir, "directive.txt");
+  const f = path.join(DIRECTIVES_DIR, "directive.txt");
   fs.writeFileSync(f, "﻿" + text, "utf8"); // PowerShell writes a BOM; it must not survive
   assert.equal(m.textFromArgs(["new", "--text-file", f]), text);
   assert.equal(m.textFromArgs(["new", "--text", "typed"]), "typed");
 });
 
 test("binding by ACC_DIRECTIVE records the session; re-binding the same session is inert", async () => {
-  const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
   const b1 = m.bindSession({ sessionId: SID(1), directiveId: g.id });
   assert.equal(b1.sessionId, SID(1));
@@ -75,7 +67,6 @@ test("binding by ACC_DIRECTIVE records the session; re-binding the same session 
 });
 
 test("a finished directive is never adopted", async () => {
-  const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
   m.bindSession({ sessionId: SID(1), directiveId: g.id });
   m.setStatus(g.id, "done");
@@ -83,7 +74,6 @@ test("a finished directive is never adopted", async () => {
 });
 
 test("cycles append to the log and the tail is bounded", async () => {
-  const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
   m.appendCycle(g.id, { sessionId: "s1", ctx: 152000, text: "did the first half" });
   const after = m.appendCycle(g.id, { sessionId: "s2", ctx: 151000, text: "x".repeat(9000) });
@@ -97,16 +87,14 @@ test("cycles append to the log and the tail is bounded", async () => {
 });
 
 test("a done directive is archived out of the live directory", async () => {
-  const { m, dir } = await loadDirective();
   const g = m.createDirective({ text: "t" });
   m.setStatus(g.id, "done", "shipped");
   assert.equal(m.listDirectives().length, 0, "live dir holds only work in flight");
-  assert.ok(fs.existsSync(path.join(dir, "done", `${g.id}.json`)));
-  assert.match(fs.readFileSync(path.join(dir, "done", `${g.id}.log.md`), "utf8"), /DONE/);
+  assert.ok(fs.existsSync(path.join(DIRECTIVES_DIR, "done", `${g.id}.json`)));
+  assert.match(fs.readFileSync(path.join(DIRECTIVES_DIR, "done", `${g.id}.log.md`), "utf8"), /DONE/);
 });
 
 test("directive ids cannot escape the directives directory", async () => {
-  const { m } = await loadDirective();
   assert.equal(m.readDirective("../../../etc/passwd"), null);
   assert.equal(m.setStatus("..\\..\\evil", "done"), null);
 });
@@ -197,7 +185,6 @@ test("CLI: main() 'log' swallows a log-write failure instead of throwing", () =>
 // --- OI-006: a hand-run SessionStart cannot hijack a live directive's binding ---
 
 test("OI-006: a non-UUID sessionId cannot steal an active directive's session binding", async () => {
-  const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
   m.bindSession({ sessionId: SID(30), directiveId: g.id });
   const before = m.readDirective(g.id);
@@ -210,7 +197,6 @@ test("OI-006: a non-UUID sessionId cannot steal an active directive's session bi
 });
 
 test("OI-006: a real UUID sessionId still rebinds normally (the headless-resume path)", async () => {
-  const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
   m.bindSession({ sessionId: SID(31), directiveId: g.id });
 
@@ -310,47 +296,23 @@ test("CLI: main() prints usage for an unrecognized command", () => {
   assert.match(runMain(["frobnicate"]), /^usage: directive\.mjs/);
 });
 
-test("a directive persists correctly after its directory is moved to a new location", async () => {
-  const { m, dir } = await loadDirective();
-
-  // Create a directive in the original directory
+test("a directive persists after its directory moves — directivesDir() resolves per call, never at import", async () => {
   const g = m.createDirective({ text: "portable directive", cwd: "C:/code" });
-  const originalDirectiveJson = m.readDirective(g.id);
-  assert.ok(originalDirectiveJson);
-  assert.equal(originalDirectiveJson.text, "portable directive");
-
-  // Move the entire directives directory to a new location
-  const newDir = fs.mkdtempSync(path.join(os.tmpdir(), "acc-directive-moved-"));
+  const moved = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "acc-directive-moved-")), "store");
+  fs.cpSync(DIRECTIVES_DIR, moved, { recursive: true });
+  const saved = process.env.ACC_DIRECTIVES_DIR;
   try {
-    // Copy the original directory contents
-    const moveDir = path.join(newDir, "moved-directives");
-    fs.cpSync(dir, moveDir, { recursive: true });
-
-    // Update the environment to point to the new location
-    const savedDirectivesDir = process.env.ACC_DIRECTIVES_DIR;
-    process.env.ACC_DIRECTIVES_DIR = moveDir;
-
-    // Verify the directive can still be read from the new location
-    // directivesDir() resolves from the environment variable on every call
-    const movedDirectiveJson = m.readDirective(g.id);
-    assert.ok(movedDirectiveJson, "directive can be read from moved directory");
-    assert.equal(movedDirectiveJson.text, "portable directive");
-    assert.equal(movedDirectiveJson.id, g.id);
-
-    // Verify listDirectives also finds it in the new location
-    const listedDirectives = m.listDirectives();
-    assert.ok(listedDirectives.some(directive => directive.id === g.id), "directive appears in list after directory move");
-
-    // Restore the original directory reference
-    process.env.ACC_DIRECTIVES_DIR = savedDirectivesDir;
+    process.env.ACC_DIRECTIVES_DIR = moved;
+    assert.equal(m.readDirective(g.id).text, "portable directive");
+    assert.ok(m.listDirectives().some((d) => d.id === g.id));
   } finally {
-    fs.rmSync(newDir, { recursive: true, force: true });
+    process.env.ACC_DIRECTIVES_DIR = saved;
+    fs.rmSync(path.dirname(moved), { recursive: true, force: true });
   }
 });
 
 // ------------------------------------------------------------- SPEC-0001 (headless runner wiring)
 test("lastCycleBody returns the last cycle's BODY only — headers/timestamps/session lines never leak in", async () => {
-  const { m } = await loadDirective();
   const d = m.createDirective({ text: "t", cwd: "/w" });
   assert.equal(m.lastCycleBody(d.id), "", "no log yet is empty, not a throw");
   m.appendCycle(d.id, { sessionId: "s-1", ctx: 123000, text: "first summary" });

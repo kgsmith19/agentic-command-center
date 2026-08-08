@@ -67,6 +67,7 @@ const budgetPath = () => process.env.ACC_BUDGET || path.join(HERE, "..", "hooks"
 const usagePath = () => process.env.ACC_USAGE || path.join(HERE, "..", "hooks", "usage.mjs");
 const repoRoot = () => (process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.join(HERE, ".."));
 const policyFile = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
+const readPolicyJson = () => JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^\uFEFF/, ""));
 const sliceStopFile = () => path.join(repoRoot(), "runner", "stop", "slice-runner.stop");
 
 // --- launch surface (SPEC-0005, FR-012): the web Start-work tab -----------
@@ -223,6 +224,10 @@ function send(res, code, body, type = "application/json") {
 export function handler(req, res) {
   if (!localHost(req.headers.host)) return send(res, 403, { error: "non-local Host" });
   if (!localOrigin(req.headers.origin)) return send(res, 403, { error: "non-local Origin" });
+  // Every mutating route demands the custom header (unsettable cross-origin
+  // without a CORS grant this server never issues) — enforced ONCE here so a
+  // future route cannot forget it. Non-POST methods carry no mutation.
+  if (req.method === "POST" && req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
   const route = req.url.split("?")[0];
   // With a dist configured, it owns "/" and every non-API, non-built-in GET;
   // /guards and /kernel.html keep serving the built-ins (ADR-0006).
@@ -239,8 +244,7 @@ export function handler(req, res) {
       catch (e) { return send(res, 500, { error: e.message }); }
     }
     if (req.method === "POST") {
-      if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
-      return readBody(req, res, (block) => {
+        return readBody(req, res, (block) => {
         try { return send(res, 200, { ok: true, kernel: saveKernelPolicy(block) }); }
         catch (e) { return send(res, 400, { error: e.message }); }
       });
@@ -257,7 +261,6 @@ export function handler(req, res) {
       .catch((e) => send(res, 500, { error: e.message }));
   }
   if (route === "/api/guards/engine" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       // Object.hasOwn, not bare property access: a prototype-key verb
       // ("__proto__", "toString") would otherwise resolve to an Object
@@ -273,7 +276,6 @@ export function handler(req, res) {
     });
   }
   if (route === "/api/guards/vault-import" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       const pairs = Array.isArray(b.pairs) ? b.pairs : null;
       if (!pairs || !pairs.length) return send(res, 400, { error: "pairs must be a non-empty array" });
@@ -295,7 +297,6 @@ export function handler(req, res) {
     });
   }
   if (route === "/api/guards/vault-rm" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       if (!validVaultKey(b.key)) return send(res, 400, { error: `invalid vault key: ${JSON.stringify(b.key)}` });
       const r = await engineExec(["vault-rm", b.key]);
@@ -303,7 +304,6 @@ export function handler(req, res) {
     });
   }
   if (route === "/api/guards/preview" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       // AC-006: the ref resolves ONLY through the engine's own list — a
       // browser string never becomes a filesystem path by itself.
@@ -328,7 +328,7 @@ export function handler(req, res) {
       let dials = null;
       let profiles = [];
       try {
-        const p = JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^﻿/, ""));
+        const p = readPolicyJson();
         dials = {
           softK: p.context?.softK, hardK: p.context?.hardK,
           amberTokens: p.week?.amberTokens, redTokens: p.week?.redTokens,
@@ -343,10 +343,9 @@ export function handler(req, res) {
     })();
   }
   if (route === "/api/process/dials" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, (b) => {
       let policy, merged;
-      try { policy = JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^﻿/, "")); }
+      try { policy = readPolicyJson(); }
       catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
       try { merged = mergeDials(policy, b); }
       catch (e) { return send(res, 400, { error: e.message }); } // bad dial -> file untouched
@@ -359,7 +358,6 @@ export function handler(req, res) {
     });
   }
   if (route === "/api/route/suggest" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       // Whitespace collapses to single spaces before the length check: the
       // text becomes one argv token, so newlines/tabs must never reach it.
@@ -379,7 +377,6 @@ export function handler(req, res) {
     })();
   }
   if (route === "/api/directives" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       const text = typeof b.text === "string" ? b.text : "";
       if (!text.trim() || text.length > 32768) return send(res, 400, { error: "text must be 1..32768 characters" });
@@ -390,7 +387,7 @@ export function handler(req, res) {
         return send(res, 400, { error: "cwd must be an absolute path that exists (a headless run needs one)" });
       }
       let profiles;
-      try { profiles = profileNames(JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^﻿/, ""))); }
+      try { profiles = profileNames(readPolicyJson()); }
       catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
       const profile = b.profile === undefined || b.profile === "" ? "" : b.profile;
       if (profile !== "" && !profiles.includes(profile)) return send(res, 400, { error: `unknown profile ${JSON.stringify(b.profile)}` });
@@ -413,7 +410,6 @@ export function handler(req, res) {
     });
   }
   if (route === "/api/directives/status" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       if (!validDirectiveId(b.id)) return send(res, 400, { error: "invalid directive id" });
       // done and paused are the two human verdicts this page offers; blocked/
@@ -448,7 +444,6 @@ export function handler(req, res) {
     })();
   }
   if (route === "/api/launch" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, (b) => {
       if (!validDirectiveId(b.id)) return send(res, 400, { error: "invalid directive id" });
       // UX pre-check only — the runner's own pid-file singleton (exit 6) owns
@@ -462,7 +457,6 @@ export function handler(req, res) {
     });
   }
   if (route === "/api/process/control" && req.method === "POST") {
-    if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
       const thunk = typeof b.action === "string" ? controlAction(b.action) : null;
       if (!thunk) return send(res, 400, { error: `action "${b.action}" is not allowed here` });
