@@ -822,6 +822,83 @@ test("AC-112: /api/process/status now names the launchable profiles (private key
   resetPolicy();
 });
 
+// ------------------------------------------------------------- --ui-dist static serving (SPEC-0006, ADR-0006)
+// The FIRST request-derived filesystem path in this server, so the traversal
+// cases are the point: a request path must never resolve outside the dist
+// root, raw or URL-encoded. Built-ins stay reachable at /guards and
+// /kernel.html; /api/* is never shadowed; unknown paths fall back to
+// index.html (SPA client routing).
+const DIST = path.join(BASE, "dist");
+fs.mkdirSync(path.join(DIST, "assets"), { recursive: true });
+fs.writeFileSync(path.join(DIST, "index.html"), "<!doctype html><title>ACC-UI-DIST</title>");
+fs.writeFileSync(path.join(DIST, "assets", "app.js"), "console.log('ui')");
+fs.writeFileSync(path.join(BASE, "outside-secret.txt"), "NEVER-SERVED");
+
+test("ui-dist: / serves the dist index, assets get their content type, unknown paths fall back to index (SPA)", async () => {
+  process.env.ACC_UI_DIST = DIST;
+  try {
+    const home = await fetch(`${base}/`);
+    assert.equal(home.status, 200);
+    assert.match(await home.text(), /ACC-UI-DIST/);
+    const js = await fetch(`${base}/assets/app.js`);
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get("content-type"), /javascript/);
+    const spa = await fetch(`${base}/spending`);
+    assert.equal(spa.status, 200);
+    assert.match(await spa.text(), /ACC-UI-DIST/, "client-routed paths must serve the SPA shell");
+  } finally { delete process.env.ACC_UI_DIST; }
+});
+
+test("ui-dist: built-ins stay at /guards and /kernel.html, and /api/* is never shadowed", async () => {
+  process.env.ACC_UI_DIST = DIST;
+  try {
+    assert.match(await (await fetch(`${base}/guards`)).text(), /id="toggle"/);
+    assert.match(await (await fetch(`${base}/kernel.html`)).text(), /id="toolCalls"/);
+    assert.equal((await fetch(`${base}/api/kernel-policy`)).status, 200);
+  } finally { delete process.env.ACC_UI_DIST; }
+});
+
+test("ui-dist: traversal never escapes the dist root — raw, encoded, or backslash shapes", async () => {
+  process.env.ACC_UI_DIST = DIST;
+  try {
+    for (const p of ["/../outside-secret.txt", "/..%2Foutside-secret.txt", "/%2e%2e/outside-secret.txt", "/assets/../../outside-secret.txt", "/..\\outside-secret.txt"]) {
+      const r = await fetch(`${base}${p}`);
+      const body = await r.text();
+      assert.ok(!body.includes("NEVER-SERVED"), `path ${JSON.stringify(p)} escaped the dist root`);
+    }
+  } finally { delete process.env.ACC_UI_DIST; }
+});
+
+test("ui-dist: an unknown extension serves as octet-stream, and the --ui-dist CLI flag wires the env", async () => {
+  fs.writeFileSync(path.join(DIST, "assets", "data.bin"), "blob");
+  process.env.ACC_UI_DIST = DIST;
+  try {
+    const r = await fetch(`${base}/assets/data.bin`);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get("content-type"), /octet-stream/);
+  } finally { delete process.env.ACC_UI_DIST; }
+  const s = await cli(["node", "server.mjs", "--port", "0", "--ui-dist", DIST]);
+  try {
+    assert.equal(process.env.ACC_UI_DIST, DIST, "the flag must set the env the handler reads");
+    assert.match(await (await fetch(`http://127.0.0.1:${s.port}/`)).text(), /ACC-UI-DIST/);
+  } finally { s.server.close(); delete process.env.ACC_UI_DIST; }
+});
+
+test("ui-dist: a dist with no index.html surfaces a 500, never a crash or an empty 200", async () => {
+  const emptyDist = path.join(BASE, "empty-dist");
+  fs.mkdirSync(emptyDist, { recursive: true });
+  process.env.ACC_UI_DIST = emptyDist;
+  try {
+    const r = await fetch(`${base}/`);
+    assert.equal(r.status, 500);
+  } finally { delete process.env.ACC_UI_DIST; }
+});
+
+test("ui-dist: unset means the old behavior exactly (/ is the kernel page)", async () => {
+  delete process.env.ACC_UI_DIST;
+  assert.match(await (await fetch(`${base}/`)).text(), /id="toolCalls"/);
+});
+
 test("AC-113: every launch mutation demands X-ACC and local Origin", async () => {
   resetLaunch();
   const cwd = fs.mkdtempSync(path.join(LAUNCH_DIR, "work-"));

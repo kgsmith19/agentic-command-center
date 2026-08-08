@@ -4,6 +4,13 @@
 on `http://127.0.0.1:43117`. Pages: `/` and `/kernel.html` (kernel settings),
 `/guards` (guards, vault, runbox, spending, start-work). Loopback only.
 
+**External UI (ADR-0006, SPEC-0006):** add `--ui-dist <path>` (or `ACC_UI_DIST`)
+pointing at the `agentic-command-center-ui` repo's built `dist/` and `/` plus
+every non-API GET serve that app same-origin (SPA fallback to its index;
+resolved-path containment, no URL decoding — traversal shapes cannot escape
+the dist). The built-in pages stay at `/guards` and `/kernel.html` until the
+ADR-0006 parity criterion retires them.
+
 **This file is the API contract.** The external UI repo
 (`agentic-command-center-ui`, ADR-0006) builds against exactly what is written
 here; any route change lands in the same commit as its edit to this file.
