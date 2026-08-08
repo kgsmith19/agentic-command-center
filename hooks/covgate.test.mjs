@@ -29,6 +29,16 @@ const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-covgate-test-"));
 
 after(() => fs.rmSync(BASE, { recursive: true, force: true }));
 
+// Shared by every fixture below that needs a real git repo with one empty
+// root commit (the ones that instead build up their own history do not use
+// this). `repo` must already exist (the caller's mkdirSync).
+function gitRootCommit(repo) {
+  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
+  g("init", "-q");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  return g;
+}
+
 test("floors() falls back to defaults (100/100/90) when ACC_POLICY is unset, unreadable, or numbers are junk", () => {
   const saved = process.env.ACC_POLICY;
   delete process.env.ACC_POLICY; // lazy POLICY() re-reads per call — reads the real guards/policy.json, read-only
@@ -150,9 +160,7 @@ test("parseLcov computes line, function and branch coverage per file", () => {
 function fixture(name, { covered }) {
   const repo = path.join(BASE, name);
   fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
-  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
-  g("init", "-q");
-  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  const g = gitRootCommit(repo);
   fs.writeFileSync(
     path.join(repo, "hooks", "lib.mjs"),
     "export function add(a, b) { return a + b; }\nexport function sub(a, b) { return a - b; }\n"
@@ -200,9 +208,7 @@ test("end-to-end: not a git repo at all fails closed, naming why", () => {
 test("end-to-end: default discovery tolerates a missing sibling dir (only hooks/ exists)", () => {
   const repo = path.join(BASE, "onedir");
   fs.mkdirSync(path.join(repo, "hooks"), { recursive: true }); // no runner/ dir at all
-  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
-  g("init", "-q");
-  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  const g = gitRootCommit(repo);
   fs.writeFileSync(path.join(repo, "hooks", "solo.mjs"), "export const solo = () => 1;\n");
   fs.writeFileSync(
     path.join(repo, "hooks", "solo.test.mjs"),
@@ -216,9 +222,7 @@ test("end-to-end: a changed file with genuinely zero tests anywhere fails as no-
   const repo = path.join(BASE, "notests");
   fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
   fs.mkdirSync(path.join(repo, "runner"), { recursive: true });
-  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
-  g("init", "-q");
-  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  const g = gitRootCommit(repo);
   fs.writeFileSync(path.join(repo, "hooks", "orphan.mjs"), "export const orphan = () => 1;\n");
   let out, status;
   try {
@@ -248,9 +252,7 @@ test("end-to-end: a file git reports as changed but that no longer exists on dis
 test("end-to-end: a genuinely failing fast tier fails the gate before coverage is even read", () => {
   const repo = path.join(BASE, "redtier");
   fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
-  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
-  g("init", "-q");
-  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  const g = gitRootCommit(repo);
   fs.writeFileSync(path.join(repo, "hooks", "buggy.mjs"), "export const buggy = () => 1;\n");
   fs.writeFileSync(
     path.join(repo, "hooks", "buggy.test.mjs"),
@@ -286,9 +288,7 @@ test("end-to-end: an untested function fails the gate even at 100% lines", () =>
 test("end-to-end: gui/ is inside the coverage fence — default discovery finds gui/*.test.mjs and an uncovered function fails the gate", () => {
   const repo = path.join(BASE, "gui-partial");
   fs.mkdirSync(path.join(repo, "gui"), { recursive: true });
-  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
-  g("init", "-q");
-  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  const g = gitRootCommit(repo);
   fs.writeFileSync(
     path.join(repo, "gui", "x.mjs"),
     "export function add(a, b) { return a + b; }\nexport function sub(a, b) { return a - b; }\n"
@@ -316,9 +316,7 @@ test("end-to-end: default discovery covers BOTH hooks/ and runner/ (regression, 
   const repo = path.join(BASE, "two-dirs");
   fs.mkdirSync(path.join(repo, "hooks"), { recursive: true });
   fs.mkdirSync(path.join(repo, "runner"), { recursive: true });
-  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
-  g("init", "-q");
-  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root");
+  const g = gitRootCommit(repo);
   fs.writeFileSync(path.join(repo, "hooks", "h.mjs"), "export const h = () => 1;\n");
   fs.writeFileSync(
     path.join(repo, "hooks", "h.test.mjs"),

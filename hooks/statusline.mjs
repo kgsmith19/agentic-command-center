@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, applyProfile } from "./usage.mjs";
-import { resolveRoot } from "./root.mjs";
+import { resolveRoot, readStdinJson } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = resolveRoot(HERE);
@@ -23,14 +23,6 @@ const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
-
-function readStdin() {
-  try {
-    return JSON.parse(fs.readFileSync(0, "utf8") || "{}");
-  } catch {
-    return {};
-  }
-}
 
 function bar(frac, width = 10) {
   const filled = Math.max(0, Math.min(width, Math.round(frac * width)));
@@ -56,7 +48,7 @@ function weekPct() {
 }
 
 function main() {
-  const p = readStdin();
+  const p = readStdinJson();
   const policy = applyProfile(loadPolicy());
   const parts = [];
 

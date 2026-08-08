@@ -22,17 +22,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRoot, isMainModule } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// ACC_ROOT: see budget.mjs. Both must honour it or a test would split its state
-// across two trees. Resolved on every call, not captured once at import: a
-// test process that imports this module once and then runs many cases, each
-// against its own ACC_ROOT/ACC_DIRECTIVES_DIR sandbox, needs every call to see
-// whatever is current -- a module-load-time const would only ever see the
-// first sandbox and silently leak state into every later one.
-function root() {
-  return process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
-}
 
 // The whole -p bootstrap runner.mjs sends for a directive job (SPEC-0001).
 // The real directive context (text, log tail, done/blocked protocol) is
@@ -40,7 +32,12 @@ function root() {
 // session up.
 export const KICK_TEXT = "Continue the active ACC directive.";
 export function directivesDir() {
-  return process.env.ACC_DIRECTIVES_DIR || path.join(root(), "runner", "directives");
+  // resolveRoot(HERE) is called fresh here, never cached in a const: a test
+  // process that imports this module once and runs many cases, each against
+  // its own ACC_ROOT/ACC_DIRECTIVES_DIR sandbox, needs every call to see
+  // whatever is current — a module-load-time const would leak the first
+  // sandbox's ACC_ROOT into every later one.
+  return process.env.ACC_DIRECTIVES_DIR || path.join(resolveRoot(HERE), "runner", "directives");
 }
 function doneDir() {
   return path.join(directivesDir(), "done");
@@ -345,4 +342,4 @@ export function main() {
   );
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) main();
+if (isMainModule(import.meta.url)) main();

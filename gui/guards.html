@@ -97,6 +97,11 @@ const api = (route, body) => fetch(route, body === undefined
 ).then((r) => r.json());
 
 let enabled = true;
+// Shared by every "message span next to a save/action button" spot below.
+function showResult(el, r, okText) {
+  el.textContent = r.error || okText;
+  el.className = r.error ? "err" : "ok";
+}
 function fill(sel, items, label) {
   sel.innerHTML = "";
   for (const it of items) {
@@ -152,8 +157,7 @@ $("vaultSave").onclick = async () => {
   // Clear the secret out of the DOM the instant it is stored — no value lingers
   // in the page, nothing to read back.
   $("vaultInput").value = "";
-  $("vaultMsg").textContent = r.error || (r.stored ? "stored: " + r.stored.join(", ") : r.out);
-  $("vaultMsg").className = r.error ? "err" : "ok";
+  showResult($("vaultMsg"), r, r.stored ? "stored: " + r.stored.join(", ") : r.out);
   await refresh();
 };
 $("vaultRm").onclick = async () => {
@@ -196,8 +200,7 @@ $("dialsSave").onclick = async () => {
     allow: $("allow").value.split(",").map((s) => s.trim()).filter(Boolean),
   };
   const r = await api("/api/process/dials", dials);
-  $("dialsMsg").textContent = r.error || "Saved — hooks pick this up on the next fire.";
-  $("dialsMsg").className = r.error ? "err" : "ok";
+  showResult($("dialsMsg"), r, "Saved — hooks pick this up on the next fire.");
   await refreshProcess();
 };
 async function control(action, extra) {
@@ -238,8 +241,6 @@ function fillProfiles(names) {
     wrap.appendChild(l);
   });
 }
-const profileValue = () => document.querySelector("input[name=profile]:checked")?.value || "";
-
 let openLogId = null;
 let logTimer = null;
 function toggleLog(id, pre) {
@@ -273,8 +274,7 @@ async function refreshDirectives() {
       const btn = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; row.appendChild(b); return b; };
       const act = async (status, why) => {
         const r = await api("/api/directives/status", { id: d.id, status, why });
-        $("dirMsg").textContent = r.error || `${d.id} → ${status}`;
-        $("dirMsg").className = r.error ? "err" : "ok";
+        showResult($("dirMsg"), r, `${d.id} → ${status}`);
         await refreshDirectives();
       };
       btn("Mark finished", () => act("done", "finished from the Command Center"));
@@ -301,7 +301,8 @@ $("dirGo").onclick = async () => {
   const cwd = $("dirCwd").value.trim();
   if (!text) { $("dirMsg").textContent = "describe the task first"; $("dirMsg").className = "err"; return; }
   if (!cwd) { $("dirMsg").textContent = "set the folder first"; $("dirMsg").className = "err"; return; }
-  const d = await api("/api/directives", { text, cwd, profile: profileValue() });
+  const profile = document.querySelector("input[name=profile]:checked")?.value || "";
+  const d = await api("/api/directives", { text, cwd, profile });
   if (d.error) { $("dirMsg").textContent = d.error; $("dirMsg").className = "err"; return; }
   const l = await api("/api/launch", { id: d.id });
   $("dirMsg").textContent = l.error ? `created ${d.id} but not launched: ${l.error}` : `launched ${d.id}`;

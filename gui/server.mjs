@@ -68,6 +68,12 @@ const usagePath = () => process.env.ACC_USAGE || path.join(HERE, "..", "hooks", 
 const repoRoot = () => (process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.join(HERE, ".."));
 const policyFile = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
 const readPolicyJson = () => JSON.parse(fs.readFileSync(policyFile(), "utf8").replace(/^\uFEFF/, ""));
+// Reads policy.json or sends the 500 itself and returns null \u2014 callers just
+// check the return value and bail (`if (!policy) return;`).
+function tryReadPolicy(res) {
+  try { return readPolicyJson(); }
+  catch (e) { send(res, 500, { error: `cannot read policy.json: ${e.message}` }); return null; }
+}
 const sliceStopFile = () => path.join(repoRoot(), "runner", "stop", "slice-runner.stop");
 
 // --- launch surface (SPEC-0005, FR-012): the web Start-work tab -----------
@@ -122,6 +128,16 @@ function nodeExec(script, args, stdin) {
   });
 }
 const engineExec = (args, stdin) => nodeExec(enginePath(), args, stdin);
+
+// Run a script and parse its stdout as JSON, or throw with a diagnosable
+// message — the shared shape behind every route/suggest, directive-list and
+// lane-status GET below, which all just shell a script and pass its JSON
+// verdict through.
+async function execJson(script, args, label) {
+  const r = await nodeExec(script, args);
+  try { return JSON.parse(r.stdout); }
+  catch { throw new Error((r.stderr || `${label} exited ${r.code}`).slice(-500)); }
+}
 
 // A vault key must be an env-var-shaped name and a value must be single-line:
 // the engine frames the vault as `KEY=VALUE\n` lines on stdin, so a `\n` in a
@@ -187,8 +203,7 @@ export function mergeDials(policy, d) {
 
 // Allowlisted control actions. Each returns a thunk performing exactly one
 // side effect — the browser's `action` string only selects a thunk, it never
-// becomes argv, a path, or a flag (PROP-002). `confirm`-gated actions type
-// into a real console, so they demand an explicit browser confirm.
+// becomes argv, a path, or a flag (PROP-002).
 function controlAction(action) {
   const writeFile = (f, txt) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, txt); };
   const table = {
@@ -325,17 +340,14 @@ export function handler(req, res) {
       const week = await nodeExec(usagePath(), ["week"]);
       let tier = null;
       try { tier = JSON.parse(check.stdout.trim()); } catch {}
-      let dials = null;
-      let profiles = [];
-      try {
-        const p = readPolicyJson();
-        dials = {
-          softK: p.context?.softK, hardK: p.context?.hardK,
-          amberTokens: p.week?.amberTokens, redTokens: p.week?.redTokens,
-          maxFinders: p.review?.maxFinders, allow: p.subagents?.allow ?? [],
-        };
-        profiles = profileNames(p);
-      } catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
+      const p = tryReadPolicy(res);
+      if (!p) return;
+      const dials = {
+        softK: p.context?.softK, hardK: p.context?.hardK,
+        amberTokens: p.week?.amberTokens, redTokens: p.week?.redTokens,
+        maxFinders: p.review?.maxFinders, allow: p.subagents?.allow ?? [],
+      };
+      const profiles = profileNames(p);
       send(res, 200, {
         tier, weekText: (week.stdout + week.stderr).trim(), dials, profiles,
         stopped: fs.existsSync(sliceStopFile()),
@@ -344,9 +356,9 @@ export function handler(req, res) {
   }
   if (route === "/api/process/dials" && req.method === "POST") {
     return readBody(req, res, (b) => {
-      let policy, merged;
-      try { policy = readPolicyJson(); }
-      catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
+      const policy = tryReadPolicy(res);
+      if (!policy) return;
+      let merged;
       try { merged = mergeDials(policy, b); }
       catch (e) { return send(res, 400, { error: e.message }); } // bad dial -> file untouched
       // Atomic write (tmp + rename), matching kernel/policy.mjs: a crash
@@ -363,16 +375,15 @@ export function handler(req, res) {
       // text becomes one argv token, so newlines/tabs must never reach it.
       const text = typeof b.text === "string" ? b.text.replace(/\s+/g, " ").trim() : "";
       if (!text || text.length > 2000) return send(res, 400, { error: "text must be 1..2000 characters" });
-      const r = await nodeExec(routeScript(), ["--text", text]);
-      try { return send(res, 200, JSON.parse(r.stdout)); }
-      catch { return send(res, 500, { error: (r.stdout + r.stderr).slice(-500) || `router exited ${r.code}` }); }
+      try { return send(res, 200, await execJson(routeScript(), ["--text", text], "router")); }
+      catch (e) { return send(res, 500, { error: e.message }); }
     });
   }
   if (route === "/api/directives" && req.method === "GET") {
     return (async () => {
-      const r = await nodeExec(directiveScript(), ["list"]);
       let list;
-      try { list = JSON.parse(r.stdout); } catch { return send(res, 500, { error: (r.stderr || `directive list exited ${r.code}`).slice(-500) }); }
+      try { list = await execJson(directiveScript(), ["list"], "directive list"); }
+      catch (e) { return send(res, 500, { error: e.message }); }
       send(res, 200, list.map((d) => ({ ...d, running: runnerLive(d.id) })));
     })();
   }
@@ -386,9 +397,9 @@ export function handler(req, res) {
       if (typeof b.cwd !== "string" || !path.isAbsolute(b.cwd) || !fs.existsSync(b.cwd)) {
         return send(res, 400, { error: "cwd must be an absolute path that exists (a headless run needs one)" });
       }
-      let profiles;
-      try { profiles = profileNames(readPolicyJson()); }
-      catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
+      const policy = tryReadPolicy(res);
+      if (!policy) return;
+      const profiles = profileNames(policy);
       const profile = b.profile === undefined || b.profile === "" ? "" : b.profile;
       if (profile !== "" && !profiles.includes(profile)) return send(res, 400, { error: `unknown profile ${JSON.stringify(b.profile)}` });
       // The text travels via a temp file (--text-file), the same proven path
@@ -438,9 +449,8 @@ export function handler(req, res) {
   }
   if (route === "/api/lane/status" && req.method === "GET") {
     return (async () => {
-      const r = await nodeExec(laneScript(), ["status"]);
-      try { return send(res, 200, JSON.parse(r.stdout)); }
-      catch { return send(res, 500, { error: (r.stderr || `lane status exited ${r.code}`).slice(-500) }); }
+      try { return send(res, 200, await execJson(laneScript(), ["status"], "lane status")); }
+      catch (e) { return send(res, 500, { error: e.message }); }
     })();
   }
   if (route === "/api/launch" && req.method === "POST") {

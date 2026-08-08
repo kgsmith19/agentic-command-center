@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { isMainModule } from "./root.mjs";
 
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 const PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
@@ -374,12 +375,8 @@ export function totalsSince({ since = 0, project } = {}) {
   return { sessions, main, sub, since };
 }
 
-function weekTotals(project) {
-  return totalsSince({ since: Date.now() - 7 * 864e5, project });
-}
-
 function cmdWeek(project) {
-  const { sessions, main, sub } = weekTotals(project);
+  const { sessions, main, sub } = totalsSince({ since: Date.now() - 7 * 864e5, project });
   const mt = totalTokens(main);
   const st = totalTokens(sub);
   const total = mt + st;
@@ -462,12 +459,7 @@ function cmdCheck(project) {
 
 // ---------------------------------------------------------------- cli
 
-// True only when this file is the process entrypoint. Compare resolved paths:
-// a basename/endsWith check matches everything when argv[1] is absent (node -e).
-const isMain =
-  !!process.argv[1] &&
-  path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const getFlag = (name, dflt) => {

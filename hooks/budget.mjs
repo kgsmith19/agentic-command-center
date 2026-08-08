@@ -9,12 +9,11 @@
 // session. Guard enforcement (guard.mjs) is the thing that fails closed.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, tierFor, tierWindowTotal } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, directiveForSession } from "./directive.mjs";
-import { resolveRoot } from "./root.mjs";
+import { resolveRoot, readStdinJson } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, directives) at a
@@ -29,14 +28,6 @@ const HEADLESS = process.env.CLAUDE_CODE_RUNNER === "1";
 const K = (n) => Math.round(n / 1000) + "k";
 const approaching = (ctx, hardK) =>
   `[ACC ctx ${K(ctx)}/${hardK}k] Approaching the context budget. Finish the unit of work you are on; do not start new work. Keep detail in scratchpad files, not in context.`;
-
-function readStdin() {
-  try {
-    return JSON.parse(fs.readFileSync(0, "utf8") || "{}");
-  } catch {
-    return {};
-  }
-}
 
 function ensureDirs() {
   for (const d of [STATE, LOGS]) fs.mkdirSync(d, { recursive: true });
@@ -453,7 +444,7 @@ function main() {
     return;
   }
 
-  const p = readStdin();
+  const p = readStdinJson();
   const event = p.hook_event_name || "";
   if (event === "SessionStart") return onSessionStart(p, policy);
   if (event === "UserPromptSubmit") return onUserPromptSubmit(p, policy);

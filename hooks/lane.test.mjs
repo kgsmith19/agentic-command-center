@@ -31,11 +31,14 @@ process.env.ACC_POLICY = path.join(BASE, "policy.json");
 function setPolicy(lane) {
   fs.writeFileSync(process.env.ACC_POLICY, JSON.stringify({ lane: { breakerThreshold: 100000, ...lane } }));
 }
-setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+// Reused by every test below that just needs fast, deterministic dials —
+// breaker-specific tests override locally and always breakerReset() when done.
+const BASELINE = { slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 };
+setPolicy(BASELINE);
 
 const {
   acquireSlot, withLaunchSlot, transportFailure, retryTransport, laneStatus, laneConfig,
-  laneStatusAll, recordTransportFailure, breakerState, breakerReset, runCli,
+  recordTransportFailure, breakerState, breakerReset, runCli,
   isUtilityInvocation, countCappedProcesses, gate, queryClaudeProcesses, formatHolders,
 } = await import("./lane.mjs");
 
@@ -137,7 +140,7 @@ test("start pacing: the second launch waits out minGapMs", async () => {
   await withLaunchSlot("first", async () => {});
   await withLaunchSlot("second", async () => {});
   assert.ok(Date.now() - t0 >= 180, `two paced launches took ${Date.now() - t0}ms, expected >=180`);
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+  setPolicy(BASELINE);
 });
 
 test("transport classification: the observed failures match", () => {
@@ -259,7 +262,7 @@ test("a corrupt last-start.json does not break pacing — treated as no prior st
   setPolicy({ slots: 1, minGapMs: 50, pollMs: 20 });
   const s = await acquireSlot("after-corrupt-stamp"); // must not throw or hang despite the corrupt stamp
   s.release();
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+  setPolicy(BASELINE);
 });
 
 test("acquireSlot works end to end with ACC_LANE_DIR genuinely unset (the real machine default)", async () => {
@@ -321,7 +324,7 @@ test("retry backoff is full jitter — delay can land anywhere from 0 up to the 
   // low enough that a revert to equal jitter is what would ever fail this,
   // not chance.
   assert.ok(delays.some((d) => d < 400), `expected at least one sub-400ms delay under full jitter, got: ${delays.join(",")}`);
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+  setPolicy(BASELINE);
 });
 
 test("529/overloaded failures use overloadBaseMs, not backoffBaseMs", async () => {
@@ -337,7 +340,7 @@ test("529/overloaded failures use overloadBaseMs, not backoffBaseMs", async () =
   // enough headroom (>=50ms) to prove it picked the overload base at all,
   // without making the test itself slow or flaky in the common case.
   assert.equal(calls, 2);
-  setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+  setPolicy(BASELINE);
 });
 
 // ================================================================ breaker
@@ -355,7 +358,7 @@ test("recordTransportFailure + breakerState: trips at threshold, clears once qui
     assert.equal(breakerState().tripped, false, "quiet past cooldown self-clears even though both failures are still in-window");
   } finally {
     breakerReset();
-    setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+    setPolicy(BASELINE);
   }
 });
 
@@ -368,7 +371,7 @@ test("failures outside the window never count toward the threshold", () => {
     assert.equal(breakerState().tripped, true);
   } finally {
     breakerReset();
-    setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+    setPolicy(BASELINE);
   }
 });
 
@@ -389,7 +392,7 @@ test("a tripped breaker HOLDS new automation acquires until it clears", async ()
     s.release();
   } finally {
     breakerReset();
-    setPolicy({ slots: 1, minGapMs: 0, retries: 2, backoffBaseMs: 1, backoffCapMs: 2, pollMs: 20 });
+    setPolicy(BASELINE);
   }
 });
 
@@ -520,7 +523,7 @@ test("gate: at cap -> ok false with holder pid/startedAt, no lane label when unh
 
 test("gate: over cap enriches a holder with its lane label when the pid holds a real slot", async () => {
   setPolicy({ total: { cap: 1, exe: ["C:\\real\\claude.exe"] } });
-  const held = await acquireSlot("labeled-holder", { category: "interactive" });
+  const held = await acquireSlot("labeled-holder");
   try {
     const procs = [{ ProcessId: process.pid, ExecutablePath: "C:\\real\\claude.exe", CreationDate: "now" }];
     const out = gate(["-p", "hi"], { listProcesses: () => procs });
