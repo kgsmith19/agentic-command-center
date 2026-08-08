@@ -13,29 +13,35 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPolicy, contextOf, startContextOf, applyProfile, tierFor, tierWindowTotal } from "./usage.mjs";
 import { bindSession, appendCycle, logTail, directiveForSession } from "./directive.mjs";
-import { resolveRoot, readStdinJson } from "./root.mjs";
+import { resolveRoot, readStdinJson, isMainModule } from "./root.mjs";
 import { notify } from "./notify.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path (state, logs, directives) at a
 // throwaway tree. It exists so the tests can exercise THIS file instead of a
 // copy, never the live state running sessions depend on.
-const ROOT = resolveRoot(HERE);
-const STATE = path.join(ROOT, "runner", "state");
-const LOGS = path.join(ROOT, "runner", "logs");
-const DIRECTIVESDIR = path.join(ROOT, "runner", "directives");
-const HEADLESS = process.env.CLAUDE_CODE_RUNNER === "1";
+const ROOT = () => resolveRoot(HERE);
+const STATE = () => path.join(ROOT(), "runner", "state");
+const LOGS = () => path.join(ROOT(), "runner", "logs");
+const DIRECTIVESDIR = () => path.join(ROOT(), "runner", "directives");
+const HEADLESS = () => process.env.CLAUDE_CODE_RUNNER === "1";
 
 const K = (n) => Math.round(n / 1000) + "k";
 const approaching = (ctx, hardK) =>
   `[ACC ctx ${K(ctx)}/${hardK}k] Approaching the context budget. Finish the unit of work you are on; do not start new work. Keep detail in scratchpad files, not in context.`;
 
+const PROCESS_IO = {
+  out: process.stdout.write.bind(process.stdout),
+  err: process.stderr.write.bind(process.stderr),
+  exit: process.exit.bind(process),
+};
+
 function ensureDirs() {
-  for (const d of [STATE, LOGS]) fs.mkdirSync(d, { recursive: true });
+  for (const d of [STATE(), LOGS()]) fs.mkdirSync(d, { recursive: true });
 }
 
 function statePath(sid, suffix) {
-  return path.join(STATE, `${String(sid || "unknown").slice(0, 40)}.${suffix}`);
+  return path.join(STATE(), `${String(sid || "unknown").slice(0, 40)}.${suffix}`);
 }
 
 function readJson(p, dflt) {
@@ -49,26 +55,26 @@ function readJson(p, dflt) {
 // ------------------------------------------------------------- hook output
 
 // UserPromptSubmit / SessionStart: inject text into the session.
-function inject(event, text) {
-  process.stdout.write(
+export function inject(event, text, io = PROCESS_IO) {
+  io.out(
     JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } })
   );
-  process.exit(0);
+  io.exit(0);
 }
 
 // Stop: force the model to keep going with an instruction.
-function blockStop(reason) {
-  process.stdout.write(JSON.stringify({ decision: "block", reason }));
-  process.exit(0);
+export function blockStop(reason, io = PROCESS_IO) {
+  io.out(JSON.stringify({ decision: "block", reason }));
+  io.exit(0);
 }
 
 // PreToolUse: deny. exit 2 + stderr is the contract guard.mjs already uses.
-function deny(msg) {
-  process.stderr.write(msg);
-  process.exit(2);
+export function deny(msg, io = PROCESS_IO) {
+  io.err(msg);
+  io.exit(2);
 }
 
-const allow = () => process.exit(0);
+export const allow = (io = PROCESS_IO) => io.exit(0);
 
 // ------------------------------------------------------------- kill switch
 
@@ -78,25 +84,30 @@ const allow = () => process.exit(0);
 // why the window never reaches back past the day the discipline landed), so
 // enforcement, the statusline, and the GUI all read ONE authority instead of
 // the drift-prone copy that used to live here.
-function weekTier(policy) {
+export function weekTier(policy, deps = {}) {
+  const now = deps.now || Date.now;
+  const tierForFn = deps.tierFor || tierFor;
+  const tierWindowTotalFn = deps.tierWindowTotal || tierWindowTotal;
+  const readJsonFn = deps.readJson || readJson;
+  const writeFileSyncFn = deps.writeFileSync || fs.writeFileSync;
   if (!(policy.week.redTokens || 0) && !(policy.week.amberTokens || 0)) return { tier: "green", weekTokens: 0, pct: 0 };
-  const cacheFile = path.join(STATE, "tier.json");
-  const cached = readJson(cacheFile, null);
-  if (cached && Date.now() - cached.ts < 6e5) return cached;
+  const cacheFile = path.join(STATE(), "tier.json");
+  const cached = readJsonFn(cacheFile, null);
+  if (cached && now() - cached.ts < 6e5) return cached;
   let out;
   try {
-    out = { ...tierFor(tierWindowTotal()), ts: Date.now() };
+    out = { ...tierForFn(tierWindowTotalFn()), ts: now() };
   } catch {
     return { tier: "green", weekTokens: 0, pct: 0 };
   }
-  try { fs.writeFileSync(cacheFile, JSON.stringify(out)); } catch {}
+  try { writeFileSyncFn(cacheFile, JSON.stringify(out)); } catch {}
   return out;
 }
 
 function stopRunner(policy) {
   if (!policy.runner.stopOnRed) return;
   try {
-    const stopDir = path.join(ROOT, "runner", "stop");
+    const stopDir = path.join(ROOT(), "runner", "stop");
     const stopFile = path.join(stopDir, "slice-runner.stop");
     // The stop-file's own prior absence IS the "haven't notified for this trip
     // yet" latch — no separate state needed. `unstop` removes it, so the next
@@ -110,7 +121,7 @@ function stopRunner(policy) {
 
 // ------------------------------------------------------------- transcript
 
-function lastAssistantText(transcript) {
+export function lastAssistantText(transcript) {
   let out = "";
   try {
     const lines = fs.readFileSync(transcript, "utf8").split("\n");
@@ -161,7 +172,7 @@ function directiveContext(p) {
   if (cycle > 0) {
     parts.push(
       "",
-      `Progress so far (from ${path.join(DIRECTIVESDIR, directive.id + ".log.md")}, most recent last):`,
+      `Progress so far (from ${path.join(DIRECTIVESDIR(), directive.id + ".log.md")}, most recent last):`,
       "",
       logTail(directive.id, 3000).trim()
     );
@@ -176,17 +187,17 @@ function directiveContext(p) {
   return parts.join("\n");
 }
 
-function onSessionStart(p, policy) {
+export function onSessionStart(p, policy, io = PROCESS_IO) {
   ensureDirs();
   const start = p.transcript_path ? startContextOf(p.transcript_path) : 0;
   try {
     fs.appendFileSync(
-      path.join(LOGS, "context.jsonl"),
+      path.join(LOGS(), "context.jsonl"),
       JSON.stringify({
         ts: new Date().toISOString(),
         sessionId: p.session_id,
         startContext: start,
-        headless: HEADLESS,
+        headless: HEADLESS(),
         cwd: p.cwd,
       }) + "\n"
     );
@@ -225,10 +236,10 @@ function onSessionStart(p, policy) {
     `[ACC] Reviews: /diff-review-kgs and /sec-diff-kgs are the default checks (main thread, no fan-out). /lean-review-kgs is ${policy.review.fullLeanReview}.`,
     ]
   );
-  inject("SessionStart", lines.join("\n"));
+  inject("SessionStart", lines.join("\n"), io);
 }
 
-function onUserPromptSubmit(p, policy) {
+export function onUserPromptSubmit(p, policy, io = PROCESS_IO) {
   // Keep state/tier.json warm for the status line. weekTier() is otherwise only
   // called on the subagent-spawn path, and subagents are allowlisted down to
   // Explore - so the cache was almost never written and the status line silently
@@ -236,11 +247,11 @@ function onUserPromptSubmit(p, policy) {
   // exits the process. The 10-minute cache means the real scan runs at most once
   // per 10 min, not once per prompt.
   try { weekTier(policy); } catch {}
-  if (!p.transcript_path) allow();
+  if (!p.transcript_path) allow(io);
   const ctx = contextOf(p.transcript_path);
   const { softK, hardK } = policy.context;
-  if (ctx < softK * 1000) allow();
-  inject("UserPromptSubmit", approaching(ctx, hardK));
+  if (ctx < softK * 1000) allow(io);
+  inject("UserPromptSubmit", approaching(ctx, hardK), io);
 }
 
 // The continuous watcher. Stop only fires at turn boundaries and
@@ -253,23 +264,23 @@ function onUserPromptSubmit(p, policy) {
 // It never blocks. Blocking here would also block the Write that the checkpoint
 // needs, wedging the session at precisely the moment it must save its work.
 // Pressure is applied as injected text; the Stop hook still does the hard halt.
-function onPostToolUse(p, policy) {
-  if (!p.transcript_path) allow();
+export function onPostToolUse(p, policy, io = PROCESS_IO) {
+  if (!p.transcript_path) allow(io);
   const ctx = contextOf(p.transcript_path);
   const { softK, hardK } = policy.context;
-  if (ctx < softK * 1000) allow();
+  if (ctx < softK * 1000) allow(io);
 
   const over = ctx >= hardK * 1000;
   if (!over) {
     // Below the ceiling: warn once per 10k band so this stays cheap.
     const band = Math.floor(ctx / 10000);
     const f = statePath(p.session_id, "band");
-    if (Number(readJson(f, { band: 0 }).band || 0) >= band) allow();
+    if (Number(readJson(f, { band: 0 }).band || 0) >= band) allow(io);
     try {
       ensureDirs();
       fs.writeFileSync(f, JSON.stringify({ band }));
     } catch {}
-    inject("PostToolUse", approaching(ctx, hardK));
+    inject("PostToolUse", approaching(ctx, hardK), io);
   }
 
   // Over the ceiling: every tool call, until the session ends. ~40 tokens each
@@ -280,20 +291,21 @@ function onPostToolUse(p, policy) {
       `Finish only what makes this session droppable: checkpoint ${policy.runner.statusFile} ` +
       `(board + RESUME, written so a COLD session resumes from that file alone), move long detail to a ` +
       `scratchpad and cite its path, then END YOUR TURN so the session can be cleared. ` +
-      `Do not begin another task, review, or investigation.`
+      `Do not begin another task, review, or investigation.`,
+    io
   );
 }
 
 const WAITING_RE =
   /\b(waiting (on|for)|i'?ll resume when|once it'?s green|once ci|when the .{0,40} completes?|waiting for its completion|will resume)\b/i;
 
-function onStop(p, policy) {
+export function onStop(p, policy, io = PROCESS_IO) {
   ensureDirs();
 
   // --- waiting guard (headless only: nothing re-invokes a -p session) ---
   // stop_hook_active means a Stop hook (this one or another) already blocked
   // this turn once; the guard must not re-block its own continuation.
-  if (HEADLESS && policy.runner.waitingGuard && !p.stop_hook_active) {
+  if (HEADLESS() && policy.runner.waitingGuard && !p.stop_hook_active) {
     const latch = statePath(p.session_id, "waiting");
     if (!fs.existsSync(latch)) {
       const text = lastAssistantText(p.transcript_path);
@@ -311,7 +323,8 @@ function onStop(p, policy) {
             "Nothing re-invokes a headless (-p) session. You cannot wait for CI, a background suite, or any external event -- " +
               "ending the turn here burns the run with no board progress (this cost runs 8, 10 and 12 of the 2026-07-30 queue). " +
               "Do ONE of these now: (a) poll in the FOREGROUND with an explicit timeout and finish the work, or " +
-              "(b) checkpoint the status file (board + RESUME, so a cold session resumes from it alone) and then end."
+              "(b) checkpoint the status file (board + RESUME, so a cold session resumes from it alone) and then end.",
+            io
           );
         }
       }
@@ -319,10 +332,10 @@ function onStop(p, policy) {
   }
 
   // --- context budget ---
-  if (!p.transcript_path) allow();
+  if (!p.transcript_path) allow(io);
   const ctx = contextOf(p.transcript_path);
   const { hardK } = policy.context;
-  if (ctx < hardK * 1000) allow();
+  if (ctx < hardK * 1000) allow(io);
 
   const latch = statePath(p.session_id, "budget");
   if (!fs.existsSync(latch)) {
@@ -334,7 +347,8 @@ function onStop(p, policy) {
         `Finish only what is needed to make this session droppable, then: ` +
         `(1) checkpoint the status file (${policy.runner.statusFile}) - board + RESUME, written so a COLD session resumes from that file alone; ` +
         `(2) move any long detail into a scratchpad file and cite its path; ` +
-        `(3) state in one line where you are and what the next action is. Then stop.`
+        `(3) state in one line where you are and what the next action is. Then stop.`,
+      io
     );
   }
 
@@ -342,7 +356,7 @@ function onStop(p, policy) {
   // /directive Stop hook may keep blocking the turn, so this path must fire on
   // every Stop until the clear actually lands - stop_hook_active no longer
   // short-circuits it. appendCycle is one-shot so blocked loops don't spam.
-  if (HEADLESS) allow(); // the runner relaunch IS the clear
+  if (HEADLESS()) allow(io); // the runner relaunch IS the clear
 
   // If a directive owns this session, its closing summary IS the handoff to the next
   // continuation. Captured automatically from the checkpoint turn the block above
@@ -360,7 +374,7 @@ function onStop(p, policy) {
   // Interactive: hooks cannot clear context, and nothing types keystrokes for
   // us anymore (SPEC-0005 PR-2) - tell the human exactly what to do, and name
   // the headless resume path that carries the work forward.
-  process.stdout.write(
+  io.out(
     JSON.stringify({
       systemMessage:
         `\n[ACC ctx ${K(ctx)}/${hardK}k] BUDGET REACHED - checkpoint written.\n` +
@@ -372,10 +386,10 @@ function onStop(p, policy) {
           : `  The next session re-primes itself from ${policy.runner.statusFile}.\n`),
     })
   );
-  process.exit(0);
+  io.exit(0);
 }
 
-function onPreToolUseAgent(p, policy) {
+export function onPreToolUseAgent(p, policy, io = PROCESS_IO) {
   const input = p.tool_input || {};
   const type = input.subagent_type || "general-purpose";
 
@@ -386,12 +400,13 @@ function onPreToolUseAgent(p, policy) {
     deny(
       `[ACC KILL SWITCH] Rolling 7-day usage is at the RED line (${Math.round(weekTokens / 1e6)}M tokens). ` +
         `Subagent spawns are blocked and the runner is stopped. Main-thread work continues normally. ` +
-        `Clear it in the Command Center GUI (Process tab) or raise week.redTokens in C:/code/guards/policy.json.`
+        `Clear it in the Command Center GUI (Process tab) or raise week.redTokens in C:/code/guards/policy.json.`,
+      io
     );
   }
 
   // Explicit time-boxed fan-out grant (GUI / engine.mjs fanout <minutes>).
-  const grant = readJson(path.join(STATE, "fanout.json"), null);
+  const grant = readJson(path.join(STATE(), "fanout.json"), null);
   const granted = grant && grant.until > Date.now();
 
   if (!granted && policy.subagents.mode === "allowlist" && !policy.subagents.allow.includes(type)) {
@@ -400,7 +415,8 @@ function onPreToolUseAgent(p, policy) {
         `Do this work in the MAIN thread. Implementation of a slice task belongs in a runner session ` +
         `(fresh context by construction, far cheaper than an Opus subagent), not here.\n` +
         `If this genuinely needs fan-out: grant a window with ` +
-        `\`node C:/code/guards/hooks/budget.mjs fanout 30\` or the Command Center Process tab.`
+        `\`node C:/code/guards/hooks/budget.mjs fanout 30\` or the Command Center Process tab.`,
+      io
     );
   }
 
@@ -411,30 +427,29 @@ function onPreToolUseAgent(p, policy) {
   if (n > cap) {
     deny(
       `[ACC] Subagent cap reached for this session (${cap}). ` +
-        `${granted ? "Fan-out grants are capped at review.maxFinders." : "Continue in the main thread, or clear context and start fresh."}`
+        `${granted ? "Fan-out grants are capped at review.maxFinders." : "Continue in the main thread, or clear context and start fresh."}`,
+      io
     );
   }
   try {
     ensureDirs();
     fs.writeFileSync(cnt, JSON.stringify({ n }));
   } catch {}
-  allow();
+  allow(io);
 }
 
 // ------------------------------------------------------------- entry
 
 // applyProfile lives in usage.mjs so budget.mjs and statusline.mjs resolve
 // policy identically - the budget on screen is the budget enforced.
-function main() {
-  const argv = process.argv.slice(2);
-  const policy = applyProfile(loadPolicy());
+export function main({ argv = process.argv.slice(2), policy = applyProfile(loadPolicy()), payload = readStdinJson(), io = PROCESS_IO } = {}) {
 
   // CLI helpers (not hook paths).
   if (argv[0] === "fanout") {
     ensureDirs();
     const mins = Number(argv[1] || 30);
     fs.writeFileSync(
-      path.join(STATE, "fanout.json"),
+      path.join(STATE(), "fanout.json"),
       JSON.stringify({ until: Date.now() + mins * 60000, granted: new Date().toISOString() })
     );
     console.log(`fan-out granted for ${mins} min (max ${policy.review.maxFinders} finders)`);
@@ -442,35 +457,45 @@ function main() {
   }
   if (argv[0] === "unstop") {
     try {
-      fs.unlinkSync(path.join(ROOT, "runner", "stop", "slice-runner.stop"));
+      fs.unlinkSync(path.join(ROOT(), "runner", "stop", "slice-runner.stop"));
     } catch {}
     try {
-      fs.unlinkSync(path.join(STATE, "tier.json"));
+      fs.unlinkSync(path.join(STATE(), "tier.json"));
     } catch {}
     console.log("runner stop-file cleared, tier cache flushed");
     return;
   }
 
-  const p = readStdinJson();
-  const event = p.hook_event_name || "";
-  if (event === "SessionStart") return onSessionStart(p, policy);
-  if (event === "UserPromptSubmit") return onUserPromptSubmit(p, policy);
-  if (event === "PostToolUse") return onPostToolUse(p, policy);
-  if (event === "Stop") return onStop(p, policy);
+  const event = payload.hook_event_name || "";
+  if (event === "SessionStart") return onSessionStart(payload, policy, io);
+  if (event === "UserPromptSubmit") return onUserPromptSubmit(payload, policy, io);
+  if (event === "PostToolUse") return onPostToolUse(payload, policy, io);
+  if (event === "Stop") return onStop(payload, policy, io);
   if (event === "PreToolUse") {
-    if ((p.tool_name || "") !== "Agent") allow();
-    return onPreToolUseAgent(p, policy);
+    if ((payload.tool_name || "") !== "Agent") allow(io);
+    return onPreToolUseAgent(payload, policy, io);
   }
-  allow();
+  allow(io);
 }
 
-try {
-  main();
-} catch (e) {
-  // Fail open, but leave a trace.
-  try {
-    ensureDirs();
-    fs.appendFileSync(path.join(LOGS, "budget-errors.log"), `${new Date().toISOString()} ${e && e.stack}\n`);
-  } catch {}
-  process.exit(0);
+function appendBudgetError(line) {
+  fs.appendFileSync(path.join(LOGS(), "budget-errors.log"), line);
 }
+
+export function runAsMain(opts = {}) {
+  const run = opts.run || main;
+  const exit = opts.exit || process.exit.bind(process);
+  const appendError = opts.appendError || appendBudgetError;
+  try {
+    run();
+  } catch (e) {
+    // Fail open, but leave a trace.
+    try {
+      ensureDirs();
+      appendError(`${new Date().toISOString()} ${e && e.stack}\n`);
+    } catch {}
+    exit(0);
+  }
+}
+
+if (isMainModule(import.meta.url)) runAsMain();
