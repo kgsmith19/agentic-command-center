@@ -32,18 +32,23 @@ is appended to the directive log — it is both the next fresh context's
 continuity and the stuck signal; a model repeating itself verbatim is the
 headless stuck mode). A RED week tier holds the loop before any spawn
 (exit 5) — same `usage.mjs check` verb the Command Center consults, same fail-open on an
-unreadable usage store. `--install` is refused for directive jobs (they are
+unreadable usage store. Directives can also carry their own hard ceilings
+(`budget.wallClockMin`, `turns`, `tokens`, `dollars`): wall-clock shrinks the
+next run's timeout to the remaining total budget, turns shrink `--max-turns`,
+and token/dollar ceilings halt the loop before another run starts (exit 7,
+alert + directive-log entry). `--install` is refused for directive jobs (they are
 ad-hoc, not scheduled).
 
 Design constraints (deliberate):
 - Sessions run WITHOUT --bare: the guard hook stack is the safety layer
   that makes headless bypassPermissions acceptable. Never add --bare.
 - Stop conditions are the job's, not the model's: done-marker, stuck-N
-  (alert file in alerts/), maxRuns, per-run timeout. Alerts + exit codes
-  (2 stuck, 3 maxRuns, 4 graceful stop: create stop/<job>.stop, honored
-  between runs, 5 red week tier held a directive job, 6 another loop already
-  runs this job — the pid-file singleton in state/<job>.pid, SPEC-0005) are
-  the operator surface; logs rotate at 1 MiB.
+  (alert file in alerts/), maxRuns, per-run timeout, and directive hard
+  ceilings. Alerts + exit codes (2 stuck, 3 maxRuns, 4 graceful stop: create
+  stop/<job>.stop, honored between runs, 5 red week tier held a directive job,
+  6 another loop already runs this job — the pid-file singleton in
+  state/<job>.pid, SPEC-0005, 7 directive hard ceiling hit) are the operator
+  surface; logs rotate at 1 MiB.
 - One loop instance per job at a time (enforced: exclusive-create pid file
   in state/, exit 6 for the loser); nothing here mutates guards state
   (config/vault untouched) — the runner only reads its own folder and the

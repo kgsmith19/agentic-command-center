@@ -443,7 +443,16 @@ console.log("budget " + process.argv.slice(2).join(" ") + " ok");
 `.trimStart());
 const BUDGET_LOG = path.join(PROC_DIR, "budget-calls.jsonl");
 const budgetCalls = () => { try { return fs.readFileSync(BUDGET_LOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
-const POLICY_BASE = { _comment: "keep me", context: { softK: 400, hardK: 600 }, week: { amberTokens: 1e9, redTokens: 2e9 }, review: { maxFinders: 3 }, subagents: { allow: ["Explore"] }, kernel: { harness: "claude-code", budget: { toolCalls: 200 } }, rates: { opus: { in: 15 } } };
+const POLICY_BASE = {
+  _comment: "keep me",
+  context: { softK: 400, hardK: 600 },
+  week: { amberTokens: 1e9, redTokens: 2e9 },
+  directives: { budget: { wallClockMin: 0, turns: 0, tokens: 0, dollars: 0 } },
+  review: { maxFinders: 3 },
+  subagents: { allow: ["Explore"] },
+  kernel: { harness: "claude-code", budget: { toolCalls: 200 } },
+  rates: { opus: { in: 15 } },
+};
 
 function resetProc() {
   fs.rmSync(PROC_DIR, { recursive: true, force: true });
@@ -625,7 +634,15 @@ function resetLaunch() {
 const lpost = jpost;
 const newDirective = async (over = {}) => {
   const cwd = over.cwd !== undefined ? over.cwd : fs.mkdtempSync(path.join(LAUNCH_DIR, "work-"));
-  const r = await lpost("/api/directives", { text: over.text ?? "fix the tests", cwd, profile: over.profile ?? "" });
+  const r = await lpost("/api/directives", {
+    text: over.text ?? "fix the tests",
+    cwd,
+    profile: over.profile ?? "",
+    wallClockMin: over.wallClockMin,
+    turns: over.turns,
+    tokens: over.tokens,
+    dollars: over.dollars,
+  });
   return { r, j: r.status === 200 ? await r.json() : null };
 };
 const pidFile = (id) => path.join(LAUNCH_DIR, "runner", "state", `directive-${id}.pid`);
@@ -671,6 +688,10 @@ test("AC-104: create refuses bad text, a relative or nonexistent cwd, and an unk
     { text: "ok", cwd: path.join(LAUNCH_DIR, "ghost"), profile: "" },
     { text: "ok", cwd: good, profile: "Nope" },
     { text: "ok", cwd: good, profile: "_note" },
+    { text: "ok", cwd: good, profile: "", wallClockMin: -1 },
+    { text: "ok", cwd: good, profile: "", turns: 1.5 },
+    { text: "ok", cwd: good, profile: "", tokens: -1 },
+    { text: "ok", cwd: good, profile: "", dollars: "x" },
   ]) {
     assert.equal((await lpost("/api/directives", body)).status, 400, JSON.stringify(body).slice(0, 60));
   }
@@ -682,6 +703,13 @@ test("AC-105: a known profile is accepted and lands on the directive", async () 
   const { r, j } = await newDirective({ profile: "Heavy" });
   assert.equal(r.status, 200);
   assert.equal(j.profile, "Heavy");
+});
+
+test("AC-105b: directive hard-ceiling fields are accepted and land on the store entry", async () => {
+  resetLaunch();
+  const { r, j } = await newDirective({ wallClockMin: 30, turns: 12, tokens: 3456, dollars: 7.5 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(j.budget, { wallClockMin: 30, turns: 12, tokens: 3456, dollars: 7.5 });
 });
 
 test("AC-106: GET /api/directives decorates each entry with live runner state from the pid file", async () => {
@@ -803,7 +831,9 @@ test("AC-112: /api/process/status now names the launchable profiles (private key
   resetLaunch();
   const r = await fetch(`${base}/api/process/status`);
   assert.equal(r.status, 200);
-  assert.deepEqual((await r.json()).profiles, ["Normal", "Heavy"]);
+  const j = await r.json();
+  assert.deepEqual(j.profiles, ["Normal", "Heavy"]);
+  assert.deepEqual(j.directiveBudget, { wallClockMin: 0, turns: 0, tokens: 0, dollars: 0 });
 });
 
 // ------------------------------------------------------------- --ui-dist static serving (SPEC-0006, ADR-0006)

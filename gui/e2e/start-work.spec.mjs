@@ -27,6 +27,7 @@ test.beforeEach(() => {
   // fixture shape intact.
   fs.writeFileSync(path.join(dir, "policy.json"), JSON.stringify({
     context: { softK: 400, hardK: 600 }, week: { amberTokens: 1e9, redTokens: 2e9 },
+    directives: { budget: { wallClockMin: 15, turns: 8, tokens: 900, dollars: 1.5 } },
     review: { maxFinders: 3 }, subagents: { allow: [] },
     profiles: { _note: "e2e fixture", Normal: { label: "std" }, Heavy: { label: "big" } },
     lane: { slots: 1, minGapMs: 0 },
@@ -85,6 +86,21 @@ test("the profile radios come from policy.json (private keys filtered) and the c
   await expect(page.locator("#dirMsg")).toContainText("launched d-");
   const stored = JSON.parse(fs.readFileSync(path.join(dirsDir, liveIds()[0] + ".json"), "utf8"));
   expect(stored.profile).toBe("Heavy");
+});
+
+test("the start-work ceiling boxes flow into the created directive budget", async ({ page }) => {
+  await page.goto("/guards");
+  await page.locator("#dirText").fill("tighten the guards hook checks");
+  await page.locator("#dirText").blur();
+  await expect(page.locator("#dirCwd")).toHaveValue(routeDir);
+  await page.locator("#dirWallClockMin").fill("15");
+  await page.locator("#dirTurns").fill("3");
+  await page.locator("#dirTokens").fill("900");
+  await page.locator("#dirDollars").fill("1.5");
+  await page.locator("#dirGo").click();
+  await expect(page.locator("#dirMsg")).toContainText("launched d-");
+  const stored = JSON.parse(fs.readFileSync(path.join(dirsDir, liveIds()[0] + ".json"), "utf8"));
+  expect(stored.budget).toEqual({ wallClockMin: 15, turns: 3, tokens: 900, dollars: 1.5 });
 });
 
 test("Mark finished archives the directive out of the live list, for real", async ({ page }) => {
