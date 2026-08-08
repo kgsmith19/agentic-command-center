@@ -1,10 +1,9 @@
-// Tests for the directive store (hooks/directive.mjs) - the thing that carries work across
-// a /clear.
-//
-// The interesting behaviour is not "does it write a file". It is the set of
-// conditions under which ACC is willing to TYPE INTO A CONSOLE unprompted, which
-// is the only genuinely dangerous thing in the chain. So pendingKicks() gets
-// tested against every reason it must refuse, not just the happy path.
+// Tests for the directive store (hooks/directive.mjs) - the thing that carries
+// work across context resets. Since SPEC-0005 PR-2 the store is the headless
+// runner's continuity record: no console binding, no kicks, no typing — the
+// interesting behaviour is the integrity of the store itself (locking, id
+// safety, archive discipline, the OI-006 session-id guard) and the CLI the
+// web GUI shells.
 //
 // Run: node --test hooks/directive.test.mjs
 import { test, beforeEach } from "node:test";
@@ -36,10 +35,6 @@ async function loadDirective() {
   return { m, dir: DIRECTIVES_DIR };
 }
 
-// A pid that is certainly alive (this test process) and one that is certainly
-// not (0 is never a real console).
-const LIVE = process.pid;
-
 // Real Claude Code session ids are always UUIDs (OI-006's bindSession guard
 // rejects anything else as a rebind source), so every id used to exercise
 // the rebind/adoption path below must actually look like one.
@@ -50,7 +45,7 @@ test("a directive survives as a file and starts unbound", async () => {
   const g = m.createDirective({ text: "ship the thing", cwd: "C:/code", profile: "Normal" });
   assert.match(g.id, /^d-\d{8}-/);
   assert.equal(g.status, "active");
-  assert.equal(g.needsKick, false, "an unbound directive has no console to type into");
+  assert.equal(g.sessionId, "", "no session has adopted it yet");
   assert.equal(m.readDirective(g.id).text, "ship the thing");
 });
 
@@ -70,119 +65,21 @@ test("--text-file carries a multi-line directive the command line could not (GUI
   assert.equal(m.textFromArgs(["new", "--text", "typed"]), "typed");
 });
 
-test("binding by ACC_DIRECTIVE arms a kick; re-binding the same session does not", async () => {
+test("binding by ACC_DIRECTIVE records the session; re-binding the same session is inert", async () => {
   const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
-  const b1 = m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  assert.equal(b1.needsKick, true);
-  assert.equal(b1.consolePid, LIVE);
-
-  m.markKicked(g.id);
-  const b2 = m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  assert.equal(b2.needsKick, false, "same session re-firing SessionStart must not re-kick");
-});
-
-test("a NEW session in the same console adopts the directive and arms a kick - this is the clear-survival path", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id);
-
-  // No directiveId this time: exactly what a post-/clear SessionStart looks like.
-  const b = m.bindSession({ sessionId: SID(2), consolePid: LIVE });
-  assert.equal(b.id, g.id, "adopted by console pid, not session id");
-  assert.equal(b.needsKick, true);
-});
-
-test("a session in a DIFFERENT console adopts nothing", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  assert.equal(m.bindSession({ sessionId: SID(2), consolePid: LIVE + 1 }), null);
+  const b1 = m.bindSession({ sessionId: SID(1), directiveId: g.id });
+  assert.equal(b1.sessionId, SID(1));
+  const b2 = m.bindSession({ sessionId: SID(1), directiveId: g.id });
+  assert.equal(b2.sessionId, SID(1), "same session re-firing SessionStart changes nothing");
 });
 
 test("a finished directive is never adopted", async () => {
   const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
+  m.bindSession({ sessionId: SID(1), directiveId: g.id });
   m.setStatus(g.id, "done");
-  assert.equal(m.bindSession({ sessionId: SID(2), consolePid: LIVE }), null);
-  assert.equal(m.bindSession({ sessionId: SID(3), consolePid: LIVE, directiveId: g.id }), null);
-});
-
-test("pendingKicks refuses: too soon after binding", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  assert.equal(m.pendingKicks(Date.now()).length, 0, "TUI is not ready the instant a session starts");
-  assert.equal(m.pendingKicks(Date.now() + 10000).length, 1);
-});
-
-test("pendingKicks: tuiReadySettleMs overrides the default TUI-ready window (guards OI-003)", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  const t0 = Date.parse(m.readDirective(g.id).boundAt);
-
-  // Below the default (4000ms) but the override says this is plenty.
-  const early = m.pendingKicks(t0 + 500, { tuiReadySettleMs: 200 });
-  assert.ok(early.find((k) => k.id === g.id), "an explicit override can be shorter than the default");
-
-  // A stricter-than-default override still refuses before its own window.
-  const strict = m.pendingKicks(t0 + 5000, { tuiReadySettleMs: 8000 });
-  assert.equal(strict.find((k) => k.id === g.id), undefined, "an explicit override can be longer than the default");
-});
-
-test("pendingKicks refuses: dead console", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: 0, directiveId: g.id });
-  assert.equal(m.pendingKicks(Date.now() + 10000).length, 0);
-});
-
-test("pendingKicks refuses: within the cooldown", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id);
-  // Re-arm as a fresh session would, then ask immediately.
-  m.bindSession({ sessionId: SID(2), consolePid: LIVE });
-  assert.equal(m.pendingKicks(Date.now() + 10000).length, 0, "cooldown outranks a fresh binding");
-  assert.equal(m.pendingKicks(Date.now() + 70000).length, 1);
-});
-
-test("pendingKicks refuses: directive paused mid-flight", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  m.setStatus(g.id, "paused");
-  assert.equal(m.pendingKicks(Date.now() + 10000).length, 0);
-});
-
-// issue #14, second half: markKicked clears needsKick the moment the constant
-// is TYPED, not when it lands. If the keystrokes miss, no turn runs, no Stop
-// hook fires, nothing re-arms the kick — before this fix the loop stalled
-// silently forever (the adversarial review's D3).
-test("issue #14: a kick with no resulting turn is presumed swallowed and re-armed", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(40), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id); // typed... and swallowed: no turn ever ends
-  assert.equal(m.readDirective(g.id).needsKick, false);
-  assert.equal(m.pendingKicks(Date.now() + 5 * 60_000).length, 0, "not re-armed before the window");
-  const pend = m.pendingKicks(Date.now() + 11 * 60_000);
-  assert.equal(pend.length, 1, "re-armed once the window passes with no turn end");
-  assert.equal(m.readDirective(g.id).needsKick, true, "the re-arm persists");
-
-  // Counter-case: the kick WORKED (a turn ended after it) — this path stays out
-  // of it; recordTurnEnd already owns re-arming after a real turn.
-  const g2 = m.createDirective({ text: "t2" });
-  m.bindSession({ sessionId: SID(41), consolePid: LIVE, directiveId: g2.id });
-  m.markKicked(g2.id);
-  m.recordTurnEnd(g2.id, {}); // sets needsKick itself, with a fresh turnEndedAt
-  m.setStatus(g2.id, "paused"); // park it so only the swallowed-kick path could re-arm it
-  m.setStatus(g.id, "paused");
-  assert.equal(m.pendingKicks(Date.now() + 11 * 60_000).length, 0, "a paused directive is never re-armed by the swallowed-kick path");
+  assert.equal(m.bindSession({ sessionId: SID(3), directiveId: g.id }), null);
 });
 
 test("cycles append to the log and the tail is bounded", async () => {
@@ -214,131 +111,6 @@ test("directive ids cannot escape the directives directory", async () => {
   assert.equal(m.setStatus("..\\..\\evil", "done"), null);
 });
 
-// --- hybrid re-kick rules (autonomy hardening, 2026-07-31) -----------------
-// The loop stalled twice on 2026-07-31 because ONLY an over-budget stop could
-// continue it: a directive session that ended its turn under the ceiling sat dead
-// (18 minutes, once) until a human typed. These pin the rules that make an
-// under-budget turn end resume by itself - and the rules that keep it quiet
-// while Kyle is actually using that console.
-
-test("recordTurnEnd re-arms the kick and stamps the turn end", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(1), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id); // a kick already fired, as after a resume
-  assert.equal(m.readDirective(g.id).needsKick, false);
-
-  m.recordTurnEnd(g.id, { human: false });
-  const after = m.readDirective(g.id);
-  assert.equal(after.needsKick, true, "kick re-armed");
-  assert.ok(after.turnEndedAt, "turnEndedAt stamped");
-  assert.ok(!after.humanPromptAt, "the kick constant is a MACHINE turn");
-});
-
-test("a human-prompted turn end records the human timestamp", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(2), consolePid: LIVE, directiveId: g.id });
-  m.recordTurnEnd(g.id, { human: true });
-  assert.ok(m.readDirective(g.id).humanPromptAt, "humanPromptAt stamped");
-});
-
-test("kick waits for the settle window, then fires", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(3), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id);
-  m.recordTurnEnd(g.id, { human: false });
-  const t0 = Date.parse(m.readDirective(g.id).turnEndedAt);
-
-  const tooSoon = m.pendingKicks(t0 + 30_000, { kickSettleSeconds: 90 });
-  assert.equal(tooSoon.find((k) => k.id === g.id), undefined, "30s < 90s settle");
-
-  // Past settle AND past the 60s cooldown from markKicked.
-  const ready = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90 });
-  assert.ok(ready.find((k) => k.id === g.id), "fires once settled");
-});
-
-test("a human prompt holds the kick off, and the hold expires", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(4), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id);
-  m.recordTurnEnd(g.id, { human: true });
-  const t0 = Date.parse(m.readDirective(g.id).humanPromptAt);
-
-  const held = m.pendingKicks(t0 + 120_000, { kickSettleSeconds: 90, humanHoldMinutes: 10 });
-  assert.equal(held.find((k) => k.id === g.id), undefined, "quiet while Kyle is engaged");
-
-  const freed = m.pendingKicks(t0 + 11 * 60_000, { kickSettleSeconds: 90, humanHoldMinutes: 10 });
-  assert.ok(freed.find((k) => k.id === g.id), "self-heals after the hold");
-});
-
-test("a finished directive is never kicked, however long you wait", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(5), consolePid: LIVE, directiveId: g.id });
-  m.recordTurnEnd(g.id, { human: false });
-  m.setStatus(g.id, "done", "finished");
-  assert.equal(m.pendingKicks(Date.now() + 86_400_000).find((k) => k.id === g.id), undefined);
-});
-
-test("a dead console is never kicked, however long you wait", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(6), consolePid: 999999, directiveId: g.id });
-  m.recordTurnEnd(g.id, { human: false });
-  assert.equal(m.pendingKicks(Date.now() + 86_400_000).find((k) => k.id === g.id), undefined);
-});
-
-// --- OI-031: a directive bound to a console that's since closed must not sit
-// "active" forever -- it must be reaped (archived out of the live dir) so
-// list/pending only ever see genuinely live directives. ---
-
-test("OI-031: reapDeadDirectives archives a directive whose bound console pid is gone", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(50), consolePid: 999999, directiveId: g.id });
-  const reaped = m.reapDeadDirectives();
-  assert.deepEqual(reaped, [g.id]);
-  assert.equal(m.readDirective(g.id), null, "reaped directive is archived out of the live directory");
-  assert.equal(m.listDirectives().length, 0);
-});
-
-test("OI-031: reapDeadDirectives leaves an unbound directive (consolePid 0) alone -- nothing yet to prove dead", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  assert.deepEqual(m.reapDeadDirectives(), []);
-  assert.equal(m.readDirective(g.id).status, "active");
-});
-
-test("OI-031: reapDeadDirectives leaves a LIVE console's directive alone", async () => {
-  const { m } = await loadDirective();
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(51), consolePid: LIVE, directiveId: g.id });
-  assert.deepEqual(m.reapDeadDirectives(), []);
-  assert.equal(m.readDirective(g.id).status, "active");
-});
-
-test("OI-031: activeDirectives()/list only ever show genuinely live directives -- a dead-console directive disappears on its own", async () => {
-  const { m } = await loadDirective();
-  const live = m.createDirective({ text: "still going" });
-  m.bindSession({ sessionId: SID(52), consolePid: LIVE, directiveId: live.id });
-  const dead = m.createDirective({ text: "console closed days ago" });
-  m.bindSession({ sessionId: SID(53), consolePid: 999999, directiveId: dead.id });
-
-  const active = m.activeDirectives();
-  assert.equal(active.length, 1);
-  assert.equal(active[0].id, live.id);
-  assert.equal(m.readDirective(dead.id), null, "the dead one was reaped as a side effect of listing");
-});
-
-test("CLI: main() 'reap' reports which directives it archived", () => {
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(54), consolePid: 999999, directiveId: g.id });
-  assert.deepEqual(JSON.parse(runMain(["reap"])), [g.id]);
-});
-
 // --- error paths and edge branches not reachable via the happy-path tests --
 
 test("createDirective refuses empty/whitespace-only/absent text", () => {
@@ -349,12 +121,12 @@ test("createDirective refuses empty/whitespace-only/absent text", () => {
 test("bindSession discards an explicit directiveId whose directive exists but is not active", () => {
   const g = m.createDirective({ text: "t" });
   m.setStatus(g.id, "paused"); // paused stays in the live dir (unlike done/blocked), so readDirective still finds it
-  assert.equal(m.bindSession({ sessionId: SID(33), consolePid: LIVE, directiveId: g.id }), null);
+  assert.equal(m.bindSession({ sessionId: SID(33), directiveId: g.id }), null);
 });
 
 test("bindSession sets cwd only when the directive doesn't already have one", () => {
   const g = m.createDirective({ text: "t" }); // no cwd at creation
-  const b = m.bindSession({ sessionId: SID(34), consolePid: LIVE, directiveId: g.id, cwd: "C:/new" });
+  const b = m.bindSession({ sessionId: SID(34), directiveId: g.id, cwd: "C:/new" });
   assert.equal(b.cwd, "C:/new");
 });
 
@@ -389,24 +161,17 @@ test("setStatus swallows a log-write failure and an archive failure instead of t
   assert.equal(s2.status, "done", "the live record still updates even though archiving failed");
 });
 
-test("recordTurnEnd and markKicked return null for a nonexistent or non-active directive", () => {
-  assert.equal(m.recordTurnEnd("d-doesnotexist", {}), null);
-  assert.equal(m.markKicked("d-doesnotexist"), null);
-  const g = m.createDirective({ text: "t" });
-  m.setStatus(g.id, "paused");
-  assert.equal(m.recordTurnEnd(g.id, {}), null, "a paused directive is not active");
-});
-
 // --- issue #14: concurrent mutators must not lose updates ---
-// SessionStart (bindSession), Stop (recordTurnEnd/appendCycle), clearbot
-// (markKicked), and model runs (setStatus) are separate PROCESSES touching the
-// same directive file; before the mutate() lock, each was read -> change ->
-// write with nothing serializing it, so two concurrent writers silently lost
-// one side's update. Real subprocesses (not in-process calls) because the lock
-// is a cross-process file lock; ACC_DIRECTIVE_MUTATE_DELAY_MS widens the
-// microseconds-wide natural race window so the test is deterministic rather
-// than a timing coin flip — proven red against the unlocked code (cycles came
-// back 1-2 of 5), green and stable with the lock.
+// SessionStart (bindSession), the Stop hook (appendCycle), the headless
+// runner (appendCycle), and model runs (setStatus) are separate PROCESSES
+// touching the same directive file; before the mutate() lock, each was
+// read -> change -> write with nothing serializing it, so two concurrent
+// writers silently lost one side's update. Real subprocesses (not in-process
+// calls) because the lock is a cross-process file lock;
+// ACC_DIRECTIVE_MUTATE_DELAY_MS widens the microseconds-wide natural race
+// window so the test is deterministic rather than a timing coin flip —
+// proven red against the unlocked code (cycles came back 1-2 of 5), green
+// and stable with the lock.
 test("issue #14: N concurrent appendCycle processes lose no update", async () => {
   const { spawn } = await import("node:child_process");
   const g = m.createDirective({ text: "t" });
@@ -431,32 +196,27 @@ test("CLI: main() 'log' swallows a log-write failure instead of throwing", () =>
 
 // --- OI-006: a hand-run SessionStart cannot hijack a live directive's binding ---
 
-test("OI-006: a non-UUID sessionId cannot hijack an active directive's binding", async () => {
+test("OI-006: a non-UUID sessionId cannot steal an active directive's session binding", async () => {
   const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(30), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id);
+  m.bindSession({ sessionId: SID(30), directiveId: g.id });
   const before = m.readDirective(g.id);
 
-  // Exactly the reproduction from the ledger: a hand-run SessionStart payload
-  // ("hbtest") aimed at a console that owns a real directive.
-  const hijacked = m.bindSession({ sessionId: "hbtest", consolePid: LIVE });
-  assert.equal(hijacked.id, g.id, "console-pid adoption still runs unchanged");
+  // The reproduction class from the ledger: a hand-piped SessionStart payload
+  // ("hbtest") carrying the directive's id.
+  const hijacked = m.bindSession({ sessionId: "hbtest", directiveId: g.id });
+  assert.equal(hijacked.id, g.id, "the bind still resolves the directive");
   assert.equal(hijacked.sessionId, before.sessionId, "the real session id must survive a garbage rebind attempt");
-  assert.equal(hijacked.needsKick, false, "a garbage id must never arm a kick");
-  assert.equal(hijacked.boundAt, before.boundAt, "boundAt must not be touched by a garbage rebind");
 });
 
-test("OI-006: a real UUID sessionId still adopts normally after a clear", async () => {
+test("OI-006: a real UUID sessionId still rebinds normally (the headless-resume path)", async () => {
   const { m } = await loadDirective();
   const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(31), consolePid: LIVE, directiveId: g.id });
-  m.markKicked(g.id);
+  m.bindSession({ sessionId: SID(31), directiveId: g.id });
 
-  const adopted = m.bindSession({ sessionId: SID(32), consolePid: LIVE });
+  const adopted = m.bindSession({ sessionId: SID(32), directiveId: g.id });
   assert.equal(adopted.id, g.id);
-  assert.equal(adopted.sessionId, SID(32), "a real UUID rebinds normally");
-  assert.equal(adopted.needsKick, true, "a genuinely new session arms a kick");
+  assert.equal(adopted.sessionId, SID(32), "each fresh runner session rebinds by ACC_DIRECTIVE");
 });
 
 // --- direct unit coverage for the remaining exported helpers ---------------
@@ -465,7 +225,7 @@ test("directiveForSession finds an active directive by exact sessionId, and refu
   assert.equal(m.directiveForSession(""), null, "no sessionId given");
   assert.equal(m.directiveForSession(SID(20)), null, "no directives exist yet");
   const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(20), consolePid: LIVE, directiveId: g.id });
+  m.bindSession({ sessionId: SID(20), directiveId: g.id });
   assert.equal(m.directiveForSession(SID(20)).id, g.id);
   assert.equal(m.directiveForSession(SID(21)), null, "a different session matches nothing");
 });
@@ -510,31 +270,6 @@ test("CLI: main() with no subcommand defaults to 'list', printing active directi
   const g = m.createDirective({ text: "t" });
   const printed = JSON.parse(runMain([]));
   assert.ok(printed.some((x) => x.id === g.id));
-});
-
-test("CLI: main() 'pending' prints pending kicks, reading policy.json dials when present and falling back when not", () => {
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(40), consolePid: LIVE, directiveId: g.id });
-
-  const savedPolicy = process.env.ACC_POLICY;
-  try {
-    delete process.env.ACC_POLICY; // resolves to the real repo policy.json -- exercises the try branch
-    assert.doesNotThrow(() => JSON.parse(runMain(["pending"])));
-
-    process.env.ACC_POLICY = path.join(DIRECTIVES_DIR, "does-not-exist.json"); // exercises the catch branch
-    assert.doesNotThrow(() => JSON.parse(runMain(["pending"])));
-  } finally {
-    if (savedPolicy === undefined) delete process.env.ACC_POLICY;
-    else process.env.ACC_POLICY = savedPolicy;
-  }
-});
-
-test("CLI: main() 'kicked <id>' clears needsKick", () => {
-  const g = m.createDirective({ text: "t" });
-  m.bindSession({ sessionId: SID(41), consolePid: LIVE, directiveId: g.id });
-  assert.equal(m.readDirective(g.id).needsKick, true);
-  runMain(["kicked", g.id]);
-  assert.equal(m.readDirective(g.id).needsKick, false);
 });
 
 test("CLI: main() 'show' resolves an explicit id, the sole active directive, refuses to guess among several, and falls back to 'no active directive'", () => {
@@ -614,11 +349,6 @@ test("a directive persists correctly after its directory is moved to a new locat
 });
 
 // ------------------------------------------------------------- SPEC-0001 (headless runner wiring)
-test("KICK_TEXT is the exact wire constant clearbot types — a drift here desyncs the human-hold detection", async () => {
-  const { m } = await loadDirective();
-  assert.equal(m.KICK_TEXT, "Continue the active ACC directive.");
-});
-
 test("lastCycleBody returns the last cycle's BODY only — headers/timestamps/session lines never leak in", async () => {
   const { m } = await loadDirective();
   const d = m.createDirective({ text: "t", cwd: "/w" });

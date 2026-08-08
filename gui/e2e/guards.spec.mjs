@@ -76,7 +76,7 @@ const budgetCallsFile = path.join(dir, "budget-calls.jsonl");
 function seedPolicy() {
   fs.writeFileSync(policyFile, JSON.stringify({
     _comment: "e2e", context: { softK: 400, hardK: 600 }, week: { amberTokens: 1e9, redTokens: 2e9 },
-    review: { maxFinders: 3 }, subagents: { allow: ["Explore"] }, autoApprove: { enabled: false },
+    review: { maxFinders: 3 }, subagents: { allow: ["Explore"] },
     kernel: { harness: "claude-code", budget: { wallClockMin: 60, toolCalls: 200, tokens: 500000 }, hardCaps: { wallClockMin: 240 }, autonomy: { window: 10, rejectRate: 0.3, factor: 0.5, runs: 5 }, checkpointMin: 20, alwaysAllowTools: ["TodoWrite"], extraDenyWriteRoots: [] },
   }, null, 2));
   try { fs.rmSync(budgetCallsFile); } catch {}

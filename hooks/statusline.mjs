@@ -17,17 +17,6 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = resolveRoot(HERE);
 const STATE = path.join(ROOT, "runner", "state");
 
-// The watcher is what types /clear and the resume prompt. If it is dead this
-// session has no autonomy at all, and nothing else says so out loud.
-const HEARTBEAT_STALE_MS = 30_000;
-function botDead() {
-  try {
-    return Date.now() - fs.statSync(path.join(ROOT, "watcher", "clearbot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
-  } catch {
-    return false; // absent = never started here; do not cry wolf
-  }
-}
-
 // ANSI: dim for chrome, colour for the budget bar.
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
@@ -85,8 +74,6 @@ function main() {
     const colour = k >= hardK ? RED : k >= softK ? YELLOW : GREEN;
     parts.push(`${colour}ctx ${k}k/${hardK}k ${bar(frac)}${RESET}`);
   }
-
-  if (botDead()) parts.push(`${RED}bot DEAD${RESET}`);
 
   const wk = weekPct();
   if (wk) {

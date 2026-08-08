@@ -162,7 +162,7 @@ if (isMain) {
   try {
     payload = JSON.parse(raw);
   } catch {
-    deny(`guard: no hook payload on stdin (got ${raw.length} bytes) — failing closed rather than silently allowing. Run guards/disable-guards.cmd if this repeats.`);
+    deny(`guard: no hook payload on stdin (got ${raw.length} bytes) — failing closed rather than silently allowing. If this repeats, toggle guards off in the Command Center (http://127.0.0.1:43117/guards) or run: node C:/code/guards/hooks/engine.mjs toggle off`);
   }
 
   const d = decide(payload, config);

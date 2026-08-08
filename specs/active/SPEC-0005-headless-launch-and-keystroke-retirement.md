@@ -78,7 +78,7 @@ PR-2:
 | ID | Given | When | Then | Traces to |
 |---|---|---|---|---|
 | AC-201 | The demolished tree | `npm test` + covgate + `npm run e2e:gui` | green; changed files at 100/100/90 | NFR-008 |
-| AC-202 | The demolished tree | the grep gate (clearbot\|winfind\|PtyHost\|sendconsole\|guards-gui\|SLICE-RUNNER\|Guards Control\|conpty\|term\.html\|stubconsole\|stubpipe\|watchdog\|autoClear\|autoCd\|pendingKicks\|consolePid) | hits only `docs/adr/`, `docs/notes/`, `specs/done/`, git history | — |
+| AC-202 | The demolished tree | the grep gate (clearbot\|winfind\|PtyHost\|sendconsole\|guards-gui\|SLICE-RUNNER\|Guards Control\|conpty\|term\.html\|stubconsole\|stubpipe\|watchdog\|autoClear\|autoCd\|pendingKicks\|consolePid) | hits only `docs/adr/`, `docs/notes/`, `specs/done/`, git history — plus the three documented pin classes: this spec itself (it orders the deletion), TEST-LEDGER's deleted-tests section (it records it), and negative assertions/fixtures that pin the machinery's ABSENCE | — |
 | AC-203 | An interactive session ends over hard budget with an active directive | Stop hook fires | systemMessage names the checkpoint, `>>> TYPE /clear NOW <<<`, and the exact `runner.mjs directive:<id>` resume command; no clear-request file is ever written | FR-011 |
 | AC-204 | A session starts with `ACC_DIRECTIVE` set | SessionStart | binds by directive id alone (no console PID, no window state) and injects the directive context | FR-011 |
 
@@ -154,7 +154,7 @@ Rows copied to `specs/TEST-LEDGER.md` (T-I-006, T-U-007, T-E-004). Red runs reco
 
 - [x] PR-1 ACs green with recorded red runs (65/65, 57/57, 17/17 e2e).
 - [x] PR-1 budget actuals filled, none over.
-- [ ] PR-2 ACs green (AC-201…204) + grep gate clean.
-- [ ] PRD statuses updated per §5 of the demolition choreography (PR-2 commit).
+- [x] PR-2 ACs green (AC-201…204: fast tier 495/498 with only the pre-existing root artifact red, e2e 17/17, reworded Stop/SessionStart pins recorded red pre-surgery: budget 5, statusline 1, server 2) + grep gate clean (recorded in the PR).
+- [x] PRD statuses updated per §5 of the demolition choreography (PRD 1.3.0, same commit).
 - [ ] Kyle's Windows manual check: `npm run gui` → task → GO → real run under the shim; double-GO → 409/exit 6.
-- [ ] Spec moves to `specs/done/` at PR-2 merge.
+- [ ] Spec moves to `specs/done/` after that check (with SL-008's watched real run as FR-011's proof).

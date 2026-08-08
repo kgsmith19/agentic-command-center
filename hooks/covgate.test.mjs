@@ -18,7 +18,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const COVGATE = path.join(HERE, "covgate.mjs");
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), "acc-covgate-test-"));
 
-// Unlike clearbot.test.mjs's/runner.test.mjs's spawns, this file's `gate()`
+// Unlike runner.test.mjs's spawns, this file's `gate()`
 // subprocess IS covgate.mjs itself (a gated file) — its main() only ever
 // runs via this exact subprocess call, so it must keep inheriting a live
 // NODE_V8_COVERAGE (when one exists) rather than have it stripped: that is
@@ -95,9 +95,9 @@ test("changedLibFiles keeps lib .mjs under hooks/ and runner/, drops tests, harn
     "hooks/lane.mjs",
     "runner/runner.mjs",
     "hooks/lane.test.mjs",
-    "e2e/loop.e2e.mjs",
+    "kernel/kernel.e2e.mjs",
     "hooks\\covgate.mjs", // windows separators normalize
-    "guards-gui.ps1",
+    "shim/claude.cmd",
     "AGENTS.md",
     "hooks/lane.mjs", // duplicate collapses
   ]);

@@ -25,8 +25,8 @@ const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/guards": "g
 const BODY_CAP = 64 * 1024;
 
 // --- guards API (SPEC-0002): thin shell over hooks/engine.mjs -------------
-// The engine stays the single owner of every state change, exactly as it is
-// for guards-gui.ps1 — this server adds transport, never logic. ACC_ENGINE
+// The engine stays the single owner of every state change — this server adds
+// transport, never logic. ACC_ENGINE
 // is resolved per request so tests can drive a fake engine (and one
 // read-only case the real one) without a restart.
 const enginePath = () => process.env.ACC_ENGINE || path.join(HERE, "..", "hooks", "engine.mjs");
@@ -39,7 +39,6 @@ const usagePath = () => process.env.ACC_USAGE || path.join(HERE, "..", "hooks", 
 const repoRoot = () => (process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.join(HERE, ".."));
 const policyFile = () => process.env.ACC_POLICY || path.join(HERE, "..", "policy.json");
 const sliceStopFile = () => path.join(repoRoot(), "runner", "stop", "slice-runner.stop");
-const clearbotStopFile = () => path.join(repoRoot(), "watcher", "clearbot.stop");
 
 // --- launch surface (SPEC-0005, FR-012): the web Start-work tab -----------
 // Same shape as every block above: the server shells the real owners
@@ -147,14 +146,12 @@ const nonNegNum = (n) => Number.isFinite(n) && n >= 0;
 export function mergeDials(policy, d) {
   const req = (name, v, ok) => { if (!ok(v)) throw new Error(`invalid ${name}`); return v; };
   if (!Array.isArray(d.allow) || d.allow.some((s) => typeof s !== "string")) throw new Error("invalid allow (must be a string array)");
-  if (typeof d.autoApprove !== "boolean") throw new Error("invalid autoApprove (must be boolean)");
   return {
     ...policy,
     context: { ...(policy.context || {}), softK: req("softK", d.softK, nonNegInt), hardK: req("hardK", d.hardK, nonNegInt) },
     week: { ...(policy.week || {}), amberTokens: req("amberTokens", d.amberTokens, nonNegNum), redTokens: req("redTokens", d.redTokens, nonNegNum) },
     review: { ...(policy.review || {}), maxFinders: req("maxFinders", d.maxFinders, nonNegInt) },
     subagents: { ...(policy.subagents || {}), allow: d.allow.map((s) => s.trim()).filter(Boolean) },
-    autoApprove: { ...(policy.autoApprove || {}), enabled: d.autoApprove },
   };
 }
 
@@ -162,22 +159,12 @@ export function mergeDials(policy, d) {
 // side effect — the browser's `action` string only selects a thunk, it never
 // becomes argv, a path, or a flag (PROP-002). `confirm`-gated actions type
 // into a real console, so they demand an explicit browser confirm.
-function controlAction(action, body) {
-  const startCmd = process.env.ACC_CLEARBOT_START; // fake seam for the Windows launcher
+function controlAction(action) {
   const writeFile = (f, txt) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, txt); };
   const table = {
     stop: () => { writeFile(sliceStopFile(), "stopped from the Command Center\n"); return { ok: true }; },
     resume: () => nodeExec(budgetPath(), ["unstop"]),
     fanout: () => nodeExec(budgetPath(), ["fanout", "30"]),
-    "clear-now": () => (body.confirm === true ? nodeExec(budgetPath(), ["clear-now"]) : null),
-    // The kill-switch file is the cross-platform gate clearbot.ps1 actually
-    // checks; the Windows watcher launch is a best-effort extra behind the
-    // injectable seam.
-    "cleanup-off": () => { writeFile(clearbotStopFile(), `stopped ${""}\n`); return { ok: true }; },
-    "cleanup-on": () => {
-      try { fs.unlinkSync(clearbotStopFile()); } catch {}
-      return startCmd ? nodeExec(startCmd, []) : { ok: true, note: "kill switch cleared" };
-    },
   };
   return Object.hasOwn(table, action) ? table[action] : null;
 }
@@ -311,14 +298,12 @@ export function handler(req, res) {
           softK: p.context?.softK, hardK: p.context?.hardK,
           amberTokens: p.week?.amberTokens, redTokens: p.week?.redTokens,
           maxFinders: p.review?.maxFinders, allow: p.subagents?.allow ?? [],
-          autoApprove: !!p.autoApprove?.enabled,
         };
         profiles = profileNames(p);
       } catch (e) { return send(res, 500, { error: `cannot read policy.json: ${e.message}` }); }
       send(res, 200, {
         tier, weekText: (week.stdout + week.stderr).trim(), dials, profiles,
         stopped: fs.existsSync(sliceStopFile()),
-        cleanupKilled: fs.existsSync(clearbotStopFile()),
       });
     })();
   }
@@ -444,11 +429,9 @@ export function handler(req, res) {
   if (route === "/api/process/control" && req.method === "POST") {
     if (req.headers["x-acc"] !== "1") return send(res, 403, { error: "missing X-ACC header" });
     return readBody(req, res, async (b) => {
-      const thunk = typeof b.action === "string" ? controlAction(b.action, b) : null;
-      if (!thunk) return send(res, 400, { error: `action "${b.action}" is not allowed or is missing its confirm` });
-      const outcome = thunk();
-      if (outcome === null) return send(res, 400, { error: `action "${b.action}" requires confirm:true` });
-      const r = await outcome; // a plain object (file ops) or a nodeExec result
+      const thunk = typeof b.action === "string" ? controlAction(b.action) : null;
+      if (!thunk) return send(res, 400, { error: `action "${b.action}" is not allowed here` });
+      const r = await thunk(); // a plain object (file ops) or a nodeExec result
       send(res, 200, r.code !== undefined ? { code: r.code, out: (r.stdout + r.stderr).slice(-2000) } : r);
     });
   }
@@ -469,7 +452,7 @@ export function startServer({ port = 0 } = {}) {
 export async function cli(argv = process.argv) {
   const i = argv.indexOf("--port");
   const s = await startServer({ port: i === -1 ? 0 : Number(argv[i + 1]) });
-  console.log(`LISTENING ${s.port}`); // consumers (guards-gui.ps1, Playwright) parse this line
+  console.log(`LISTENING ${s.port}`); // consumers (Playwright, scripts) parse this line
   return s;
 }
 

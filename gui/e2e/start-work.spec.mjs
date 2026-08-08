@@ -27,7 +27,7 @@ test.beforeEach(() => {
   // fixture shape intact.
   fs.writeFileSync(path.join(dir, "policy.json"), JSON.stringify({
     context: { softK: 400, hardK: 600 }, week: { amberTokens: 1e9, redTokens: 2e9 },
-    review: { maxFinders: 3 }, subagents: { allow: [] }, autoApprove: { enabled: false },
+    review: { maxFinders: 3 }, subagents: { allow: [] },
     profiles: { _note: "e2e fixture", Normal: { label: "std" }, Heavy: { label: "big" } },
     lane: { slots: 1, minGapMs: 0 },
     kernel: { harness: "claude-code", budget: { wallClockMin: 60, toolCalls: 200, tokens: 500000 } },

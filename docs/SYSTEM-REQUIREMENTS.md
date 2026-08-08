@@ -43,7 +43,7 @@ graph TB
     subgraph "Agentic Command Center"
         HOOKS["Hooks<br/>tech: Node (node:test)"]
         KERNEL["Kernel<br/>tech: Node (node:test)"]
-        GUI["GUI control panel<br/>tech: PowerShell WinForms + C# PtyHost + Node HTTP server"]
+        GUI["GUI control panel<br/>tech: Node HTTP server + web pages"]
         WATCHER["Watcher<br/>tech: PowerShell"]
         SHIM["Launch-cap shim<br/>tech: cmd/POSIX shim"]
         RUNNER["Runner (slice-runner)<br/>tech: Node"]
@@ -59,12 +59,12 @@ graph TB
 |---|---|---|---|---|---|
 | C-001 | Hooks | Node 22, `node:test`, no runtime deps | PreToolUse/PostToolUse/SessionStart/Stop hook logic: guard, budget, directive, route, usage, lane, testplan, covgate | Any OS (CI: Linux + Windows) | FR-001, FR-003, FR-004, FR-005 |
 | C-002 | Kernel | Node 22, `node:test` | Headless bounded task runner: contract validation, guardhook enforcement, supervisor, ledger, verification | Any OS | FR-006, FR-007, FR-008 |
-| C-003 | GUI | PowerShell WinForms (`guards-gui.ps1`), C# `PtyHost.cs` (ConPTY), Node HTTP server (`gui/server.mjs`) serving `gui/kernel.html`/`term.html` | Human control panel: launch/stop/approve, kernel policy editing, embedded terminal | Windows | FR-010, UC-001 |
-| C-004 | Watcher | PowerShell | Supervises the automation loop's liveness; drives clearbot's keystroke/pipe injection; launch-cap alerting | Windows | NFR-007 |
+| C-003 | GUI | Node HTTP server (`gui/server.mjs`) serving `gui/guards.html`/`gui/kernel.html` | Human control panel: start work (directive create + headless launch), guards, vault, runbox, spending, kernel policy | Any (loopback web) | FR-010, FR-012, UC-001 |
+| C-004 | Watcher | PowerShell | Launch-cap alerting only (`claude-cap-watch.ps1`); the keystroke/liveness watcher was deleted (ADR-0005) | Windows | NFR-007 |
 | C-005 | Shim | `.cmd` / POSIX shell | PATH-level gate in front of the real `claude.exe`, alert-only on cap breach, fails open | Windows | UC-001 (launch cap) |
 | C-006 | Runner | Node 22 | `claude -p` slice-runner CLI: install a schedule, run a job, report status | Any OS | — |
 
-**Rule:** a new container is a major complexity purchase. All six above already exist; none is a candidate to split further today, and C-004/C-005 are candidates to eventually merge if the launch-cap watcher and clearbot supervision are ever unified — not done here because it is out of scope for a doc-only pass.
+**Rule:** a new container is a major complexity purchase. All six above already exist; none is a candidate to split further today. C-004 shrank to the cap-watch alerter when the keystroke stack was deleted (ADR-0005); C-004/C-005 remain merge candidates if cap-watch ever folds into the shim.
 
 ## 3. Components (C4 Level 3, only where non-obvious)
 
@@ -122,7 +122,7 @@ Not applicable in the traditional sense — ACC has no HTTP API surface except t
 | Table/store | Purpose | Key columns | Row growth | Retention | Traces to |
 |---|---|---|---|---|---|
 | `runner/ledger/*.jsonl` | Kernel run records | `runId`, `event` (started/finalized), `outcome`, `criteria` | One line per run event | Indefinite | DR-002 |
-| `runner/directives/*.json` + `<id>.log.md` | Directive state and its progress log | `id`, `consolePid`, `status` | One file per active directive, archived on completion | Until archived to `runner/directives/done/`, then indefinite | DR-003 |
+| `runner/directives/*.json` + `<id>.log.md` | Directive state and its progress log | `id`, `sessionId`, `status` | One file per active directive, archived on completion | Until archived to `runner/directives/done/`, then indefinite | DR-003 |
 | `vault.json` | Named secrets | `KEY` -> value | Grows with keys Kyle adds | Until Kyle removes a key | DR-001 |
 | `watcher/approvals.log` | Auto-approved runbox script runs | timestamp, script, outcome | One line per auto-run | Indefinite | DR-004 |
 
@@ -156,7 +156,7 @@ Not applicable in the traditional sense — ACC has no HTTP API surface except t
 | Rollback | `git revert` / checkout a prior commit. No migration or data rollback exists because there is no database. |
 | Migrations | Not applicable — no schema, JSONL append-only stores. |
 | Backups | Git is the backup for code; ledger/directive/vault files are local-disk only, not separately backed up today (accepted gap, single-machine tool). |
-| Monitoring | `watcher/clearbot.heartbeat` freshness, statusline `bot DEAD` indicator, `hooks/usage.mjs week` token tier. |
+| Monitoring | Runner liveness via `runner/state/<job>.pid` (the Command Center list's running badge), `runner/logs/` + `runner/alerts/`, `hooks/usage.mjs week` token tier. |
 | Alerting | Statusline warnings only (no external paging) — consistent with a single-operator tool. |
 | Logging | Kernel ledger, directive logs, `watcher/approvals.log`; no centralized log aggregation. |
 | Runbook | `AGENTS.md` is the operational runbook for this repo. |

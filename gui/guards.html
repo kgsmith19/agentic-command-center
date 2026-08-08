@@ -79,18 +79,13 @@
     <label>Warn this week at <input type="text" id="amber" style="width:80px"> billion tokens</label>
     <label>STOP at <input type="text" id="red" style="width:80px"> billion</label><br>
     <label>Helpers allowed (comma-separated) <input type="text" id="allow" style="width:300px"></label><br>
-    <label><input type="checkbox" id="autoApprove"> Run Claude's requested scripts automatically (no /approve)</label><br>
     <button id="dialsSave">Save my limits</button>
     <span id="dialsMsg" class="muted"></span>
   </div>
   <div><strong>Emergency stop</strong> — <span id="stopState" class="muted"></span></div>
   <button id="ctlStop">STOP all automated work</button>
   <button id="ctlResume">Resume work</button>
-  <button id="ctlFanout">Allow extra helpers for 30 min</button><br>
-  <div style="margin-top:8px"><strong>Automatic cleanup</strong> — <span id="cleanupState" class="muted"></span></div>
-  <button id="ctlCleanupOn">Turn cleanup ON</button>
-  <button id="ctlCleanupOff">Turn cleanup OFF</button>
-  <button id="ctlClearNow">Clean up my newest session now…</button>
+  <button id="ctlFanout">Allow extra helpers for 30 min</button>
   <div id="procResult" class="muted"></div>
 </fieldset>
 
@@ -191,16 +186,14 @@ async function refreshProcess() {
   $("amber").value = d.amberTokens != null ? d.amberTokens / 1e9 : "";
   $("red").value = d.redTokens != null ? d.redTokens / 1e9 : "";
   $("allow").value = (d.allow || []).join(", ");
-  $("autoApprove").checked = !!d.autoApprove;
   $("stopState").textContent = s.stopped ? "STOPPED — no new automated work will start." : "Running normally.";
-  $("cleanupState").textContent = s.cleanupKilled ? "OFF — kill switch engaged." : "ON (or ready).";
   fillProfiles(s.profiles);
 }
 $("dialsSave").onclick = async () => {
   const dials = {
     softK: Number($("softK").value), hardK: Number($("hardK").value), maxFinders: Number($("maxFinders").value),
     amberTokens: Math.round(Number($("amber").value) * 1e9), redTokens: Math.round(Number($("red").value) * 1e9),
-    allow: $("allow").value.split(",").map((s) => s.trim()).filter(Boolean), autoApprove: $("autoApprove").checked,
+    allow: $("allow").value.split(",").map((s) => s.trim()).filter(Boolean),
   };
   const r = await api("/api/process/dials", dials);
   $("dialsMsg").textContent = r.error || "Saved — hooks pick this up on the next fire.";
@@ -216,14 +209,10 @@ async function control(action, extra) {
 $("ctlStop").onclick = () => control("stop");
 $("ctlResume").onclick = () => control("resume");
 $("ctlFanout").onclick = () => control("fanout");
-$("ctlCleanupOn").onclick = () => control("cleanup-on");
-$("ctlCleanupOff").onclick = () => control("cleanup-off");
-$("ctlClearNow").onclick = () => confirm("This types /clear into your newest Claude Code session now. Continue?") && control("clear-now", { confirm: true });
 
 // --- start work (SPEC-0005) ---
-// Ported from guards-gui.ps1's Invoke-RouteSuggest: the router fills the
-// folder box on blur; a human override in the box always wins (GO sends
-// whatever the box holds).
+// The router fills the folder box on blur; a human override in the box
+// always wins (GO sends whatever the box holds).
 async function suggestFolder() {
   const text = $("dirText").value.trim();
   if (!text) return;

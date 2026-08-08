@@ -19,36 +19,13 @@ process.env.ACC_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "acc-route-test-"))
 // branch coverage when many such spawns share one coverage run (found
 // 2026-08-02).
 delete process.env.NODE_V8_COVERAGE;
-const { route, replayable, doctor } = await import("./route.mjs");
+const { route, doctor } = await import("./route.mjs");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ACC_ROOT;
 const STATE = path.join(ROOT, "runner", "state");
-const REQ = path.join(ROOT, "runner", "clear-requests");
-const QUEUED = path.join(ROOT, "runner", "queued");
 
 after(() => fs.rmSync(ROOT, { recursive: true, force: true }));
-
-// A session the cd path will accept: it needs a recorded console pid.
-function withConsole(sid, consolePid = process.pid) {
-  fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(path.join(STATE, `${sid}.window`), JSON.stringify({ consolePid, ok: true }));
-  return sid;
-}
-function cdReq(sid) {
-  try { return JSON.parse(fs.readFileSync(path.join(REQ, `${sid}.cd.json`), "utf8")); } catch { return null; }
-}
-function queuedFor(consolePid) {
-  try { return fs.readFileSync(path.join(QUEUED, `${consolePid}.md`), "utf8"); } catch { return null; }
-}
-function cleanup(sid) {
-  for (const f of [
-    path.join(STATE, `${sid}.window`),
-    path.join(STATE, `${sid}.route`),
-    path.join(REQ, `${sid}.cd.json`),
-    path.join(QUEUED, `${process.pid}.md`),
-  ]) { try { fs.unlinkSync(f); } catch {} }
-}
 
 test("backend task routes to lifeos", () => {
   const r = route("add a supabase migration and a pytest for the new endpoint");
@@ -144,85 +121,6 @@ test("hook flags a route that sits outside the session cwd", () => {
   assert.match(ctx, /outside the session cwd/);
 });
 
-// cdRequest requires the route's real directory to exist on disk
-// (hooks/route.mjs's fs.existsSync(r.path) gate) — meaningful only where the
-// fixture's routes point at real checked-out repos, i.e. Windows. Same
-// platform-skip pattern already used by hooks/budget.test.mjs and
-// hooks/testplan.test.mjs for their own OS-specific cases.
-test("scope change blocks the prompt and queues a cd for the watcher", { skip: process.platform !== "win32" }, () => {
-  const sid = withConsole(`t${process.pid}f`);
-  try {
-    const out = JSON.parse(fire(sid, "add a supabase migration"));
-    assert.equal(out.decision, "block");
-    assert.match(out.reason, /Re-scoping this session to lifeos/);
-    const req = cdReq(sid);
-    assert.equal(req.kind, "cd");
-    assert.equal(req.path, String.raw`C:\code\lifeos-ecosystem\lifeos`);
-    assert.equal(req.replay, "add a supabase migration");
-    assert.equal(req.clear, false); // first scope of the session: nothing to clear
-  } finally { cleanup(sid); }
-});
-
-test("a mid-session re-scope also asks for a clear", { skip: process.platform !== "win32" }, () => {
-  const sid = withConsole(`t${process.pid}g`);
-  try {
-    fire(sid, "fix the react component");            // first scope, cd queued
-    fs.unlinkSync(path.join(REQ, `${sid}.cd.json`)); // pretend the watcher ran it
-    fire(sid, "now add a supabase migration", String.raw`C:\code\lifeos-ecosystem\lifeos-ui`);
-    assert.equal(cdReq(sid).clear, true);
-  } finally { cleanup(sid); }
-});
-
-test("the same destination is never attempted twice — no deny loop", { skip: process.platform !== "win32" }, () => {
-  const sid = withConsole(`t${process.pid}h`);
-  try {
-    assert.equal(JSON.parse(fire(sid, "add a supabase migration")).decision, "block");
-    fs.unlinkSync(path.join(REQ, `${sid}.cd.json`));
-    // cd silently failed to take: cwd is still C:\code. Second time it must fall
-    // through to the advisory line rather than eating the prompt again.
-    const out = JSON.parse(fire(sid, "another supabase migration and pytest run"));
-    assert.notEqual(out.decision, "block");
-    assert.match(out.hookSpecificOutput.additionalContext, /Scope this task to lifeos/);
-  } finally { cleanup(sid); }
-});
-
-test("no recorded console means advise, never block", () => {
-  const sid = `t${process.pid}i`; // deliberately no .window file
-  try {
-    const out = JSON.parse(fire(sid, "add a supabase migration"));
-    assert.notEqual(out.decision, "block");
-    assert.equal(cdReq(sid), null);
-  } finally { cleanup(sid); }
-});
-
-test("an untypable prompt with no clear to ride on is never blocked", () => {
-  // First scope of a session: no clear, so no SessionStart fires and there is
-  // nothing to inject a queued prompt into. Advise instead of eating it.
-  const sid = withConsole(`t${process.pid}j`);
-  try {
-    const out = JSON.parse(fire(sid, "add a supabase migration\nand a second line"));
-    assert.notEqual(out.decision, "block");
-    assert.equal(cdReq(sid), null);
-    assert.equal(queuedFor(process.pid), null);
-  } finally { cleanup(sid); }
-});
-
-test("a multi-line mid-session re-scope queues the prompt instead of typing it", { skip: process.platform !== "win32" }, () => {
-  const sid = withConsole(`t${process.pid}k`);
-  const multi = "now add a supabase migration\nand a pytest for it";
-  try {
-    fire(sid, "fix the react component");            // first scope, cd queued
-    fs.unlinkSync(path.join(REQ, `${sid}.cd.json`)); // pretend the watcher ran it
-    const out = JSON.parse(fire(sid, multi, String.raw`C:\code\lifeos-ecosystem\lifeos-ui`));
-    assert.equal(out.decision, "block");
-    const req = cdReq(sid);
-    assert.equal(req.clear, true);
-    assert.equal(req.queued, true);
-    assert.equal(req.replay, "");        // nothing derived from the prompt is typed
-    assert.equal(queuedFor(process.pid), multi);  // it travels as a file, intact
-  } finally { cleanup(sid); }
-});
-
 // doctor: a repo dir is covered ONLY by an exact route path. The wide root
 // route does not cover repos — silent fallback to wide is the OI-003 gap.
 test("doctor flags a repo dir no route covers", () => {
@@ -239,10 +137,14 @@ test("doctor compares paths case-insensitively (Windows)", () => {
   assert.deepEqual(doctor([{ path: "C:\\code\\Guards" }], ["c:\\CODE\\guards"]), []);
 });
 
-test("replayable rejects exactly what the injector cannot be trusted with", () => {
-  assert.ok(replayable("fix the login page"));
-  assert.ok(!replayable("two\nlines"));
-  assert.ok(!replayable("tab\there"));
-  assert.ok(!replayable(""));
-  assert.ok(!replayable("x".repeat(2001)));
+// The deny/cd-request/queued-prompt channel died with the keystroke stack
+// (SPEC-0005 PR-2). The router is purely advisory now — this pins that no
+// prompt shape, scope change, or re-scope can ever block a prompt again.
+test("the hook NEVER blocks: scope changes and multi-line prompts advise only", () => {
+  const sid = `t${process.pid}f`;
+  const out = JSON.parse(fire(sid, "add a supabase migration"));
+  assert.notEqual(out.decision, "block");
+  assert.match(out.hookSpecificOutput.additionalContext, /Scope this task to lifeos/);
+  const multi = JSON.parse(fire(`t${process.pid}g`, "add a supabase migration\nand a second line"));
+  assert.notEqual(multi.decision, "block");
 });

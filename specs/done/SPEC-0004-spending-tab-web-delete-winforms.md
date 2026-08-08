@@ -2,10 +2,10 @@
 title: The spending/process tab exists in the web GUI
 spec_id: SPEC-0004-spending-tab-web-delete-winforms
 slice: SL-009
-status: in-progress
+status: done
 created: 2026-08-07
-updated: 2026-08-07
-completed:
+updated: 2026-08-08
+completed: 2026-08-08
 owner: Kyle Smith
 traces: [FR-010, NFR-006, NFR-007, NFR-008]
 ---

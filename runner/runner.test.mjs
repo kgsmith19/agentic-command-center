@@ -324,6 +324,7 @@ fs.writeFileSync(countFile, String(n));
 fs.writeFileSync(dir + "/argv.json", JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(dir + "/pid.txt", String(process.pid));
 fs.writeFileSync(dir + "/env-directive.txt", process.env.ACC_DIRECTIVE || "");
+fs.writeFileSync(dir + "/env-profile.txt", process.env.ACC_PROFILE || "");
 let stdin = "";
 process.stdin.on("data", (d) => (stdin += d));
 process.stdin.on("end", () => {
@@ -586,7 +587,7 @@ test("AC-001: loadJob('directive:<id>') synthesizes a job from the store with fi
   assert.equal(j.workdir, d.cwd);
   assert.equal(j.directiveId, d.id);
   assert.equal(D.KICK_TEXT, "Continue the active ACC directive.",
-    "the wire constant clearbot types must be the canonical export");
+    "the bootstrap wire constant must be the canonical export");
   assert.equal(j.bootstrap, D.KICK_TEXT);
   assert.equal(j.maxStuck, 3);
   assert.equal(j.maxRuns, 100);
@@ -688,19 +689,27 @@ test("AC-010: --install on a directive job is refused", () => {
   assert.throws(() => install(j, () => {}), /directive/i);
 });
 
-test("AC-004 integration: a directive job's child carries ACC_DIRECTIVE; a file job's does not", async () => {
+test("AC-004 integration: a directive job's child carries ACC_DIRECTIVE and the directive's profile; a file job's carries neither", async () => {
   const dirState = fakeClaudeDir("acc-directive");
   process.env.FAKE_CLAUDE_MODE = "ok";
-  const d = directive();
+  const cwd = fs.mkdtempSync(path.join(BASE, "dwork-"));
+  const d = D.createDirective({ text: "fix the tests", cwd, profile: "Heavy" });
   const j = loadJob(`directive:${d.id}`);
   const r = await runClaudeOnce({ ...j, runTimeoutMin: 1 });
   assert.equal(r.code, 0);
   assert.equal(fs.readFileSync(path.join(dirState, "env-directive.txt"), "utf8"), d.id);
+  // The Start-work page stores the chosen profile ON the directive; with the
+  // WinForms launcher (the old ACC_PROFILE setter) gone, the runner is the
+  // only thing that can hand it to the session budget.mjs governs.
+  assert.equal(fs.readFileSync(path.join(dirState, "env-profile.txt"), "utf8"), "Heavy",
+    "the directive's profile must reach the child as ACC_PROFILE");
 
   const fileJob = job({ bootstrap: "plain file job" });
   await runClaudeOnce({ ...fileJob, runTimeoutMin: 1 });
   assert.equal(fs.readFileSync(path.join(dirState, "env-directive.txt"), "utf8"), "",
     "a file job must never masquerade as a directive session");
+  assert.equal(fs.readFileSync(path.join(dirState, "env-profile.txt"), "utf8"), "",
+    "a file job carries no profile");
 });
 
 // ------------------------------------------------------------- pid-file singleton (SPEC-0005, FR-012)
@@ -780,7 +789,7 @@ test("singleton: every early exit path releases the pid file too (stop file, red
   assert.equal(fs.existsSync(pidFileFor(jRed)), false);
 });
 
-test("liveTier: parses the check verb's JSON, and every failure shape reads green (documented fail-open parity with clearbot)", () => {
+test("liveTier: parses the check verb's JSON, and every failure shape reads green (documented fail-open)", () => {
   const { liveTier } = runnerNs;
   assert.equal(liveTier(() => JSON.stringify({ tier: "red", weekTokens: 9 })), "red");
   assert.equal(liveTier(() => JSON.stringify({ tier: "amber" })), "amber");

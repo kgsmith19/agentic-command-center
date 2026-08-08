@@ -3,22 +3,22 @@
 Independent guard rail + control panel for Claude Code sessions on this machine.
 `hooks/guard.mjs` is a PreToolUse hook (registered in `~/.claude/settings.json`
 for `Edit|Write|NotebookEdit|Read`, all projects); `hooks/engine.mjs` is the CLI
-engine that owns every state change; `guards-gui.ps1` (launch: `Guards
-Control.cmd`) is the user's GUI on top — every tab EXCEPT "Start work" now
-also exists in the web GUI (`node gui/server.mjs` → `/guards`): toggle,
-protections, and requests (SPEC-0002), vault (SPEC-0003), and the
-spending/process tab — 7-day spend + tier, policy dials, emergency
-STOP/Resume/fan-out, cleanup on/off/test + autoApprove (SPEC-0004). The
-"Start work" launch tab (profile, route, directive create, embedded ConPTY
-terminal) stays in `guards-gui.ps1` until SL-011 ports it and deletes the
-shell; that is the only reason the WinForms file still exists. The web vault
-route pipes each `KEY=VALUE` to `engine.mjs vault-import` over **stdin** — a
-value never becomes argv, a log line, a filesystem path, or a response field,
-and the browser clears the input on save; key names are env-var-shaped and
-single-line-value-validated so the stdin framing can't be forged. The web
-spending dials do a read-merge-write of `policy.json` preserving every
-unowned key, and the process controls are an allowlisted action map (no
-browser string becomes argv). The `/approve` skill
+engine that owns every state change; the **web Command Center**
+(`npm run gui` → `http://127.0.0.1:43117`) is the user's GUI on top — every
+surface lives there: toggle, protections, and requests (SPEC-0002), vault
+(SPEC-0003), the spending tab — 7-day spend + tier, policy dials, emergency
+STOP/Resume/fan-out (SPEC-0004) — and Start work — folder suggestion, profile,
+directive create + headless launch, live list, log tails (SPEC-0005). The
+WinForms shell and the ConPTY/keystroke continuity stack were deleted in
+SPEC-0005 PR-2 (ADR-0005); `gui/README.md` is the API contract, and ADR-0006
+moves the UI's future to its own repo with these built-in pages serving until
+parity. The web vault route pipes each `KEY=VALUE` to `engine.mjs
+vault-import` over **stdin** — a value never becomes argv, a log line, a
+filesystem path, or a response field, and the browser clears the input on
+save; key names are env-var-shaped and single-line-value-validated so the
+stdin framing can't be forged. The web spending dials do a read-merge-write of
+`policy.json` preserving every unowned key, and the process controls are an
+allowlisted action map (no browser string becomes argv). The `/approve` skill
 (`~/.claude/skills/approve/`) is the user's in-chat Run button.
 
 ## What the guard enforces (in order)
@@ -29,7 +29,7 @@ browser string becomes argv). The `/approve` skill
 2. **Self-protection** — currently **OFF**: `C:/code/guards` is not in the
    `protected` list (removed deliberately during the ACC build-out phase). Once
    the ACC directive closes, it should be re-added (`C:/code/guards/` in full, or
-   specifically `C:/code/guards/gui/` and `C:/code/guards/watcher/`) to block
+   specifically `C:/code/guards/gui/`) to block
    agent edits of the harness itself. When re-protected, only `~/.claude/settings.json`
    will remain guarded. Exception when re-enabled: runboxes (below).
 3. **Cell ownership** — repos listed under `repos` in `config.json` have path
@@ -42,26 +42,18 @@ Failure mode is **closed**: unreadable payload or config blocks with a message
 instead of silently allowing. Known ceiling: only tools in the matcher are
 seen — Bash writes bypass the hook. Convention enforcer, not a security boundary.
 
-**autoApprove and self-protection — accepted risk (OI-032, Kyle, 2026-08-06):**
-`policy.json`'s `autoApprove.enabled: true` means the Command Center runs a
-pending runbox script itself, unattended, on the watcher's next cycle — it does
-not wait for a human `/approve`. The guard above still refuses a DIRECT edit to
-its own machinery or to `~/.claude/settings.json`, but an agent can reach the
-same target indirectly: write the change as a runbox script (exactly the path
-the guard's own denial message points to) and it runs with Kyle's full
-authority a cycle later, no human actually reviewing it in the moment. Demonstrated
-live 2026-08-04: the guard correctly refused a direct edit to
-`~/.claude/settings.json`, a runbox script achieving the same edit was written
-instead per this doc's own instruction, and clearbot executed it ~30s later.
-So: **the guard is a speed bump against a direct, naive edit, not an absolute
-boundary, while autoApprove is on.** Kyle has reviewed this tradeoff and
-accepts it as-is — it is not a bug to fix unilaterally. If the risk profile
-ever needs to change, the lever is `policy.json`'s `autoApprove.enabled`, not
-this guard.
+**Runbox scripts and self-protection:** the guard refuses a DIRECT edit to its
+own machinery or to `~/.claude/settings.json`, but a runbox script achieving
+the same edit runs with Kyle's full authority once he runs it. Since SPEC-0005
+PR-2 there is **no unattended auto-run**: the autoApprove daemon lived inside
+the deleted watcher, so every runbox script now waits for a human — `/approve`
+in chat or the web Run button. (The former OI-032 accepted-risk note described
+the unattended path; it died with the watcher. Reviving auto-run would be a
+new Node feature with its own spec and review.)
 
 ## The vault — how agents receive secrets
 
-The user uploads KEY=VALUE pairs via the GUI ("Give Claude keys" tab) into
+The user uploads KEY=VALUE pairs via the web GUI ("Passwords and keys") into
 `vault.json` (gitignored, plaintext on disk, read-blocked for agent tools).
 Agents consume them **by name, never by value**:
 
@@ -84,8 +76,8 @@ When an agent hits something it can't or shouldn't do (guard block, permission
 wall, elevated op, secret value), it writes a **self-contained script** there
 (`.ps1`, `.cmd`, `.bat`, `.mjs`, `.js`) and tells the user. The user runs it by
 typing **`/approve` in chat** (the skill previews, runs via the engine, and
-reports back) or from the GUI's "Claude's requests" tab. Scripts run with the
-user's authority.
+reports back) or from the web GUI's "Claude's requests" section. Scripts run
+with the user's authority.
 
 Rules for scripts:
 - Leading comment says what it does and why — that line is the preview summary.
@@ -94,10 +86,7 @@ Rules for scripts:
 - Standing scripts (re-run buttons like `lifeos-mcp-setup.ps1`) put
   `# guards: keep` in the first 10 lines; everything else is one-shot.
 - **Never leave undo/uninstall scripts in the runbox** (guards OI-008). Undo
-  scripts live tracked in their own directory (e.g. `watcher/watchdog/`) and
-  are run deliberately. Auto-approve's directory order guarantee can cancel
-  conflicting scripts (`install` + `uninstall` in the same folder), making
-  the net effect undefined.
+  scripts live tracked in their own directory and are run deliberately.
 - **If the operation needs Windows-level elevation, the script should
   self-elevate, not fail and wait.** Kyle, 2026-08-04 (guards OI-025): the
   user typing `/approve` or `/approve-kgs` IS the authorization for whatever
@@ -123,8 +112,8 @@ Lifecycle (engine-owned):
 
 ## Toggle / config
 
-- GUI: `Guards Control.cmd` → header toggle. CLI: `engine.mjs toggle on|off`, or
-  double-click `enable-guards.cmd` / `disable-guards.cmd`.
+- Web GUI: `npm run gui` → `http://127.0.0.1:43117/guards` → header toggle.
+  CLI: `engine.mjs toggle on|off`.
 - Takes effect on the next tool call — no session restart.
 - `config.json`: `secrets` globs, `protected` paths, `projects` (watched
   folders — each gets a `.guards` drop-box), and per-repo cell maps under
@@ -132,14 +121,14 @@ Lifecycle (engine-owned):
   paths, and watched folders are all editable from the GUI; cell maps by
   editing `config.json` directly.
 
-## Process tab (Agentic Command Center)
+## Spending & process controls (web)
 
-The GUI's 4th tab is the process control plane for token discipline. It shells
-to `hooks/usage.mjs week|check` for the rolling 7-day spend and tier light, and
-edits `policy.json` in place (context soft/hard k, week amber/red token
-thresholds, subagent allowlist, finder cap) -- hooks re-read that file on every
-fire, so edits apply with no restart. It also writes/removes
-`runner\stop\slice-runner.stop` (Stop / Resume; Resume shells to
+The `/guards` page's spending section is the process control plane for token
+discipline. It shells `hooks/usage.mjs week|check` for the rolling 7-day spend
+and tier light, and edits `policy.json` in place (context soft/hard k, week
+amber/red token thresholds, subagent allowlist, finder cap) — hooks re-read
+that file on every fire, so edits apply with no restart. It also
+writes/removes `runner\stop\slice-runner.stop` (STOP / Resume; Resume shells
 `hooks/budget.mjs unstop`, which also flushes the tier cache) and can grant a
 30-minute fan-out window (`hooks/budget.mjs fanout 30`).
 
@@ -150,33 +139,25 @@ deny-by-default boundary the harness cannot widen, verifies the real
 end-state independently of what the harness claims, records every run in one
 structured ledger (`node kernel/ledger.mjs query ...`), and tightens its own
 ceilings after a run of failures — all separate from, and untouched by, the
-interactive ConPTY/directive-loop path above. See `kernel/README.md` for the
-contract shape, the harness-swap procedure (one config value plus one new
-file under `kernel/adapters/`), and the honest guard ceilings.
+directive loop above. See `kernel/README.md` for the contract shape, the
+harness-swap procedure (one config value plus one new file under
+`kernel/adapters/`), and the honest guard ceilings.
 
 ## The regression, exactly
 
 ```
-node --test hooks/budget.test.mjs hooks/directive.test.mjs hooks/usage.test.mjs hooks/route.test.mjs hooks/statusline.test.mjs hooks/clearbot.test.mjs hooks/lane.test.mjs hooks/testplan.test.mjs hooks/covgate.test.mjs hooks/cmdline.test.mjs runner/runner.test.mjs kernel/adapter.test.mjs kernel/adapters/claude-code.test.mjs kernel/autonomy.test.mjs kernel/contract.test.mjs kernel/credentials.test.mjs kernel/guard.test.mjs kernel/guardhook.test.mjs kernel/ledger.test.mjs kernel/policy.test.mjs kernel/run.test.mjs kernel/settings.test.mjs kernel/verifier.test.mjs gui/server.test.mjs gui/guards-gui.test.mjs
-    -> FAST TIER, hermetic (`npm run test:windows`). Run from C:\code\guards;
-       never `node --test hooks/` (the runner grades the directory as one
-       bogus failing test). `npm test` runs the portable subset of this same
-       list (everything except hooks/clearbot.test.mjs and
-       gui/guards-gui.test.mjs, both of which spawn real cmd.exe/powershell
-       processes and only run on Windows) — that's what CI runs on Linux;
-       `package.json` is the single source of truth for both lists so this
-       block and CI cannot drift apart silently again.
+npm run test:windows
+    -> FAST TIER, hermetic (the full node list; `npm test` is the same list —
+       they are identical since the demolition, kept as two scripts so a
+       Windows-only suite can rejoin test:windows without touching CI).
+       Run from C:\code\guards; never `node --test hooks/` (the runner grades
+       the directory as one bogus failing test). `package.json` is the single
+       source of truth for the lists so this block and CI cannot drift apart
+       silently again.
 node hooks/covgate.mjs
     -> COVERAGE GATE. Runs the fast tier under node's built-in coverage and
        fails any CHANGED lib file under the policy floors (lines/funcs 100,
        branches 90). Changed = git diff vs HEAD + untracked.
-node e2e/loop.e2e.mjs [--only N]
-    -> PROOF TIER. Spawns a REAL claude and spends tokens, so run it
-       deliberately. 1 happy loop, 2 under-budget re-prompt, 3 Esc
-       escalation, 4 /cd, 5 embedded pty launch (kick submits over the
-       pipe, zero injection). Each scenario holds a launch-lane slot for
-       its whole life (below), so a proof run queues behind — and is queued
-       behind by — every other automated launch on the machine.
 node kernel/kernel.e2e.mjs
     -> PROOF TIER. Spawns a REAL claude twice via kernel/run.mjs and spends
        tokens, so run it deliberately. 1 an in-scope edit is allowed, made,
@@ -184,44 +165,40 @@ node kernel/kernel.e2e.mjs
        elsewhere is denied, the file stays untouched, and the run is
        rejected; a third check confirms no ACC directive-loop state leaks from a
        kernel run into the live repo.
-powershell -File gui/ptyhost.test.ps1
-    -> INTEGRATION. Acc.PtyHost against a real cmd.exe on a ConPTY - pipe
-       protocol accepts/refuses, dispose kills the child. No claude, no GUI.
+node runner/runner.mjs directive:<id>
+    -> PROOF TIER (SL-008, re-targeted by ADR-0005). One real, low-stakes
+       directive run headless to completion, watched — the proof that FR-011
+       holds on real work. Spends real tokens; run deliberately.
+powershell -File shim/claude.test.ps1
 powershell -File watcher/claude-cap-watch.test.ps1
 powershell -File watcher/install-cap-watch-task.test.ps1
-powershell -File shim/claude.test.ps1
     -> FAST TIER, hermetic, PowerShell. Pure functions only: the launch-cap
        breach/fail-open decision, the ACC-ClaudeCapWatch task spec (registers
-       nothing), and the shim's own cap-gate decision. Not in the node
-       runner, so they are listed here or they never get run. To actually
+       nothing), and the shim's own cap-gate decision. Run by the
+       windows-integration CI job and listed here for manual runs. To actually
        register the Scheduled Task these pure functions describe, Kyle runs
        `powershell -File watcher/install-cap-watch-task.ps1` by hand (self-
        elevating, idempotent) — nothing in the automated test suite does this.
-powershell -File C:/code/guards/guards-gui.ps1 -SmokeTest
-powershell -File C:/code/guards/watcher/screenshot-gui.ps1 [-Advanced]
 npm run e2e:gui
     -> GUI e2e. Playwright drives gui/kernel.html AND gui/guards.html against
-       gui/server.mjs in a sandbox (the guards page talks to a fake engine via
-       ACC_ENGINE — e2e can never mutate the real config/runbox); runs
-       headless in CI (gui-e2e job). On a machine whose preinstalled browser
-       revision differs from the package pin, point ACC_PW_CHROMIUM at a
-       system Chromium.
+       gui/server.mjs in a sandbox (fake engine/usage/budget/runner via
+       ACC_ENGINE/ACC_USAGE/ACC_BUDGET/ACC_RUNNER — e2e can never mutate real
+       config, spend, or spawn a real claude); runs headless in CI (gui-e2e
+       job), single worker (specs share one sandbox dir). On a machine whose
+       preinstalled browser revision differs from the package pin, point
+       ACC_PW_CHROMIUM at a system Chromium.
 ```
 
-**Never run a hook by hand against live state.** `bindSession` adopts a directive by
-console PID, so piping a fake SessionStart into `budget.mjs` from a console
-that owns a directive used to rebind that directive to whatever session id the payload
-carried and quietly break the real session's loop (guards OI-006 — it
-happened). `bindSession` now refuses to rebind on anything that isn't
-UUID-shaped, closing that specific hijack — but a hand-run hook can still
-touch other live state (`markKicked`, `setStatus`, cycle logging), so always
-sandbox regardless: `ACC_ROOT=<throwaway> ACC_POLICY=<file> node hooks/budget.mjs`.
+**Never run a hook by hand against live state.** A hand-run hook can touch
+live directive state (`bindSession`, `setStatus`, cycle logging) — always
+sandbox: `ACC_ROOT=<throwaway> ACC_POLICY=<file> node hooks/budget.mjs`.
+`bindSession` refuses to rebind a directive's session on anything that isn't
+UUID-shaped (guards OI-006 — a hand-piped payload once hijacked a live
+binding), but the sandbox rule stands regardless.
 
 The suites that touch runner state (`budget`, `route`) sandbox themselves via
-`ACC_ROOT` + `ACC_POLICY`, because a test that reset the live `runner\state`
-would delete the `.window` files running sessions depend on. `-SmokeTest`
-builds the form without showing it and cannot see layout, so screenshot the
-window whenever the GUI changes.
+`ACC_ROOT` + `ACC_POLICY`, so they can never reset the live `runner\state`
+running sessions depend on.
 
 ## The launch lane — why automated claude spawns never race
 
@@ -236,19 +213,21 @@ a logic failure returns untouched on the first try, because retrying a real
 bug only spends tokens hiding it. Slot state lives in `os.tmpdir()/acc-lane`
 (never `ACC_ROOT` — a sandboxed lane could not exclude the live runner, which
 is the whole point). A slot records owner pid + ttl, so a crashed holder is
-reclaimed, never wedged. **Interactive launches (GO button, Kyle's terminals)
-bypass the lane on purpose** — a human must never queue behind a 3-hour
-runner hold. Never spawn a real claude from automation without the lane.
-Tests: `node --test hooks/lane.test.mjs` (14).
+reclaimed, never wedged. **Interactive launches (Kyle's own terminals) bypass
+the lane on purpose** — a human must never queue behind a 3-hour runner hold;
+the web GO button's launch goes through the runner, which holds an automation
+slot per run like every other automated spawn. The machine-wide `lane.total`
+cap (shim/claude.cmd + `lane.mjs gate`, ADR-0003) is the hard ceiling that
+catches every launch path. Never spawn a real claude from automation without
+the lane. Tests: `node --test hooks/lane.test.mjs`.
 
 ## Testing doctrine — the contract every implementation carries
 
-`hooks/testplan.mjs` (UserPromptSubmit, advisory like route.mjs — blocking
-would stall the directive loop, which has no replay for it) injects the contract
-once per session when a prompt starts implementation planning. The contract,
-which is also simply the house rule: every acceptance criterion maps 1:1 to
-tests — unit (pure logic) and integration (process/filesystem boundary) in
-the fast tier, hermetic, sandboxed via `ACC_ROOT`/`ACC_POLICY`/`ACC_LANE_DIR`;
+`hooks/testplan.mjs` (UserPromptSubmit, advisory like route.mjs) injects the
+contract once per session when a prompt starts implementation planning. The
+contract, which is also simply the house rule: every acceptance criterion maps
+1:1 to tests — unit (pure logic) and integration (process/filesystem boundary)
+in the fast tier, hermetic, sandboxed via `ACC_ROOT`/`ACC_POLICY`/`ACC_LANE_DIR`;
 e2e only for cross-process promises, in the proof tier, always through the
 lane. Tests are written RED FIRST and the red run is recorded in the slice
 log — a test born green proves nothing. Done means: fast tier green,
@@ -258,18 +237,13 @@ floors — lines 100 / functions 100 / branches 90 — three floors because line
 coverage alone lies (a never-called function still shows covered declaration
 lines). Coverage is a floor, not the goal: assert observable behavior, one
 behavior per test, no sleeps outside the lane's own pacing.
-Tests: `node --test hooks/testplan.test.mjs` (11), `hooks/covgate.test.mjs` (14),
-`runner/runner.test.mjs` (39, closes OI-013 — the first hermetic suite for
-runner.mjs, built via an in-process spawn seam and a fake `claude` binary on
-PATH so the real spawn/stdin/lane/retry/kill path is proven without a real
-API call). Building this suite surfaced and fixed two real bugs beyond
-coverage: `runClaudeOnce`'s timeout used to orphan the real claude process on
-a hang (`child.kill()` under `shell:true` only signals the shell wrapper —
-`killTree` now signals the whole process group on POSIX / the PID tree via
-`taskkill /t` on Windows), and `retryTransport` had two structurally dead
-branches (a trailing `return` and a bounded loop condition that could never
-be false) which covgate's own branch floor caught and forced a real fix
-rather than a manufactured test.
+Building runner.mjs's suite surfaced and fixed two real bugs beyond coverage:
+`runClaudeOnce`'s timeout used to orphan the real claude process on a hang
+(`child.kill()` under `shell:true` only signals the shell wrapper — `killTree`
+now signals the whole process group on POSIX / the PID tree via `taskkill /t`
+on Windows), and `retryTransport` had two structurally dead branches which
+covgate's own branch floor caught and forced a real fix rather than a
+manufactured test.
 
 ## Worktrees — isolating large parallel work
 
@@ -284,141 +258,70 @@ fix is bloat; it earns its keep when two or more chunks would otherwise
 collide on the same files/branch at once, or a chunk is large enough that
 keeping the main tree clean for other work matters.
 
-## Directives — how a session survives its own context limit
+## Directives — how work survives a context limit
 
-A **directive** is a piece of work that outlives the session doing it. The GUI's GO
-button creates one (`hooks/directive.mjs new --text-file`) and launches Claude with
-`ACC_DIRECTIVE=<id>`; from then on the loop runs with no human in it:
+A **directive** is a piece of work that outlives the session doing it. The web
+Start-work page creates one (`hooks/directive.mjs new --text-file`) and
+launches the headless runner for it; from then on the loop runs with no human
+in it:
 
-`budget.mjs` Stop (over budget) → captures the closing checkpoint as the next
-cycle's handoff → clearbot types `/clear` → the new session's SessionStart adopts
-the directive and injects it → clearbot types `Continue the active ACC directive.`
-
-Two decisions carry the whole design:
-
-1. **A directive binds to the CONSOLE PID, not the session id.** A `/clear` ends the
-   session id; the terminal process is the same throughout. Every session that
-   starts in that console adopts the directive, which is what makes resumption survive
-   the clear. Queued prompts (above) are keyed the same way for the same reason.
-2. **Directive text never becomes keystrokes.** It reaches the model through
-   SessionStart context; the only thing ever typed is a constant.
-
-**ACC-hosted sessions run on a ConPTY inside the GUI** (see
-`docs/adr/ADR-0001-retire-conpty-keystroke-channel.md` for the open question
-about this mechanism's future): the Go
-button spawns claude via `Acc.PtyHost` (gui/PtyHost.cs), renders it in an
-xterm.js/WebView2 Terminal tab, and records a `transport:"pty"` window with a
-pipe name (`hooks/budget.mjs`, env `ACC_PTY`). clearbot then drives the session
-with pipe writes (`TEXT`/`SUBMIT`/`ESC` — guaranteed Enter) instead of
-keystroke injection; `sendconsole.ps1` remains the transport for external
-sessions and the fallback when the pipe is dead. Without the WebView2 runtime
-the Go button falls back to the legacy `cmd /k claude` console launch. The
-pipe carries a `PipeSecurity` ACL scoped to the current user's SID, and
-`directive.mjs pending`'s kicks and `Test-Binding`'s request-file check both
-re-verify a console's `consolePid` against that session's own
-`runner/state/<sid>.window` record before typing into it — narrows "any
-process that finds the pipe name or forges one side of the binding" to "any
-process running as this user."
-
-**Pipe/binding auth — accepted residual risk (#13, Kyle, 2026-08-07):** the
-hardening above still does not stop a same-user attacker who can write BOTH
-the request file and the `.window` file it's checked against — both are
-local, unsigned, gitignored, and agent-writable, so a co-located writer can
-supply matching values and pass. Accepted rather than engineered further:
-(1) that attacker already needs local code execution as this user, at which
-point far stronger routes exist (edit `config.json`, replace `claude.exe`,
-read every file this user can) than forging a pipe handshake; (2) this whole
-mechanism is already slated for retirement in favor of the headless runner
-(ADR-0001, accepted the same day) — hardening code that is being deleted
-fails this repo's own cheapest-sufficient-mechanism test. If the risk profile
-ever needs to change before that migration lands, the lever is a real
-per-request signed/one-time token, not more file-agreement checks.
+`node runner\runner.mjs directive:<id>` relaunches `claude -p` per fresh
+context with `ACC_DIRECTIVE=<id>` (and the directive's stored profile as
+`ACC_PROFILE`); each session's SessionStart hook injects the directive text,
+the progress-log tail, and the done/blocked protocol; the Stop hook appends
+the closing summary as the next cycle's handoff; the runner's stuck brake
+(identical consecutive summaries), `maxRuns`, `runTimeoutMin`, red-week-tier
+hold, launch lane, and pid-file singleton (one loop per directive,
+machine-wide, exit 6) bound the loop. `runner/README.md` has the full
+contract.
 
 State: `runner\directives\<id>.json` plus a running `<id>.log.md`, archived to
-`runner\directives\done\` on completion. **The loop only ends because the model ends
-it** — `directive.mjs done <id>` or `directive.mjs blocked <id> --why "..."`, both stated
-in full in the injected block. The week kill switch is the cost brake; a red week
-holds all kicks. `directive.mjs pending` decides every condition that makes a kick
-unsafe (active? console alive? binding settled? cooldown?) so there is one place
-to audit, and `clearbot.ps1` stays a dumb executor.
+`runner\directives\done\` on completion. **The loop only ends because the model
+ends it** — `directive.mjs done <id>` or `directive.mjs blocked <id> --why
+"..."`, both stated in full in the injected block — or because a human closes
+it from the web list (Mark finished / Stop restarting). A **stale "active"
+directive** nobody is running is curated by hand from that list; nothing reaps
+automatically (the console-liveness reaper died with the console binding).
 
-**Headless transport (SPEC-0001, the ADR-0001/0004 destination):** the same
-directive can instead run to completion with no console at all — `node
-runner\runner.mjs directive:<id>` relaunches `claude -p` per fresh context
-with `ACC_DIRECTIVE` set, so the SessionStart hook injects the identical
-context block; done/blocked/red-tier semantics are unchanged (runner/README.md
-has the full contract). Both transports coexist until SL-011 retires the
-keystroke half behind the F1 proof (issue #15).
+An **interactive** session bound to a directive that hits its context budget
+stops at a message naming the exact resume command — the human types `/clear`
+and relaunches headless (or clicks Launch on the Start-work page). There is no
+auto-clear: the machinery that typed keystrokes into consoles was deleted
+(ADR-0005), and the runner relaunch IS the clear on the headless path.
 
-Tests: `node --test hooks/directive.test.mjs` (52), plus the directive-job
-group in `runner/runner.test.mjs`.
+Directive text never becomes keystrokes or argv anywhere in this chain: it
+reaches the store via `--text-file` and reaches the model through SessionStart
+context injection.
 
-Two things keep the loop from stalling, added 2026-07-31 after it stalled
-twice in one day. **Liveness:** a directive session that ends its turn UNDER the
-ceiling gets no clear, so the Stop hook re-arms the kick instead
-(`directive.mjs recordTurnEnd`), and `pendingKicks` decides when firing it is safe —
-after `directives.kickSettleSeconds` (90), and not within `directives.humanHoldMinutes`
-(10) of a prompt Kyle typed, so it stays quiet during a conversation and
-self-heals when he walks away. A turn is "his" unless the last user message is
-exactly one of clearbot's constants. Before this, a turn simply finishing ended
-the loop — observed dead for 18 minutes.
-**Supervision:** clearbot writes `watcher/clearbot.heartbeat` every cycle;
-the statusline shows `bot DEAD` and SessionStart warns when it goes stale;
-`budget.mjs reviveClearbotIfDead` restarts a stale watcher at every turn
-boundary (honouring the kill switch), and a Startup-folder launcher covers
-logon. The external Scheduled Task version is optional and needs an elevated
-shell — `watcher/watchdog/` holds it and its undo scripts.
+Tests: `node --test hooks/directive.test.mjs`, plus the directive-job and
+singleton groups in `runner/runner.test.mjs`.
 
 `/directive <condition>` (user skill, still at `~\.claude\skills\goal\` on disk as of
 2026-08-07 — that path is outside this repo, so renaming it is Kyle's own manual
 step on his machine, not something this rename touched) is ACC-native: it
 logs `CONDITION: <text>` into the active directive's log via `directive.mjs log`, so the
-directive rides the directive store and survives every `/clear` with the rest of
-the handoff; `/directive clear` logs `CONDITION MET`. It never registers a session
-Stop hook: a Stop-gate fights the budget gate (OI-011) — the loop continues BY
-ending turns — so conditions live in directive state, not hooks. With no active
-directive the condition is session-local only.
+directive rides the directive store and survives every context reset with the
+rest of the handoff; `/directive clear` logs `CONDITION MET`. It never registers
+a session Stop hook: a Stop-gate fights the budget gate (OI-011) — the loop
+continues BY ending turns — so conditions live in directive state, not hooks.
+With no active directive the condition is session-local only.
 
-## Folder routing (Start work tab)
+## Folder routing (Start work)
 
 `hooks/route.mjs` scores task text against the table in `..\ROUTING.md` and
-names the narrowest folder the work belongs in. Two callers: the Start-work tab
-preselects the launch folder from the task line (`route.mjs --text "..."`), and
-a `UserPromptSubmit` hook scopes each task in-session — it fires on every prompt
+names the narrowest folder the work belongs in. Two callers: the web
+Start-work page preselects the launch folder from the task line
+(`/api/route/suggest` shells `route.mjs --text "..."`), and a
+`UserPromptSubmit` hook scopes each task in-session — it fires on every prompt
 but emits only when the verdict *moves*, so a task switch re-scopes and ten
 prompts about one thing cost one line.
 
 It biases narrow on purpose: only an exact tie escalates, because widening one
 rung mid-task is cheap and starting too wide is invisible. Every verdict carries
-`parent`, the next rung up. A prompt with no signals changes nothing.
-
-When the verdict differs from the session cwd it **blocks** the prompt and
-writes a `kind:"cd"` request into `runner\clear-requests`. The clearbot picks it
-up and types `/cd <path>` into that session's console (preceded by `/clear` on a
-mid-session re-scope, since cwd alone cannot unload what was already read), then
-replays the blocked prompt so it re-runs already scoped. `policy.json.autoCd`
-turns this off (`enabled:false` = advisory line only).
-
-The blocking path is deliberately easy to escape. It falls through to plain
-advice — never eating the prompt — when: the destination was already attempted
-once this session (so a cd that fails to take cannot cause a deny loop), no
-`consolePid` was recorded, or the destination does not exist.
-
-A prompt the injector cannot type (multi-line, or over 2000 chars) is **not**
-typed more carefully — it is not typed at all. `route.mjs` writes it to
-`runner\queued\<consolePid>.md`, the post-clear session injects it at
-SessionStart and deletes it, and clearbot types the constant `Run the queued
-prompt.` That channel needs a clear to ride on, so on the *first* scope of a
-session — where there is no clear and therefore no SessionStart — an untypable
-prompt still falls through to advice.
-
-`clearbot.ps1` re-derives every check itself rather than trusting the request
-file: the destination must be byte-identical to a route in `ROUTING.md` *and*
-exist, and the replay must re-pass the printable-single-line test. Invariant 1
-in that file is the authority on what may ever be typed — read it before
-changing anything here.
+`parent`, the next rung up. A prompt with no signals changes nothing. The hook
+is **purely advisory** — the deny/auto-cd/queued-prompt channel died with the
+keystroke stack (SPEC-0005 PR-2); a verdict that differs from the session cwd
+is one injected line the model acts on itself.
 
 Signals live in `ROUTING.md`, not in the code; edit that JSON block when a repo
-is added. Tests: `node --test hooks/route.test.mjs` (21). The watcher's refusal
-gates and the live `/cd` + replay sequence were verified by injection into a
-throwaway console — do not test them against a real working session.
+is added. Tests: `node --test hooks/route.test.mjs`.

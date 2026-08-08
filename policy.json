@@ -1,144 +1,139 @@
 {
-    "_comment":  "Agentic Command Center - the single process dial. Hooks re-read this on every fire, so edits take effect immediately with no restart.",
-    "context":  {
-                    "softK":  400,
-                    "hardK":  600,
-                    "_note":  "STANDING (2026-07-31, Kyle, set via the ACC dials + chat instruction; SUPERSEDES the 2026-07-30 100/150 standing): 400/600 until he manually changes it again. These dials are the ONLY source of context limits for EVERY session, ACC-launched or not - profiles carry no context overrides, so the number saved here is what budget.mjs enforces and statusline.mjs displays. softK MUST stay below hardK: budget.mjs returns allow() at \u0027ctx \u003c softK*1000\u0027 before it ever tests hardK, so a softK above hardK silently disables the UserPromptSubmit and PostToolUse checks and leaves only the Stop hook. Measured baseline start context is ~35-42k (CLAUDE.md + memory index + tools). hardK is the TOTAL context ceiling, not headroom above baseline."
-                },
-    "week":  {
-                 "amberTokens":  1200000000,
-                 "redTokens":  1800000000,
-                 "_note":  "Tier counts usage from effectiveFrom onward (ACC install), so the switch cannot fire retroactively on pre-discipline burn. Baseline for reference: 2.35B tokens/7d before ACC. amber ~52% / red ~78% of that.",
-                 "effectiveFrom":  "2026-07-30T15:33:00Z"
-             },
-    "subagents":  {
-                      "mode":  "allowlist",
-                      "allow":  [
-                                    "Explore"
-                                ],
-                      "maxPerSession":  6,
-                      "exploreMaxReportLines":  80,
-                      "_note":  "Implementation work belongs in a runner session (fresh context, cheap), not an Opus subagent. Multi-finder fan-out needs an explicit time-boxed grant: \u0027node hooks/budget.mjs fanout 30\u0027 or the Command Center Process tab."
-                  },
-    "review":  {
-                   "fullLeanReview":  "manual-only",
-                   "localFullSuiteInReview":  false,
-                   "maxFinders":  3
-               },
-    "runner":  {
-                   "stopOnRed":  true,
-                   "statusFile":  "SLICE-RUNNER.md",
-                   "waitingGuard":  true
-               },
-    "promptOptimizer":  "on",
-    "rates":  {
-                  "_note":  "$ per million tokens, used for RELATIVE attribution in reports. These are list API prices, not subscription billing truth. Correct them here and every report follows.",
-                  "opus":  {
-                               "in":  15,
-                               "out":  75
-                           },
-                  "sonnet":  {
-                                 "in":  3,
-                                 "out":  15
-                             },
-                  "fable":  {
-                                "in":  3,
-                                "out":  15
-                            },
-                  "haiku":  {
-                                "in":  0.8,
-                                "out":  4
-                            },
-                  "unknown":  {
-                                  "in":  3,
-                                  "out":  15
-                              }
-              },
-    "autoClear":  {
-                      "enabled":  true,
-                      "_note":  "Outside watcher (watcher/clearbot.ps1) types /clear as real keystrokes when a session ends over hardK. Hooks cannot clear context themselves. false = fall back to telling Kyle to type it."
-                  },
-    "directives":  {
-                  "autoResume":  true,
-                  "maxCycles":  0,
-                  "kickSettleSeconds":  90,
-                  "humanHoldMinutes":  10,
-                  "_note":  "A directive (runner/directives/) carries work across a /clear: SessionStart adopts it by CONSOLE PID and injects it, the Stop hook logs the cycle, clearbot types a constant to restart the turn. Kyle\u0027s call 2026-07-31: unbounded - the loop ends only when the model runs \u0027directive.mjs done \u003cid\u003e\u0027 or \u0027blocked \u003cid\u003e\u0027. maxCycles 0 = no cap; set a number to stop after N continuations. A RED week tier holds all resumes regardless. Liveness (2026-07-31): a turn ending UNDER budget also re-arms the kick, so the loop no longer dies when a session simply finishes its turn - kickSettleSeconds is how long after a turn end a kick may fire, humanHoldMinutes is how long a prompt Kyle typed suppresses it (it expires, so walking away self-heals)."
-              },
-    "autoApprove":  {
-                        "enabled":  true,
-                        "_note":  "The Command Center runs pending runbox scripts itself instead of waiting for a human /approve (Kyle, 2026-07-31). Scripts marked [keep] are NEVER auto-run - they stay in the runbox after running, so auto-running them would loop forever. A failed script is attempted once per watcher lifetime and then left alone. Every run is appended to watcher/approvals.log. This does NOT touch the secrets list guard.mjs protects. It DOES mean a runbox script reaching a guard.mjs `protected` path (e.g. guard machinery, ~/.claude/settings.json) runs unattended rather than after human review - accepted risk, OI-032 (Kyle, 2026-08-06), documented in AGENTS.md's autoApprove section."
-                    },
-    "profiles":  {
-                     "_note":  "Chosen in the Command Center \u0027Start work\u0027 tab. The launcher sets ACC_PROFILE=\u003cname\u003e; budget.mjs and statusline.mjs (both via usage.mjs applyProfile) apply the SUBAGENT overrides for THAT SESSION only. Context limits ALWAYS come from the base dials above - single source of truth since 2026-07-31; do not add context blocks back here, they would shadow the Process-tab dials. Sessions with no ACC_PROFILE use the base policy unchanged.",
-                     "Normal":  {
-                                    "label":  "The standard setup. Use this unless you have a reason not to.",
-                                    "subagents":  {
-                                                      "allow":  [
-                                                                    "Explore"
-                                                                ],
-                                                      "maxPerSession":  6
-                                                  }
-                                },
-                     "Heavy":  {
-                                   "label":  "More helpers. For long migrations and audits.",
-                                   "subagents":  {
-                                                     "allow":  [
-                                                                   "Explore",
-                                                                   "general-purpose"
-                                                               ],
-                                                     "maxPerSession":  12
-                                                 }
-                               }
-                 },
-    "autoCd":  {
-                   "enabled":  true,
-                   "clearOnRescope":  true,
-                   "_note":  "route.mjs blocks a prompt whose scope differs from cwd, writes a cd request, and the clearbot types /cd (plus /clear on a mid-session re-scope) then replays the prompt. enabled:false = advisory line only, no blocking and no typing. Set false 2026-08-04 (Kyle, guards OI-029) after repeated real prompts got blocked/eaten by stalled rescope cycles. Re-enabled 2026-08-04 (closing OI-029) now that OI-003 is RESOLVED: the root cause (clearbot's non-clear /cd settle delay, 1200ms hardcoded, too short) is fixed via the shared tui.readySettleMs dial above, real-token-verified (`node e2e/loop.e2e.mjs --only 4` PASS, cwd moved as expected). Watch for a recurrence before trusting this long-term."
-               },
-    "tui":  {
-                "readySettleMs":  4000,
-                "_note":  "Single source of truth for 'how long after a session event until its Claude Code TUI is actually ready to accept injected input' -- shared by hooks/directive.mjs's kick (boundAt + this) and watcher/clearbot.ps1's Get-TuiReadyMs (the non-clear /cd settle, guards OI-003). Before 2026-08-05 these were two independently-guessed numbers (directive.mjs: 4000, proven via OI-002; clearbot.ps1: 1200, added for OI-003 and then failed a real-token repro on 2026-08-04) -- 4000 is the one with a track record, so it is now the only number and the default both readers fall back to. Lower it only with a real-token repro proving it still holds; clearbot's clear-branch settle and its post-cd replay/queuekick settles are deliberately NOT wired to this dial yet (unexamined, not proven broken -- see OI-003)."
-            },
-    "lane":  {
-                 "slots":  1,
-                 "minGapMs":  3000,
-                 "retries":  2,
-                 "backoffBaseMs":  2000,
-                 "overloadBaseMs":  4000,
-                 "backoffCapMs":  30000,
-                 "breakerThreshold":  3,
-                 "breakerWindowMs":  300000,
-                 "breakerCooldownMs":  120000,
-                 "breakerBlocking":  true,
-                 "interactive":  {
-                                     "slots":  1,
-                                     "minGapMs":  0,
-                                     "breakerBlocking":  false,
-                                     "_note":  "GUI Go button + Terminal tab (guards-gui.ps1). Own slot pool, isolated from automation's - pressing Go never queues behind a runner/e2e hold and vice versa. minGapMs:0 because a human clicking Go IS the pacing. breakerBlocking:false: a tripped breaker only warns an interactive launch (logged), never blocks it - a human who already decided to launch should not be queued behind automation's circuit breaker."
-                                 },
-                 "total":  {
-                               "cap":  3,
-                               "exe":  ["C:\\Users\\kyleg\\.local\\bin\\claude.exe"],
-                               "_note":  "Machine-wide ceiling on concurrent claude.exe, enforced by shim/claude.cmd + shim/claude via `node hooks/lane.mjs gate` (see hooks/lane.mjs's launch-cap section). Independent of slots/interactive above, which are cooperative lane pools; this is a hard ceiling checked at every PATH resolution of `claude`, regardless of launch path. cap:0 is a supported deliberate lockdown (refuses every session launch). exe lists the absolute path(s) that count toward the cap, matched exactly (case-insensitive) -- the Claude desktop app's bundled claude.exe at a different path is never counted. Design: docs/adr/ADR-0003-launch-cap-check-then-launch.md."
-                           },
-                 "_note":  "hooks/lane.mjs - machine-wide launch lane for real-claude spawns. Added 2026-08-01, hardened 2026-08-01 after Kyle hit an API error INSIDE an interactive session even after the first fix: the first pass only ever wrapped AUTOMATED headless launches (runner.mjs, e2e proof tier); guards-gui.ps1's Go button and Terminal tab spawned claude with zero coordination, so an interactive launch could still stack concurrently with automation or another manual terminal. slots=1 means one automated session at a time across ALL loops; minGapMs paces starts; retries are TRANSPORT-ONLY (econnreset/429/5xx/overloaded) with FULL-JITTER backoff - logic failures never retry, and 529/overloaded gets overloadBaseMs (a model-layer overload, not this account's rate limit) instead of backoffBaseMs. breakerThreshold failures within breakerWindowMs trips a breakerCooldownMs hold on new AUTOMATED launches (interactive only warns - see lane.interactive above). `lane.interactive` is a second, fully isolated slot pool for GUI/Terminal launches; `lane.total` (added 2026-08-03) is the machine-wide hard cap that catches launches neither of the above ever sees, e.g. Kyle's own manual terminals outside the GUI - see lane.total._note. State: os.tmpdir()/acc-lane, never ACC_ROOT."
-             },
-    "tests":  {
-                  "changedLineCoverage":  100,
-                  "changedFunctionCoverage":  100,
-                  "changedBranchCoverage":  90,
-                  "branchFloorOverrides":  { "hooks/lane.mjs":  85, "kernel/run.mjs":  85, "kernel/guardhook.mjs":  85 },
-                  "_note":  "hooks/covgate.mjs floors, per CHANGED lib file (hooks/ and runner/ .mjs, tests exempt). Three floors because line coverage alone lies: V8 marks a declaration line covered even when the function is never called. Branches default 90 - the last branch points are defensive catch-paths needing fault injection; raise per-change when the file warrants the spend. hooks/testplan.mjs injects the contract that binds these gates at plan time. branchFloorOverrides keys are gate-relative paths (forward slashes) with a per-file changedBranchCoverage override - hooks/lane.mjs is overridden to 85%: node's own --experimental-test-coverage merge under-reports its branches (measured 87.9%) once the full ten-file fast tier runs together in one invocation, a confirmed node v24.18.0 tooling limitation, not a real gap - true isolated coverage is 91.87%, proven 2026-08-02. kernel/run.mjs is overridden to 85% for the same reason, recurring on the CI covgate job's 24-file batch: measured 88.4% there vs 90.7% true isolated coverage (single-file, kernel/run.test.mjs only), proven 2026-08-03 after the timer-unref fix removed one optional-chaining branch point from the file. kernel/guardhook.mjs is overridden to 85% for the same OI-017 class of reason, found during the OI-019 scenario pass (2026-08-06): the OI-028 stdin-cap re-entrancy guard (`if (stdinOversized) return;`, only true on a SECOND 'data' event after the byte cap already tripped) reads 100% branches running kernel/guardhook.test.mjs alone but 87.5% once merged with kernel/ledger.test.mjs and kernel/run.test.mjs in one covgate invocation - the same merge undercount, not a real gap, and inherently racy to force deterministically since it depends on how the OS pipe happens to chunk a write() into 'data' events."
-              },
-    "kernel":  {
-                   "harness":  "claude-code",
-                   "budget":  { "wallClockMin":  60, "toolCalls":  200, "tokens":  500000 },
-                   "hardCaps":  { "wallClockMin":  240 },
-                   "autonomy":  { "window":  10, "rejectRate":  0.3, "factor":  0.5, "runs":  5 },
-                   "checkpointMin":  20,
-                   "alwaysAllowTools":  [ "TodoWrite" ],
-                   "extraDenyWriteRoots":  [],
-                   "_note":  "kernel/ dials (spec kernel/README.md). Re-read on EVERY guardhook fire, so an edit here applies to the next tool call with no restart. budget = per-run default ceilings; hardCaps.wallClockMin also bounds the task credential TTL; autonomy = rolling window of finalized runs, reject-rate trigger, tightening factor and how many runs it lasts; checkpointMin = automated re-evaluation interval, a run with zero tool calls in an interval is stopped as stalled. alwaysAllowTools are permitted regardless of contract (harmless bookkeeping tools). extraDenyWriteRoots adds to the built-in always-deny set (this repo + ~/.claude), never replaces it."
-               }
+    "_comment": "Agentic Command Center - the single process dial. Hooks re-read this on every fire, so edits take effect immediately with no restart.",
+    "context": {
+        "softK": 400,
+        "hardK": 600,
+        "_note": "STANDING (2026-07-31, Kyle, set via the ACC dials + chat instruction; SUPERSEDES the 2026-07-30 100/150 standing): 400/600 until he manually changes it again. These dials are the ONLY source of context limits for EVERY session, ACC-launched or not - profiles carry no context overrides, so the number saved here is what budget.mjs enforces and statusline.mjs displays. softK MUST stay below hardK: budget.mjs returns allow() at 'ctx < softK*1000' before it ever tests hardK, so a softK above hardK silently disables the UserPromptSubmit and PostToolUse checks and leaves only the Stop hook. Measured baseline start context is ~35-42k (CLAUDE.md + memory index + tools). hardK is the TOTAL context ceiling, not headroom above baseline."
+    },
+    "week": {
+        "amberTokens": 1200000000,
+        "redTokens": 1800000000,
+        "_note": "Tier counts usage from effectiveFrom onward (ACC install), so the switch cannot fire retroactively on pre-discipline burn. Baseline for reference: 2.35B tokens/7d before ACC. amber ~52% / red ~78% of that.",
+        "effectiveFrom": "2026-07-30T15:33:00Z"
+    },
+    "subagents": {
+        "mode": "allowlist",
+        "allow": [
+            "Explore"
+        ],
+        "maxPerSession": 6,
+        "exploreMaxReportLines": 80,
+        "_note": "Implementation work belongs in a runner session (fresh context, cheap), not an Opus subagent. Multi-finder fan-out needs an explicit time-boxed grant: 'node hooks/budget.mjs fanout 30' or the Command Center page (http://127.0.0.1:43117/guards)."
+    },
+    "review": {
+        "fullLeanReview": "manual-only",
+        "localFullSuiteInReview": false,
+        "maxFinders": 3
+    },
+    "runner": {
+        "stopOnRed": true,
+        "statusFile": ".acc/BOARD.md",
+        "waitingGuard": true
+    },
+    "promptOptimizer": "on",
+    "rates": {
+        "_note": "$ per million tokens, used for RELATIVE attribution in reports. These are list API prices, not subscription billing truth. Correct them here and every report follows.",
+        "opus": {
+            "in": 15,
+            "out": 75
+        },
+        "sonnet": {
+            "in": 3,
+            "out": 15
+        },
+        "fable": {
+            "in": 3,
+            "out": 15
+        },
+        "haiku": {
+            "in": 0.8,
+            "out": 4
+        },
+        "unknown": {
+            "in": 3,
+            "out": 15
+        }
+    },
+    "profiles": {
+        "_note": "Chosen on the Command Center's Start-work page (http://127.0.0.1:43117/guards). The profile is stored ON the directive; runner.mjs passes it to each headless child as ACC_PROFILE, and budget.mjs/statusline.mjs (both via usage.mjs applyProfile) apply the SUBAGENT overrides for THAT SESSION only. Context limits ALWAYS come from the base dials above - single source of truth since 2026-07-31; do not add context blocks back here, they would shadow the Command Center dials. Sessions with no ACC_PROFILE use the base policy unchanged.",
+        "Normal": {
+            "label": "The standard setup. Use this unless you have a reason not to.",
+            "subagents": {
+                "allow": [
+                    "Explore"
+                ],
+                "maxPerSession": 6
+            }
+        },
+        "Heavy": {
+            "label": "More helpers. For long migrations and audits.",
+            "subagents": {
+                "allow": [
+                    "Explore",
+                    "general-purpose"
+                ],
+                "maxPerSession": 12
+            }
+        }
+    },
+    "lane": {
+        "slots": 1,
+        "minGapMs": 3000,
+        "retries": 2,
+        "backoffBaseMs": 2000,
+        "overloadBaseMs": 4000,
+        "backoffCapMs": 30000,
+        "breakerThreshold": 3,
+        "breakerWindowMs": 300000,
+        "breakerCooldownMs": 120000,
+        "breakerBlocking": true,
+        "interactive": {
+            "slots": 1,
+            "minGapMs": 0,
+            "breakerBlocking": false,
+            "_note": "Web GUI launches. Own slot pool, isolated from automation's - a human-initiated launch never queues behind a runner/e2e hold and vice versa. minGapMs:0 because a human clicking GO IS the pacing. breakerBlocking:false: a tripped breaker only warns an interactive launch (logged), never blocks it - a human who already decided to launch should not be queued behind automation's circuit breaker."
+        },
+        "total": {
+            "cap": 3,
+            "exe": [
+                "C:\\Users\\kyleg\\.local\\bin\\claude.exe"
+            ],
+            "_note": "Machine-wide ceiling on concurrent claude.exe, enforced by shim/claude.cmd + shim/claude via `node hooks/lane.mjs gate` (see hooks/lane.mjs's launch-cap section). Independent of slots/interactive above, which are cooperative lane pools; this is a hard ceiling checked at every PATH resolution of `claude`, regardless of launch path. cap:0 is a supported deliberate lockdown (refuses every session launch). exe lists the absolute path(s) that count toward the cap, matched exactly (case-insensitive) -- the Claude desktop app's bundled claude.exe at a different path is never counted. Design: docs/adr/ADR-0003-launch-cap-check-then-launch.md."
+        },
+        "_note": "hooks/lane.mjs - machine-wide launch lane for real-claude spawns. Added 2026-08-01, hardened 2026-08-01 after Kyle hit an API error INSIDE an interactive session even after the first fix: the first pass only ever wrapped AUTOMATED headless launches (runner.mjs, e2e proof tier); manual launches spawned claude with zero coordination, so an interactive launch could still stack concurrently with automation or another manual terminal. slots=1 means one automated session at a time across ALL loops; minGapMs paces starts; retries are TRANSPORT-ONLY (econnreset/429/5xx/overloaded) with FULL-JITTER backoff - logic failures never retry, and 529/overloaded gets overloadBaseMs (a model-layer overload, not this account's rate limit) instead of backoffBaseMs. breakerThreshold failures within breakerWindowMs trips a breakerCooldownMs hold on new AUTOMATED launches (interactive only warns - see lane.interactive above). 'lane.interactive' is a second, fully isolated slot pool for web-GUI launches; 'lane.total' (added 2026-08-03) is the machine-wide hard cap that catches launches neither of the above ever sees, e.g. Kyle's own manual terminals outside the GUI - see lane.total._note. State: os.tmpdir()/acc-lane, never ACC_ROOT."
+    },
+    "tests": {
+        "changedLineCoverage": 100,
+        "changedFunctionCoverage": 100,
+        "changedBranchCoverage": 90,
+        "branchFloorOverrides": {
+            "hooks/lane.mjs": 85,
+            "kernel/run.mjs": 85,
+            "kernel/guardhook.mjs": 85
+        },
+        "_note": "hooks/covgate.mjs floors, per CHANGED lib file (hooks/ and runner/ .mjs, tests exempt). Three floors because line coverage alone lies: V8 marks a declaration line covered even when the function is never called. Branches default 90 - the last branch points are defensive catch-paths needing fault injection; raise per-change when the file warrants the spend. hooks/testplan.mjs injects the contract that binds these gates at plan time. branchFloorOverrides keys are gate-relative paths (forward slashes) with a per-file changedBranchCoverage override - hooks/lane.mjs is overridden to 85%: node's own --experimental-test-coverage merge under-reports its branches (measured 87.9%) once the full ten-file fast tier runs together in one invocation, a confirmed node v24.18.0 tooling limitation, not a real gap - true isolated coverage is 91.87%, proven 2026-08-02. kernel/run.mjs is overridden to 85% for the same reason, recurring on the CI covgate job's 24-file batch: measured 88.4% there vs 90.7% true isolated coverage (single-file, kernel/run.test.mjs only), proven 2026-08-03 after the timer-unref fix removed one optional-chaining branch point from the file. kernel/guardhook.mjs is overridden to 85% for the same OI-017 class of reason, found during the OI-019 scenario pass (2026-08-06): the OI-028 stdin-cap re-entrancy guard (`if (stdinOversized) return;`, only true on a SECOND 'data' event after the byte cap already tripped) reads 100% branches running kernel/guardhook.test.mjs alone but 87.5% once merged with kernel/ledger.test.mjs and kernel/run.test.mjs in one covgate invocation - the same merge undercount, not a real gap, and inherently racy to force deterministically since it depends on how the OS pipe happens to chunk a write() into 'data' events."
+    },
+    "kernel": {
+        "harness": "claude-code",
+        "budget": {
+            "wallClockMin": 60,
+            "toolCalls": 200,
+            "tokens": 500000
+        },
+        "hardCaps": {
+            "wallClockMin": 240
+        },
+        "autonomy": {
+            "window": 10,
+            "rejectRate": 0.3,
+            "factor": 0.5,
+            "runs": 5
+        },
+        "checkpointMin": 20,
+        "alwaysAllowTools": [
+            "TodoWrite"
+        ],
+        "extraDenyWriteRoots": [],
+        "_note": "kernel/ dials (spec kernel/README.md). Re-read on EVERY guardhook fire, so an edit here applies to the next tool call with no restart. budget = per-run default ceilings; hardCaps.wallClockMin also bounds the task credential TTL; autonomy = rolling window of finalized runs, reject-rate trigger, tightening factor and how many runs it lasts; checkpointMin = automated re-evaluation interval, a run with zero tool calls in an interval is stopped as stalled. alwaysAllowTools are permitted regardless of contract (harmless bookkeeping tools). extraDenyWriteRoots adds to the built-in always-deny set (this repo + ~/.claude), never replaces it."
+    }
 }

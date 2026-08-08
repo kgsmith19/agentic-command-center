@@ -4,7 +4,7 @@ status: active
 created: 2026-08-07
 updated: 2026-08-08
 owner: Kyle Smith
-version: 1.2.0
+version: 1.3.0
 ---
 
 # Agentic Command Center PRD
@@ -44,14 +44,14 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 ### 4.1 In scope
 
 - Blocking an agent from reading or writing secret files, guard machinery, or another cell's owned paths (`hooks/guard.mjs`, `config.json`).
-- A GUI control panel to launch, watch, stop, and approve agent work (`guards-gui.ps1`, `gui/`).
+- A web GUI control panel to launch, watch, stop, and approve agent work (`gui/server.mjs` + pages).
 - A headless kernel that runs one bounded AI-harness task at a time under a deny-by-default policy, verifies the real end-state, and records every run in a structured ledger (`kernel/`).
-- A directive store that lets a session's work survive a context-limit `/clear` by re-injecting the directive into the next session bound to the same console (`hooks/directive.mjs`).
+- A directive store that lets work survive context resets: the headless runner relaunches fresh sessions carrying `ACC_DIRECTIVE`, and each one gets the directive re-injected (`hooks/directive.mjs`, `runner/runner.mjs`).
 - A launch lane that serializes every automated `claude` process spawn on the machine so concurrent bursts do not break the transport (`hooks/lane.mjs`).
 - Folder routing that scopes a session to the narrowest correct working directory for the task it was given (`hooks/route.mjs`, `hooks/fixtures/ROUTING.md`).
-- A watcher that supervises the automation loop's own liveness and restarts it if it goes stale (`watcher/`).
+- A launch-cap alerter that detects too many concurrent real `claude.exe` processes (`watcher/claude-cap-watch.ps1`).
 - A vault for handing named secrets to an agent's process environment without ever showing it the value (`kernel/credentials.mjs`, `vault.json`).
-- A machine-wide launch cap that alert-only detects when too many real `claude.exe` processes are running at once (`shim/`, `watcher/claude-cap-watch.ps1`).
+- A machine-wide launch cap enforced at PATH-resolution time (`shim/`), with the alerter above as its watch half.
 
 ### 4.2 Out of scope (non-goals)
 
@@ -62,7 +62,7 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | OOS-003 | Per-tool-call human approval queue | Guards decide in code at the boundary; the interactive runbox/approve flow is a separate, coarser escape hatch | Never planned |
 | OOS-004 | A ledger dashboard / UI beyond the query CLI | `kernel/ledger.mjs query` plus the JSONL file is the whole "queryable" requirement | If ledger volume makes CLI browsing impractical |
 | OOS-005 | An OS-level sandbox (containers, VMs) around the guarded process | The guard is a deterministic process-level boundary, documented as a convention enforcer, not a security boundary | If the threat model changes to untrusted code, not a trusted operator's own agent |
-| OOS-006 | Any non-Windows platform for the GUI, watcher, and shim layers | Built for Kyle's one Windows machine; the kernel and hooks stay Node so they still run and test on Linux CI | If ACC needs to run on a second machine |
+| OOS-006 | Any non-Windows platform for the shim/cap-watch layer | Built for Kyle's one Windows machine; everything else (kernel, hooks, runner, web GUI) is Node and runs and tests on Linux CI | If ACC needs to run on a second machine |
 
 ## 5. Use cases
 
@@ -71,11 +71,11 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | Field | Content |
 |---|---|
 | Actor | U-001 |
-| Precondition | Guard hook registered in `~/.claude/settings.json`; GUI running |
-| Trigger | Kyle clicks "Go" in the GUI, or launches from a console the watcher recognizes |
-| Main path | 1. GUI reserves a launch-lane slot. 2. `claude` starts with the guard PreToolUse hook attached. 3. Every Edit/Write/Read the session attempts is checked against secrets, protected paths, and cell ownership before it runs. 4. The session works until it hits a context ceiling or finishes. |
+| Precondition | Guard hook registered in `~/.claude/settings.json`; `npm run gui` serving the Command Center |
+| Trigger | Kyle types a task on the Start-work page and presses GO (or launches `claude` from his own terminal) |
+| Main path | 1. The page creates a directive (routed folder + profile) and launches the headless runner for it. 2. Each `claude -p` run starts through the launch lane and the shim cap with the guard PreToolUse hook attached. 3. Every Edit/Write/Read the session attempts is checked against secrets, protected paths, and cell ownership before it runs. 4. The loop runs until the directive reports done/blocked or a brake trips. |
 | Success outcome | The session completes its work, or hits its context ceiling and is handed off cleanly (UC-002), with no secret or protected-path touch having occurred |
-| Failure paths | Guard denies a touch -> tool call fails with a message naming why; a second concurrent Go press -> refused with a busy message, no second process |
+| Failure paths | Guard denies a touch -> tool call fails with a message naming why; a second launch of the same directive -> HTTP 409 / runner exit 6, no second loop |
 | Frequency | Many times per day |
 | Traces to | FR-001, FR-002, FR-003 |
 
@@ -84,11 +84,11 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | Field | Content |
 |---|---|
 | Actor | U-002 |
-| Precondition | A directive is bound to the session's console PID |
-| Trigger | `budget.mjs`'s Stop hook detects the session ended over its context ceiling |
-| Main path | 1. The closing state is captured as the next cycle's handoff. 2. clearbot types `/clear`. 3. The new session's SessionStart hook adopts the directive by console PID and injects it. 4. clearbot types the fixed resume phrase. |
-| Success outcome | The new session continues the same directive with no human retyping context |
-| Failure paths | Console PID not bound -> no adoption, directive stays idle; week token tier is red -> resume held |
+| Precondition | An active directive with a working folder; the headless runner pointed at it |
+| Trigger | A run ends (over budget, or simply finished its turn) with the directive still active |
+| Main path | 1. The Stop hook captures the closing summary as the next cycle's handoff. 2. The runner relaunches `claude -p` with `ACC_DIRECTIVE=<id>` — the relaunch IS the context reset. 3. The new session's SessionStart hook injects the directive text, log tail, and done/blocked protocol. |
+| Success outcome | The fresh session continues the same directive with no human retyping context |
+| Failure paths | Identical consecutive summaries -> stuck brake (alert, exit 2); week token tier red -> runs held (exit 5); maxRuns/timeout ceilings |
 | Frequency | Whenever a long task outruns one context window |
 | Traces to | FR-004, FR-005 |
 
@@ -112,12 +112,12 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | FR-001 | The system must block an agent tool call that would read or write a file matching a `secrets` glob in `config.json`. | Must | Given a `.env` file in a guarded repo, when an agent Edit/Write/Read targets it, then the call is denied with a message naming the reason. | UC-001 | done |
 | FR-002 | The system must block a write to a cell-owned path unless `.agents/task.json` declares that cell as the writer. | Must | Given a repo with `cells` configured and no `task.json`, when an agent writes inside a cell path, then the call is denied. | UC-001 | done |
 | FR-003 | The system must refuse to let more than one automated `claude` process hold the launch lane at a time. | Must | Given one automated launch already holding the lane, when a second automated launch requests it, then the second is refused with a busy indication, not queued silently as a duplicate process. | UC-001 | done |
-| FR-004 | The system must let a bound directive survive a `/clear` by re-injecting it into the next session on the same console. | Must | Given a directive bound to console PID `P`, when a new session starts on `P`, then that session's context includes the directive text within the first turn. | UC-002 | done |
-| FR-005 | The system must stop resuming a directive once the week's token tier is red. | Must | Given the week tier is red, when a directive's turn ends, then no `/clear`-and-resume kick fires. | UC-002 | done |
+| FR-004 | ~~Console-bound `/clear` survival~~ Retired 2026-08-08 (ADR-0005): the console/keystroke mechanism was deleted; FR-011's headless loop is the continuity mechanism. | Must | (superseded by FR-011) | UC-002 | retired |
+| FR-005 | The system must stop resuming a directive once the week's token tier is red. | Must | Given the week tier is red, when the runner would start a directive run, then no run starts (exit 5, alert written). | UC-002 | done |
 | FR-006 | The kernel must refuse to launch a harness for a contract with no acceptance criteria or an unrecognized `verify.method`. | Must | Given a contract with an empty `acceptanceCriteria` array, when `run.mjs` is invoked, then the outcome is `refused` and no ledger entry exists. | UC-003 | done |
 | FR-007 | The kernel must verify every acceptance criterion against the real end-state after the harness reports done, independent of the harness's own claim. | Must | Given a harness that claims success but never created the file an `AC` requires, when verification runs, then that criterion fails and the run is `rejected`. | UC-003 | done |
 | FR-008 | The kernel must record exactly one `run_started` and one `run_finalized` ledger line per run, even under concurrent retries or a mid-run crash. | Must | Given 20 concurrent append attempts for the same run, when the ledger is read back, then no duplicate `run_started` line exists. | UC-003 | done |
-| FR-009 | The system must route a session to the narrowest folder its task text names, and fall back to advice-only when the destination cannot be confirmed safe to type. | Should | Given a task naming a specific sub-project, when routing runs, then the verdict names that sub-project's folder, not its parent. | UC-001 | done |
+| FR-009 | The system must route a session to the narrowest folder its task text names, as advice only (one injected line; never blocking a prompt). | Should | Given a task naming a specific sub-project, when routing runs, then the verdict names that sub-project's folder, not its parent. | UC-001 | done |
 | FR-010 | The system must let a human hand off any operation the guard blocks or that needs elevated rights, as a reviewable script the human runs deliberately. | Must | Given a guard-denied edit to protected machinery, when an agent needs it done, then it writes a runbox script instead of failing silently. | UC-001 | done |
 | FR-011 | The system must run a bound directive to completion headless — no console, no keystrokes — resuming across fresh contexts via the directive log, and holding all runs while the week token tier is red. | Must | Given an active directive with a working folder, when the runner is pointed at it, then each run receives the directive context (text, progress log, done/blocked protocol) and the loop ends only when the directive's own status leaves `active` — and given a red week tier, no run starts. | UC-002 | in-progress |
 | FR-012 | The system must let Kyle create, route, launch, watch, and close a headless directive entirely from the web GUI, with at most one runner loop per directive machine-wide. | Must | Given the `/guards` page and a task description, when Kyle presses GO, then a directive exists in the store with the routed (or overridden) folder, a runner loop starts for it, the page shows its live/idle state and log tail, and a second launch of the same directive is refused (HTTP 409 / runner exit 6) while the first loop lives. | UC-001, UC-002 | done |
@@ -134,8 +134,8 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 | NFR-004 | Test coverage | Every CHANGED library file must meet the coverage floor before merge. | lines 100%, functions 100%, branches 90% (documented per-file overrides where node's coverage merge under-reports) | `node hooks/covgate.mjs` | done |
 | NFR-005 | Maintainability | No source file should exceed roughly 250 lines without a stated reason; this is advisory here, not yet lint-enforced. | 250 lines, advisory | manual review at doc/lean refresh | not-started |
 | NFR-006 | Cost | Weekly token spend must be visible and gated before it becomes a surprise. | amber/red thresholds configured in `policy.json`, enforced by `hooks/usage.mjs` | `hooks/usage.mjs week`/`check` | done |
-| NFR-007 | Availability | The automation loop (clearbot) must self-detect when it has gone stale and be revivable without a session restart. | heartbeat file freshness checked every turn boundary | `hooks/budget.mjs reviveClearbotIfDead` | done |
-| NFR-008 | Portability | The hermetic fast-tier test suite (kernel, hooks, gui/server) must run identically on Linux CI and Windows. | same pass/fail modulo documented Windows-only suites | `npm test` (Linux) vs `npm run test:windows` | done |
+| NFR-007 | Availability | Runner liveness must be visible and duplicate loops impossible: at most one loop per directive machine-wide, with running state surfaced. | pid-file singleton refuses duplicates (exit 6); `running` badge on the Command Center list | `runner/runner.test.mjs` singleton group; `gui/server.test.mjs` AC-106 | done |
+| NFR-008 | Portability | The hermetic fast-tier test suite must run identically on Linux CI and Windows. | same pass/fail; the only Windows-only suites left are the three shim/cap-watch PowerShell files | `npm test` / `npm run test:windows` + CI windows job | done |
 | NFR-009 | Data durability | No committed ledger write is lost to a process crash mid-write. | lock-protected append with stale-lock reap; no test-observed loss across repeated concurrent runs | `kernel/ledger.test.mjs` | done |
 | NFR-010 | Privacy | None, because this system handles no PII — its only sensitive data is API keys/secrets, covered by NFR-001 and the vault design. | n/a | n/a | done |
 
@@ -143,10 +143,10 @@ This is a set of programs that watch over Claude Code (an AI coding assistant) w
 
 | ID | Data item | Meaning in plain language | Source | Classification | Retention | Traces to |
 |---|---|---|---|---|---|---|
-| DR-001 | Vault keys (`vault.json`) | API keys/secrets an agent's process may need, by name | Kyle, via the GUI's "Give Claude keys" tab | secret | Until Kyle removes the key; gitignored, plaintext on disk | FR-010 |
+| DR-001 | Vault keys (`vault.json`) | API keys/secrets an agent's process may need, by name | Kyle, via the web GUI's vault section | secret | Until Kyle removes the key; gitignored, plaintext on disk | FR-010 |
 | DR-002 | Kernel ledger (`runner/ledger/*.jsonl`) | One record per kernel run: contract summary, outcome, criteria results | `kernel/ledger.mjs` | internal | Kept indefinitely; it is the audit trail | FR-008 |
-| DR-003 | Directive store (`runner/directives/*.json`) | A task's text and progress log, bound to a console PID | `hooks/directive.mjs` | internal | Archived to `runner/directives/done/` on completion or reap | FR-004 |
-| DR-004 | Approvals log (`watcher/approvals.log`) | Record of every runbox script the watcher auto-ran | `watcher/clearbot.ps1` Invoke-AutoApprove | internal | Kept indefinitely | FR-010 |
+| DR-003 | Directive store (`runner/directives/*.json`) | A task's text and progress log, bound by directive id (`ACC_DIRECTIVE`) to each session that carries it | `hooks/directive.mjs` | internal | Archived to `runner/directives/done/` on completion | FR-011 |
+| DR-004 | ~~Approvals log~~ Retired 2026-08-08 (ADR-0005): unattended auto-run died with the watcher; every runbox script now runs by explicit human action | — | — | — | FR-010 |
 
 Rules: anything classified `PII` or `secret` must have a matching NFR — DR-001 is covered by NFR-001 (fail-closed guard) and the vault's by-name-not-by-value design.
 
@@ -154,10 +154,10 @@ Rules: anything classified `PII` or `secret` must have a matching NFR — DR-001
 
 | ID | Constraint | Type | Source | Consequence |
 |---|---|---|---|---|
-| CON-001 | GUI, watcher, and shim layers are Windows-only (PowerShell, C#, `.cmd`). | technical | Built for Kyle's one Windows machine | These layers cannot be tested in Linux CI; only kernel/hooks/gui-server run there |
+| CON-001 | The launch shim and cap-watch are Windows-only PowerShell; everything else is portable Node. | technical | Built for Kyle's one Windows machine | Three PS1 suites run only on the CI windows job; the rest tests on Linux |
 | CON-002 | No runtime dependencies beyond `node:test`; `@playwright/test` is the one devDependency. | technical | Deliberate choice to keep the harness simple and auditable | Any new capability is either hand-rolled or needs written approval to add a library (rules/00-CORE.md) |
 | CON-003 | The guard is a convention enforcer, not a security boundary. | technical | Documented ceiling in `kernel/guard.mjs`'s own header | Symlink and exotic-Windows-path bypasses are accepted risk, not defects |
-| CON-004 | `autoApprove.enabled: true` means an agent can reach guard-protected machinery indirectly via a runbox script, unattended. | business | Kyle's explicit accepted-risk decision (formerly OI-032) | The guard is a speed bump against a direct edit, not an absolute boundary, while autoApprove stays on |
+| CON-004 | ~~autoApprove unattended runbox runs~~ Retired 2026-08-08 (ADR-0005): the auto-run daemon died with the watcher; runbox scripts now require explicit human action, restoring the guard's review moment | business | — | — |
 
 ## 10. Assumptions
 
@@ -202,11 +202,11 @@ Forward plan (the ADR-0004 consolidation program — one Node core, delete the s
 | Slice | Name | What becomes true | Requirements delivered | Est. net LOC | Depends on |
 |---|---|---|---|---|---|
 | SL-007 | Runner ↔ directive wiring (SPEC-0001) | A directive can run headless to completion; red week tier holds runs | FR-011, FR-005 (headless path) | ~+80 | - |
-| SL-008 | F1 overnight proof | One real, low-stakes directive completes unattended behind a hard ceiling (Kyle runs; issue #15) | validates FR-011 | 0 | SL-007 |
-| SL-009 | Web-GUI completion | Every WinForms tab exists in `gui/server.mjs`+HTML with Playwright coverage; `guards-gui.ps1` deleted | FR-010 (web surface) | ~-1,300 | - |
-| SL-010 | Watcher fold-in | Auto-approve + heartbeat run in Node; watcher PS1 shrinks to elevation installers | NFR-007 | ~-300 | SL-007 |
-| SL-011 | Keystroke-stack deletion | `clearbot.ps1`, `sendconsole.ps1`, `winfind.ps1`, `PtyHost.cs`, `term.html`, `gui/vendor/` (1.1 MB) gone; FR-004's console mechanism retired | FR-004 superseded by FR-011 | ~-1,900 | SL-008 |
-| SL-012 | Launcher/root cleanup | One entry point per concern; root `.cmd` sprawl gone | — | ~-100 | SL-009, SL-011 |
+| SL-008 | First real headless run (re-targeted by ADR-0005 from deletion-gate to FR-011 proof) | One real, low-stakes directive completes unattended, watched (Kyle runs; issue #15 adds the per-run ceiling first) | validates FR-011 | 0 | SL-007 |
+| SL-009 | Web-GUI completion | Every WinForms tab exists in `gui/server.mjs`+HTML with Playwright coverage; the WinForms shell deleted | FR-010 (web surface) | done 2026-08-08 (tabs via SPEC-0002/3/4; shell deleted in SPEC-0005 PR-2) | - |
+| SL-010 | Watcher fold-in | Re-scoped 2026-08-08: heartbeat is obsolete (no watcher) and auto-approve was retired, not ported (ADR-0005); revival would be a new spec | NFR-007 | closed by SPEC-0005 PR-2 | SL-007 |
+| SL-011 | Keystroke-stack deletion | done 2026-08-08 (SPEC-0005 PR-2, ahead of SL-008 per ADR-0005): the whole console stack gone; FR-004 retired | FR-004 superseded by FR-011 | ~-6,000 actual | ADR-0005 |
+| SL-012 | Launcher/root cleanup | done 2026-08-08 (SPEC-0005 PR-2): no `.cmd` survives; `npm run gui` is the entry point | — | done | SL-009, SL-011 |
 | SL-013 | Web launch surface (SPEC-0005 PR-1) | A directive can be created, routed, launched headless, watched, and closed from `/guards`; one runner loop per directive enforced by a pid-file singleton | FR-012 | ~+405 | SL-007, SL-009 |
 
 ## 14. Glossary
@@ -216,7 +216,7 @@ Forward plan (the ADR-0004 consolidation program — one Node core, delete the s
 | ACC | Agentic Command Center — this whole system's name | "the kernel" (one subsystem of ACC) |
 | Guard | The PreToolUse hook that denies risky file reads/writes | "guardhook" (the kernel's own, separate enforcement point) |
 | Kernel | The headless, bounded, independently-verified task runner under `kernel/` | The guard hook |
-| Directive | A working condition bound to a console PID that survives `/clear`. Renamed from "goal" 2026-08-07 to stop colliding with the unrelated third-party Claude Code "Goal" plugin (GitHub issue #12) | The third-party "Goal" plugin, which is a different mechanism entirely |
+| Directive | A piece of work that outlives any one session: stored as a file, carried by `ACC_DIRECTIVE`, resumed headless by the runner. Renamed from "goal" 2026-08-07 (GitHub issue #12) | The third-party "Goal" plugin, which is a different mechanism entirely |
 | Runbox | A folder where an agent leaves a script for a human to run deliberately | A queued prompt (a different handoff mechanism) |
 | Launch lane | The machine-wide semaphore serializing automated `claude` process spawns | The launch cap (`shim/`), which is an alert-only detector, not an enforcer |
 | Vault | The store of named secrets an agent's process env may receive by name, never by value | `config.json`'s `secrets` globs (files the guard blocks entirely) |
@@ -236,4 +236,5 @@ Forward plan (the ADR-0004 consolidation program — one Node core, delete the s
 |---|---|---|---|---|
 | 2026-08-07 | 1.0.0 | Initial PRD, written retroactively against the existing system. `OPEN-ISSUES.md` retired in favor of GitHub issues; its two genuinely open entries became issues #11 and #12. | Rearchitect the repo onto an SDD documentation contract and start a simplification pass. | All |
 | 2026-08-07 | 1.1.0 | Added FR-011 (headless directive continuity) and the ADR-0004 forward slice plan (SL-007…SL-012): consolidate onto one Node core, finish the web-GUI migration, retire the keystroke stack and WinForms. | Kyle's rearchitecture directive — fewer files, fewer languages, one mechanism per concern. | FR-011, FR-004, FR-005, §13 |
+| 2026-08-08 | 1.3.0 | SPEC-0005 PR-2 (the demolition): keystroke/ConPTY/WinForms stack deleted per ADR-0005 — FR-004, DR-004, CON-004 retired; FR-005/FR-009 ACs reworded to the headless path; NFR-007 re-targeted to runner liveness; UC-001/UC-002, scope 4.1, OOS-006, CON-001, DR-001/DR-003 updated; SL-009/010/011/012 closed; checkpoint board moved to cwd-relative `.acc/BOARD.md`. | The destination (web launch + headless loop, PR-1) was live; keeping two continuity mechanisms violated one-mechanism-per-concern. | FR-004, FR-005, FR-009, NFR-007, NFR-008, DR-003, DR-004, CON-001, CON-004, §4, §5, §13 |
 | 2026-08-08 | 1.2.0 | Added FR-012 (web launch surface) + SL-013, delivered by SPEC-0005 PR-1. ADR-0005 supersedes ADR-0001's deletion-behind-F1 sequencing (Kyle's order); ADR-0006 moves the UI's future to a separate repo (`agentic-command-center-ui`) with ACC as headless core + loopback API. The keystroke-stack demolition (SPEC-0005 PR-2) will retire FR-004's console mechanism and rewrite the affected FR/NFR/DR/CON rows in its own commit. | Kyle's 2026-08-07 restructure order: web launch surface now, keystroke stack deleted now, modern UI in its own repo. | FR-012, §13, ADR-0005, ADR-0006 |

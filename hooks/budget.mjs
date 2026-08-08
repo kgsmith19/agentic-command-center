@@ -11,23 +11,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadPolicy, contextOf, startContextOf, applyProfile, ptyAnchorPid, ancestorChain } from "./usage.mjs";
-import { bindSession, appendCycle, logTail, directiveForSession, recordTurnEnd, KICK_TEXT } from "./directive.mjs";
+import { loadPolicy, contextOf, startContextOf, applyProfile } from "./usage.mjs";
+import { bindSession, appendCycle, logTail, directiveForSession } from "./directive.mjs";
 import { resolveRoot } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// ACC_ROOT redirects every runner/ path (state, logs, directives, clear-requests) at a
+// ACC_ROOT redirects every runner/ path (state, logs, directives) at a
 // throwaway tree. It exists so the tests can exercise THIS file instead of a
-// copy: a test that reset the live runner/state would delete the .window files
-// running sessions depend on, which is precisely how auto-clear died once.
+// copy, never the live state running sessions depend on.
 const ROOT = resolveRoot(HERE);
 const STATE = path.join(ROOT, "runner", "state");
 const LOGS = path.join(ROOT, "runner", "logs");
-const CLEARREQ = path.join(ROOT, "runner", "clear-requests");
 const DIRECTIVESDIR = path.join(ROOT, "runner", "directives");
-const QUEUEDIR = path.join(ROOT, "runner", "queued");
 const HEADLESS = process.env.CLAUDE_CODE_RUNNER === "1";
 
 const K = (n) => Math.round(n / 1000) + "k";
@@ -41,96 +37,7 @@ function readStdin() {
 }
 
 function ensureDirs() {
-  for (const d of [STATE, LOGS, CLEARREQ]) fs.mkdirSync(d, { recursive: true });
-}
-
-// Record which terminal window this session lives in, so clearbot.ps1 can type
-// /clear into THAT window and nothing else. Runs once, at SessionStart. Failing
-// here only costs auto-clear; the session is unaffected (hooks fail open).
-function captureWindow(sid) {
-  try {
-    const out = execFileSync(
-      "powershell",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(HERE, "winfind.ps1"),
-       "-FromPid", String(process.pid)],
-      { encoding: "utf8", timeout: 15000, windowsHide: true }
-    );
-    const w = JSON.parse(String(out).trim());
-    // consolePid is the whole requirement - see winfind.ps1. hwnd is recorded for
-    // diagnostics only; gating on it is what made auto-clear fail silently.
-    if (w && w.ok && w.consolePid) {
-      fs.writeFileSync(statePath(sid, "window"), JSON.stringify(w));
-      return w;
-    }
-  } catch {}
-  return null;
-}
-
-// The whole auto-clear chain is dead if the watcher process is not up, and it
-// fails SILENTLY (the request file just sits there). So every interactive session
-// start makes sure it is running. Fire-and-forget: detached, never waited on, so
-// it cannot slow the session down or wedge it if PowerShell is unhappy.
-function ensureClearbot() {
-  try {
-    // A deliberate stop must STICK. start-clearbot.cmd removes the stop file, so
-    // without this check every new session would silently re-arm a watcher Kyle
-    // had turned off on purpose.
-    if (fs.existsSync(path.join(ROOT, "watcher", "clearbot.stop"))) return;
-    const cmd = path.join(ROOT, "watcher", "start-clearbot.cmd");
-    if (!fs.existsSync(cmd)) return;
-    const child = spawn("cmd.exe", ["/c", cmd], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-  } catch {}
-}
-
-// SELF-HEALING (guards OI-007): the watcher is the only thing that can clear or
-// resume a session, and when it dies the directive loop dies silently with it. A
-// turn boundary is exactly where that matters, so check there: one stat, and
-// ensureClearbot() is idempotent (start-clearbot.cmd no-ops when a watcher is
-// already up) and still honours the deliberate kill switch. A MISSING heartbeat
-// counts as dead here - unlike the status line, which stays quiet rather than
-// crying wolf, this path only costs a no-op start.
-const HEARTBEAT_STALE_MS = 30_000;
-function reviveClearbotIfDead(policy) {
-  try {
-    if (policy.autoClear?.enabled === false) return;
-    let stale = true;
-    try {
-      stale = Date.now() - fs.statSync(path.join(ROOT, "watcher", "clearbot.heartbeat")).mtimeMs > HEARTBEAT_STALE_MS;
-    } catch {
-      stale = true;
-    }
-    if (stale) ensureClearbot();
-  } catch {}
-}
-
-// Ask the outside watcher to type /clear. Written at the Stop hook, i.e. a turn
-// boundary with an idle prompt - never mid-turn.
-function requestClear(p, policy, ctx) {
-  try {
-    const w = readJson(statePath(p.session_id, "window"), null);
-    if (!w || !w.consolePid) return false;
-    fs.writeFileSync(
-      path.join(CLEARREQ, `${String(p.session_id).slice(0, 40)}.json`),
-      JSON.stringify({
-        sessionId: p.session_id,
-        hwnd: w.hwnd,
-        consolePid: w.consolePid || 0,
-        title: w.title || "",
-        transcript: p.transcript_path || "",
-        ctx,
-        hardK: policy.context.hardK,
-        ts: new Date().toISOString(),
-      })
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  for (const d of [STATE, LOGS]) fs.mkdirSync(d, { recursive: true });
 }
 
 function statePath(sid, suffix) {
@@ -282,36 +189,6 @@ function lastAssistantText(transcript) {
   return out;
 }
 
-// The last USER message of a transcript. Used only to tell a machine
-// continuation from something Kyle typed - see KICK_CONSTANTS.
-function lastUserText(transcript) {
-  let last = "";
-  try {
-    for (const l of fs.readFileSync(transcript, "utf8").split("\n")) {
-      if (!l || l.charCodeAt(0) !== 123) continue;
-      let o;
-      try {
-        o = JSON.parse(l);
-      } catch {
-        continue;
-      }
-      if (o.type !== "user" || o.isSidechain || !o.message) continue;
-      const c = o.message.content;
-      last = typeof c === "string"
-        ? c
-        : Array.isArray(c)
-          ? c.filter((b) => b && b.type === "text").map((b) => b.text).join("")
-          : "";
-    }
-  } catch {}
-  return String(last || "").trim();
-}
-
-// Exactly the constants a transport delivers (clearbot.ps1 $KICK/$QUEUEKICK,
-// runner.mjs directive-job bootstrap). Anything else came from a human, so
-// the kick backs off. KICK_TEXT is canonical in directive.mjs.
-const KICK_CONSTANTS = [KICK_TEXT, "Run the queued prompt."];
-
 // ------------------------------------------------------------- handlers
 
 // Bind this session to the directive that owns its console (or the one the Command
@@ -322,10 +199,9 @@ const KICK_CONSTANTS = [KICK_TEXT, "Run the queued prompt."];
 // the work is finished, so the two exit commands are stated as the last thing in
 // the block, in full, with the id already substituted - there is no id to look
 // up and no ambiguity about what "done" means.
-function directiveContext(p, win, policy) {
+function directiveContext(p, policy) {
   const directive = bindSession({
     sessionId: p.session_id,
-    consolePid: win && win.consolePid,
     cwd: p.cwd,
     directiveId: process.env.ACC_DIRECTIVE || "",
   });
@@ -349,42 +225,12 @@ function directiveContext(p, win, policy) {
   }
   parts.push(
     "",
-    `[ACC DIRECTIVE] How this ends. When the budget is reached you will be told to checkpoint; do that and stop, and the Command Center clears and resumes you automatically. Do NOT stop early, do NOT ask whether to continue, and do NOT treat a clear as the end of the work.`,
+    `[ACC DIRECTIVE] How this ends. When the budget is reached you will be told to checkpoint; do that and stop. The Command Center's headless runner resumes this directive with your progress log (node C:/code/guards/runner/runner.mjs directive:${directive.id}) — do NOT stop early, do NOT ask whether to continue, and do NOT treat a stop as the end of the work.`,
     `  - finished, everything verified:  node C:/code/guards/hooks/directive.mjs done ${directive.id}`,
     `  - genuinely blocked on a human:   node C:/code/guards/hooks/directive.mjs blocked ${directive.id} --why "<one line>"`,
-    `Until one of those runs, ACC will keep resuming this directive after every clear.`
+    `Until one of those runs, the directive stays active and resumable.`
   );
   return parts.join("\n");
-}
-
-// A prompt that route.mjs could not hand back as keystrokes - multi-line, or
-// longer than the injector's limit. It travels as a FILE keyed by console pid
-// (the same thread of continuity directives use, because the session id dies with the
-// clear) and is injected here, into the session that comes up after the clear.
-//
-// Consumed once: the file is deleted as it is read, so a queued prompt can never
-// re-run on a later clear. Deleting BEFORE returning is deliberate - if the
-// injection is lost, the cost is one retyped prompt, whereas a file that
-// survives is a prompt that fires again out of nowhere.
-function queuedPromptContext(win) {
-  const cpid = win && win.consolePid;
-  if (!cpid) return "";
-  const f = path.join(QUEUEDIR, `${cpid}.md`);
-  let text = "";
-  try {
-    text = fs.readFileSync(f, "utf8").replace(/^﻿/, "").trim();
-  } catch {
-    return "";
-  }
-  try { fs.unlinkSync(f); } catch {}
-  if (!text) return "";
-  return [
-    "[ACC route] This session was just re-scoped to this folder for the prompt below,",
-    "which was too long or too many lines to type back into the console. It is the",
-    "prompt you were asked to run - treat it exactly as if it had just been typed.",
-    "",
-    text,
-  ].join("\n");
 }
 
 function onSessionStart(p, policy) {
@@ -402,29 +248,6 @@ function onSessionStart(p, policy) {
       }) + "\n"
     );
   } catch {}
-  // Interactive only: learn which terminal window to type /clear into later.
-  let win = null;
-  // A capture that blips must not cost the session its directive or its queued
-  // prompt: both are addressed by console pid, and a previously recorded one is
-  // still the right console. Fall back to what was written last time.
-  if (!HEADLESS) {
-    // An ACC-hosted pty session has no HWND to find: the GUI is the terminal.
-    // The persistent process across /clear (what consolePid means to directive
-    // binding) is the claude process - NOT this hook's raw parent, which is a
-    // transient bash/cmd wrapper that dies with the turn (recording it gave
-    // clearbot a dead pid: consolePid 80480 GONE while claude.exe 70152 lived).
-    if (process.env.ACC_PTY) {
-      const chain = ancestorChain();
-      win = { ok: true, hwnd: 0,
-              consolePid: chain.length ? ptyAnchorPid(chain) : process.ppid,
-              transport: "pty",
-              pipe: process.env.ACC_PTY, title: "acc-pty" };
-      try { fs.writeFileSync(statePath(p.session_id, "window"), JSON.stringify(win)); } catch {}
-    } else {
-      win = captureWindow(p.session_id) || readJson(statePath(p.session_id, "window"), null);
-    }
-    if (policy.autoClear?.enabled !== false) ensureClearbot();
-  }
   // Record the status file's mtime so the Stop waiting-guard can tell whether
   // this run actually checkpointed.
   try {
@@ -440,31 +263,16 @@ function onSessionStart(p, policy) {
   const lines = [];
   if (policy.activeProfile) {
     lines.push(
-      `[ACC] Profile: ${policy.activeProfile} (launched from the Command Center). Its subagent rules apply to this session; the context budget comes from the Process-tab dials.`
+      `[ACC] Profile: ${policy.activeProfile} (launched from the Command Center). Its subagent rules apply to this session; the context budget comes from the Command Center dials.`
     );
   }
-  // A directive is what makes this session a continuation rather than a fresh start.
-  // It is adopted by CONSOLE, so this fires identically on the launch and on
-  // every session that comes up after a /clear. Failing here costs auto-resume
+  // A directive is what makes this session a continuation rather than a fresh
+  // start. It is bound by ACC_DIRECTIVE, so this fires identically on the
+  // launch and on every fresh runner cycle. Failing here costs auto-resume
   // and nothing else - hooks fail open.
   try {
-    const directive = directiveContext(p, win, policy);
+    const directive = directiveContext(p, policy);
     if (directive) lines.push(directive);
-  } catch {}
-  try {
-    const queued = queuedPromptContext(win);
-    if (queued) lines.push(queued);
-  } catch {}
-
-  // If the watcher is down, this session has no auto-clear and no auto-resume.
-  // Say it once, at the top, instead of letting the directive loop fail silently.
-  try {
-    const hb = path.join(ROOT, "watcher", "clearbot.heartbeat");
-    if (Date.now() - fs.statSync(hb).mtimeMs > 30_000) {
-      lines.push(
-        `[ACC] WARNING: the clearbot watcher looks DEAD (stale heartbeat). Auto-clear and auto-resume will NOT fire, so this session will not be continued for you. Start it: guards\\watcher\\start-clearbot.cmd`
-      );
-    }
   } catch {}
 
   lines.push(
@@ -544,7 +352,6 @@ const WAITING_RE =
 
 function onStop(p, policy) {
   ensureDirs();
-  reviveClearbotIfDead(policy);
 
   // --- waiting guard (headless only: nothing re-invokes a -p session) ---
   // stop_hook_active means a Stop hook (this one or another) already blocked
@@ -578,18 +385,7 @@ function onStop(p, policy) {
   if (!p.transcript_path) allow();
   const ctx = contextOf(p.transcript_path);
   const { hardK } = policy.context;
-  if (ctx < hardK * 1000) {
-    // LIVENESS (guards OI-002): a directive session that ends its turn UNDER the
-    // ceiling gets no clear, and therefore no resume - the loop used to die
-    // right here, silently. Re-arm the kick and let directive.mjs decide when
-    // firing it is safe. Fails open: liveness must never cost a turn its
-    // clean exit.
-    try {
-      const g = directiveForSession(p.session_id);
-      if (g) recordTurnEnd(g.id, { human: !KICK_CONSTANTS.includes(lastUserText(p.transcript_path)) });
-    } catch {}
-    allow();
-  }
+  if (ctx < hardK * 1000) allow();
 
   const latch = statePath(p.session_id, "budget");
   if (!fs.existsSync(latch)) {
@@ -624,24 +420,19 @@ function onStop(p, policy) {
     }
   } catch {}
 
-  // Interactive: hand off to the outside watcher, which types /clear as real
-  // keystrokes (hooks cannot clear context - see watcher/clearbot.ps1).
-  const queued = policy.autoClear?.enabled !== false && requestClear(p, policy, ctx);
+  // Interactive: hooks cannot clear context, and nothing types keystrokes for
+  // us anymore (SPEC-0005 PR-2) - tell the human exactly what to do, and name
+  // the headless resume path that carries the work forward.
   process.stdout.write(
     JSON.stringify({
       systemMessage:
         `\n[ACC ctx ${K(ctx)}/${hardK}k] BUDGET REACHED - checkpoint written.\n` +
-        (queued
-          ? `\n    >>> auto-clear requested - clearbot will type /clear <<<\n\n` +
-            `  If nothing happens within ~5s the watcher is not running:\n` +
-            `    node C:/code/guards/hooks/budget.mjs clearbot-status\n`
-          : `\n    >>> TYPE /clear NOW <<<\n\n` +
-            `  (auto-clear unavailable - no window captured for this session)\n`) +
+        `\n    >>> TYPE /clear NOW <<<\n\n` +
         (directive
-          ? `  Directive ${directive.id} is active - the next session adopts it automatically and\n` +
-            `  is resumed by the Command Center. Cycle ${directive.cycles} logged.\n`
-          : `  The next session re-primes itself from ${policy.runner.statusFile}.\n`) +
-        `  Verify the clear was real: node C:/code/guards/hooks/usage.mjs clears\n`,
+          ? `  Directive ${directive.id} is active - cycle logged. Resume it headless:\n` +
+            `    node C:/code/guards/runner/runner.mjs directive:${directive.id}\n` +
+            `  (or the Command Center Start-work page: http://127.0.0.1:43117/guards)\n`
+          : `  The next session re-primes itself from ${policy.runner.statusFile}.\n`),
     })
   );
   process.exit(0);
@@ -720,51 +511,6 @@ function main() {
       fs.unlinkSync(path.join(STATE, "tier.json"));
     } catch {}
     console.log("runner stop-file cleared, tier cache flushed");
-    return;
-  }
-
-  // Fire the auto-clear on demand, against the most recently started session.
-  // This is the honest end-to-end proof: it types /clear for real.
-  if (argv[0] === "clear-now") {
-    ensureDirs();
-    const wins = fs
-      .readdirSync(STATE)
-      .filter((f) => f.endsWith(".window"))
-      .map((f) => ({ f, m: fs.statSync(path.join(STATE, f)).mtimeMs }))
-      .sort((a, b) => b.m - a.m);
-    if (!wins.length) return console.log("no session window captured yet");
-    const sid = wins[0].f.replace(/\.window$/, "");
-    const w = readJson(path.join(STATE, wins[0].f), {});
-    if (!w.consolePid) return console.log(`${sid}: no consolePid - restart the session to re-capture`);
-    fs.writeFileSync(
-      path.join(CLEARREQ, `${sid}.json`),
-      JSON.stringify({
-        sessionId: sid, hwnd: w.hwnd, consolePid: w.consolePid, title: w.title || "",
-        transcript: "", ctx: 0, hardK: 0, ts: new Date().toISOString(),
-      })
-    );
-    console.log(`clear requested for ${sid} (consolePid ${w.consolePid}) - clearbot fires within ~2s`);
-    return;
-  }
-
-  if (argv[0] === "clearbot-status") {
-    ensureDirs();
-    const stop = path.join(ROOT, "watcher", "clearbot.stop");
-    const running = execFileSync(
-      "powershell",
-      ["-NoProfile", "-Command",
-       // must exclude the probe's own command line, which also contains the
-       // pattern - otherwise this always reports "running".
-       "$me=$PID; @(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | " +
-       "Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -like '*-File*clearbot.ps1*' }).Count"],
-      { encoding: "utf8", timeout: 15000, windowsHide: true }
-    ).trim();
-    const pending = fs.readdirSync(CLEARREQ).filter((f) => f.endsWith(".json"));
-    console.log(`clearbot processes : ${running}`);
-    console.log(`kill switch        : ${fs.existsSync(stop) ? "ENGAGED (clearbot.stop present)" : "off"}`);
-    console.log(`pending requests   : ${pending.length}${pending.length ? " -> " + pending.join(", ") : ""}`);
-    console.log(`log                : ${path.join(ROOT, "watcher", "clearbot.log")}`);
-    if (running === "0") console.log(`\nNOT RUNNING. Start it: guards\\watcher\\start-clearbot.cmd`);
     return;
   }
 

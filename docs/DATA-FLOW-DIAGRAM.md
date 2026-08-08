@@ -100,7 +100,7 @@ graph TB
 | P2 | Run bounded kernel task | Execute one contract under a deny-by-default boundary and verify the result | `kernel/run.mjs` | FR-006, FR-007, FR-008 |
 | P3 | Carry directive across /clear | Bind, inject, and resume a directive on the same console | `hooks/directive.mjs` | FR-004, FR-005 |
 | P4 | Serialize launches | Grant/refuse the one automated launch-lane slot | `hooks/lane.mjs` | FR-003 |
-| P5 | Hand off blocked ops | Turn a guard-denied or elevated operation into a reviewable script | AGENTS.md runbox convention, `watcher/clearbot.ps1` | FR-010 |
+| P5 | Hand off blocked ops | Turn a guard-denied or elevated operation into a reviewable script a human runs (`/approve` or the web Run button) | AGENTS.md runbox convention, `hooks/engine.mjs` | FR-010 |
 
 ### 4.3 Data stores
 
