@@ -42,11 +42,7 @@ jobs:
       # `npm test` is the portable list (package.json). --test-concurrency=1 is
       # baked into that script as cheap insurance against a known timing-
       # sensitive flake in runner.test.mjs's "a hung run is killed PROMPTLY"
-      # case under loaded/nested sandboxes. hooks/clearbot.test.mjs is
-      # deliberately excluded from the portable list — it spawns real
-      # cmd.exe/powershell consoles and throws uncaught async exceptions
-      # after test-end on non-Windows, which can crash the whole
-      # node --test process rather than just fail a test.
+      # case under loaded/nested sandboxes.
       - run: npm test
 
   coverage-gate:
@@ -79,10 +75,9 @@ jobs:
               git reset --soft "$BEFORE"
             fi
           fi
-      # Explicit list, not covgate's default auto-discovery — left to default
-      # it would also pick up hooks/clearbot.test.mjs (Windows-only) and fail
-      # this job for the wrong reason (a red fast tier) instead of the real
-      # one (a coverage floor miss).
+      # Explicit list, not covgate's default auto-discovery, so this job can
+      # only ever fail for the real reason (a coverage floor miss), never a
+      # list drift.
       - name: node hooks/covgate.mjs
         env:
           ACC_COVGATE_TESTS: "hooks/directive.test.mjs,hooks/usage.test.mjs,hooks/statusline.test.mjs,hooks/testplan.test.mjs,hooks/covgate.test.mjs,hooks/cmdline.test.mjs,hooks/lane.test.mjs,hooks/route.test.mjs,hooks/budget.test.mjs,runner/runner.test.mjs,kernel/adapter.test.mjs,kernel/adapters/claude-code.test.mjs,kernel/autonomy.test.mjs,kernel/contract.test.mjs,kernel/credentials.test.mjs,kernel/guard.test.mjs,kernel/guardhook.test.mjs,kernel/ledger.test.mjs,kernel/policy.test.mjs,kernel/run.test.mjs,kernel/settings.test.mjs,kernel/verifier.test.mjs,gui/server.test.mjs"
@@ -115,25 +110,18 @@ jobs:
             'C:\code\lifeos-ecosystem\lifeos-ui' | Out-Null
       - name: Full fast tier (native)
         run: npm run test:windows
-      - name: gui/ptyhost.test.ps1
+      # The three PowerShell suites that remain after the keystroke-stack
+      # demolition (SPEC-0005 PR-2) — the shim launch-cap gate and the
+      # cap-watch alerter. Before this rewrite they ran in NO job at all.
+      - name: shim/claude.test.ps1
         shell: pwsh
-        run: powershell -File gui/ptyhost.test.ps1
-      - name: guards-gui.ps1 -SmokeTest
+        run: powershell -File shim/claude.test.ps1
+      - name: watcher/claude-cap-watch.test.ps1
         shell: pwsh
-        run: powershell -File guards-gui.ps1 -SmokeTest
-      # Diagnostic only — this one visually shows a window, so it's not a
-      # correctness assertion. Never gate merges on it.
-      - name: watcher/screenshot-gui.ps1 (diagnostic)
+        run: powershell -File watcher/claude-cap-watch.test.ps1
+      - name: watcher/install-cap-watch-task.test.ps1
         shell: pwsh
-        continue-on-error: true
-        run: powershell -File watcher/screenshot-gui.ps1
-      - name: Upload GUI screenshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gui-screenshot
-          path: '*.png'
-          if-no-files-found: ignore
+        run: powershell -File watcher/install-cap-watch-task.test.ps1
       - name: Clean up fixture route directories
         if: always()
         shell: pwsh

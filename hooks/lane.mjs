@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // lane.mjs — machine-wide launch lane for real-API claude spawns.
 //
-// THE JAM (2026-07-31): runner.mjs (claude -p per board task), e2e/loop.e2e.mjs
+// THE JAM (2026-07-31): runner.mjs (claude -p per board task), the proof tier
 // (real TUI sessions), the directive loop, and Kyle's interactive sessions all open
 // API streams from one account with zero coordination. Concurrent bursts die in
 // transport as "Unable to connect to API (econnreset)" — the edge resets the
@@ -23,7 +23,7 @@
 //      known-bad API.
 //
 // THE SECOND JAM (2026-08-01): the above only ever wrapped AUTOMATED headless
-// launches (runner.mjs, e2e). Kyle's interactive GUI launches (guards-gui.ps1
+// launches (runner.mjs, e2e). Kyle's interactive launches (his own terminals
 // Go button, Terminal tab) spawned `claude` with zero coordination at all —
 // confirmed by grep, no `lane.mjs` import anywhere in that file. Pressing Go
 // while runner.mjs or e2e held the automation slot (or while Kyle had another
@@ -435,13 +435,13 @@ export function formatHolders(holders) {
 
 // ------------------------------------------------------------------- CLI
 // `node hooks/lane.mjs <cmd> ...` — single-shot, NON-BLOCKING commands for
-// callers that cannot import ESM directly (guards-gui.ps1 shells out to
+// callers that cannot import ESM directly (external scripts shell out to
 // this). Every command prints one line of JSON to stdout and exits
 // immediately; nothing here polls or waits, because a GUI click must never
 // hang on a subprocess. The two-step try-acquire/reown handshake exists
 // because at the moment a GUI launch reserves a slot it doesn't yet know the
 // real child pid — it reserves under its own (short-lived) pid first, then
-// re-owns the slot to the actual claude/PtyHost pid once spawned, so the
+// re-owns the slot to the actual claude pid once spawned, so the
 // slot naturally frees itself when THAT process exits, not when the GUI does.
 export function tryAcquireOnce(category, label, pid, ttlMs) {
   const cat = category || undefined;

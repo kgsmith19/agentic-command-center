@@ -571,7 +571,11 @@ test("reownSlot on a slot that doesn't exist reports ok:false, not a throw", () 
   assert.equal(r.ok, false);
 });
 
-test("reownSlot reports ok:false, not a throw, when owner.json can't be written", () => {
+// Skipped as root: chmod 0444 does not bind uid 0, so the write this test
+// needs to FAIL succeeds and the test reds falsely — the exact "1 known
+// root-permission artifact under sandboxed CI" PRD MET-001 carried. The
+// fault-injection is only meaningful where file modes actually deny.
+test("reownSlot reports ok:false, not a throw, when owner.json can't be written", { skip: process.getuid?.() === 0 }, () => {
   const r = tryAcquireOnce("interactive", "readonly-owner", 111, 60000);
   const ownerFile = path.join(slotDir(r.slot, "interactive"), "owner.json");
   fs.chmodSync(ownerFile, 0o444);

@@ -1,26 +1,23 @@
 #!/usr/bin/env node
-// Agentic Command Center - the DIRECTIVE store. This is what makes ACC able to carry
-// a piece of work across a /clear instead of losing it.
+// Agentic Command Center - the DIRECTIVE store. This is what makes ACC able to
+// carry a piece of work across context resets instead of losing it.
 //
-// THE PROBLEM IT SOLVES: the auto-clear chain (Stop hook -> clear-request ->
-// clearbot -> WriteConsoleInput types "/clear") worked, but it stopped there.
-// The fresh session came up with an empty prompt and no idea what it had been
-// doing, so a human had to retype the task. A directive survives the clear because it
-// lives in a FILE, not in context.
+// THE PROBLEM IT SOLVES: a long task outruns one context window. The directive
+// lives in a FILE, not in context: the headless runner (runner/runner.mjs)
+// relaunches `claude -p` per cycle with ACC_DIRECTIVE=<id>, budget.mjs's
+// SessionStart hook injects the text + progress log into each fresh session,
+// and the Stop hook appends the closing summary as the next cycle's handoff.
+// The loop ends only when the model itself runs `done`/`blocked` (or a human
+// closes it from the Command Center's Start-work page).
 //
-// THE THREAD OF CONTINUITY IS THE CONSOLE PID, not the session id. A /clear ends
-// the session id and starts a new one, but the terminal window - and therefore
-// the console pid that clearbot types into - is the same process throughout. So
-// a directive binds to a console, and every session that starts in that console
-// adopts it.
+// THE THREAD OF CONTINUITY IS THE DIRECTIVE ID, carried in ACC_DIRECTIVE by
+// every runner-spawned session. (The console-PID binding and keystroke kicks
+// of the pre-SPEC-0005 era are gone.) A stale "active" directive nobody is
+// running is curated by hand — the web list's Mark-finished / Stop-restarting
+// buttons — never reaped automatically.
 //
-// WHY THE TEXT NEVER TRAVELS AS KEYSTROKES: clearbot turns text into real key
-// events, so a newline in a task would submit a fragment (this is OI-004). The
-// directive text goes in this file; the only thing ever typed is a constant. That is
-// also what lets a multi-line task work at all.
-//
-// Fails OPEN, like every other ACC hook helper: a broken directive store must cost
-// auto-resume and nothing else.
+// Fails OPEN, like every other ACC hook helper: a broken directive store must
+// cost auto-resume and nothing else.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -37,12 +34,10 @@ function root() {
   return process.env.ACC_ROOT ? path.resolve(process.env.ACC_ROOT) : path.resolve(HERE, "..");
 }
 
-// The one constant a transport ever delivers to resume a directive — typed by
-// clearbot into a console, or sent as the whole -p bootstrap by runner.mjs's
-// directive jobs (SPEC-0001). The real directive context (text, log tail,
-// done/blocked protocol) is injected by budget.mjs's SessionStart hook; this
-// string only wakes the session up. clearbot.ps1's $KICK is the same bytes on
-// the PowerShell side of the wire.
+// The whole -p bootstrap runner.mjs sends for a directive job (SPEC-0001).
+// The real directive context (text, log tail, done/blocked protocol) is
+// injected by budget.mjs's SessionStart hook; this string only wakes the
+// session up.
 export const KICK_TEXT = "Continue the active ACC directive.";
 export function directivesDir() {
   return process.env.ACC_DIRECTIVES_DIR || path.join(root(), "runner", "directives");
@@ -50,33 +45,6 @@ export function directivesDir() {
 function doneDir() {
   return path.join(directivesDir(), "done");
 }
-
-// A kick is only sent once the binding has had time to settle. SessionStart runs
-// before the TUI is ready to accept input, so firing the instant a directive binds
-// types into a console that is still starting up. Policy-overridable
-// (`tui.readySettleMs`) and reused verbatim by watcher/clearbot.ps1's
-// Get-TuiReadyMs for the /cd settle (guards OI-003) -- one proven number for
-// "is this session's TUI ready for injected input yet" instead of two
-// independently-guessed ones. Was `KICK_DELAY_MS = 4000` hardcoded here only;
-// clearbot's own /cd settle separately guessed 1200 and that guess failed a
-// real-token repro (OI-003, 2026-08-04) after already failing once with zero
-// settle at all -- so this value now has exactly one source of truth.
-const TUI_READY_MS_DEFAULT = 4000;
-// One kick per directive per minute, whatever happens. A resume loop that somehow
-// re-armed itself must not be able to machine-gun the console.
-const KICK_COOLDOWN_MS = 60000;
-// A kick that produced no turn end within this window is presumed swallowed
-// (keystrokes missed) and re-armed by pendingKicks — issue #14's second half.
-const KICK_REARM_MS = 10 * 60_000;
-// A turn that ends UNDER budget used to end the loop: nothing re-armed the
-// kick, so an active directive sat dead until a human typed (observed twice on
-// 2026-07-31, once for 18 minutes). These two windows are what make an
-// under-budget turn end resume instead of stall. Both are policy dials
-// (directives.kickSettleSeconds / directives.humanHoldMinutes); these are the fallbacks.
-const KICK_SETTLE_MS_DEFAULT = 90_000;
-// While Kyle is actively prompting this console, stay out of his way. The hold
-// EXPIRES, so walking away mid-conversation still self-heals into autonomy.
-const HUMAN_HOLD_MS_DEFAULT = 10 * 60_000;
 
 const nowIso = () => new Date().toISOString();
 
@@ -113,7 +81,7 @@ function write(directive) {
   return directive;
 }
 
-// SessionStart, Stop, clearbot, and a model run can all touch the same
+// SessionStart, Stop, the runner, and a model run can all touch the same
 // directive at once, and every mutator below was a bare read -> change ->
 // write with nothing serializing it across processes -- a lost update looks
 // exactly like the silent stall this whole mechanism exists to prevent
@@ -173,44 +141,7 @@ export function listDirectives() {
   }
 }
 
-// Is that console still alive? A directive bound to a window Kyle has since closed
-// must never be resumed - there is nothing to type into, and the pid may since
-// have been reused by an unrelated process.
-export function consoleAlive(pid) {
-  const n = Number(pid || 0);
-  if (!n) return false;
-  try {
-    process.kill(n, 0);
-    return true;
-  } catch (e) {
-    return e && e.code === "EPERM"; // exists, owned by someone else
-  }
-}
-
-// OI-031: left alone, an active directive whose console died just sits "active"
-// forever - nothing ever marked it dead, so the store only grows and
-// pendingKicks keeps re-checking directives no one can ever resume (found live:
-// 7 "active" directives, oldest four days old, every consolePid gone). "dead"
-// means BOUND (consolePid nonzero) and NOT alive; an unbound directive
-// (consolePid 0 - created but not yet launched into a console) is left
-// alone, since there is nothing yet to prove dead. Runs on every
-// activeDirectives() call rather than on a timer: cheap (one process.kill(pid,0)
-// per active directive, same cost pendingKicks already pays), and it means every
-// reader - list, pending, directiveForSession - sees the reaped result
-// immediately instead of a stale one.
-export function reapDeadDirectives() {
-  const reaped = [];
-  for (const g of listDirectives()) {
-    if (g.status !== "active") continue;
-    if (!g.consolePid || consoleAlive(g.consolePid)) continue;
-    setStatus(g.id, "dead", `console pid ${g.consolePid} is gone (reaped)`);
-    reaped.push(g.id);
-  }
-  return reaped;
-}
-
 export function activeDirectives() {
-  reapDeadDirectives();
   return listDirectives().filter((g) => g.status === "active");
 }
 
@@ -237,14 +168,8 @@ export function createDirective({ text, cwd, profile }) {
     cwd: cwd || "",
     profile: profile || "",
     status: "active",
-    consolePid: 0,
     sessionId: "",
     cycles: 0,
-    needsKick: false,
-    boundAt: "",
-    lastKickAt: "",
-    turnEndedAt: "",
-    humanPromptAt: "",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -263,39 +188,25 @@ export function createDirective({ text, cwd, profile }) {
 // therefore treated exactly like none was passed at all.
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Called from SessionStart. Two ways in:
-//   - ACC_DIRECTIVE is set   -> the Command Center launched this session for that directive
-//   - otherwise         -> adopt whatever active directive owns this console
-// The second case is the one that survives a /clear, and it is deliberately not
-// conditional on how the clear happened: a directive Kyle cleared by hand resumes the
-// same way an auto-clear does.
-export function bindSession({ sessionId, consolePid, cwd, directiveId }) {
+// Called from SessionStart. One way in: ACC_DIRECTIVE names the directive the
+// Command Center (or the headless runner) launched this session for. Each
+// fresh runner cycle rebinds the same directive to its new session id.
+export function bindSession({ sessionId, cwd, directiveId }) {
   ensureDirs();
   // Unlocked lookup only decides WHICH directive to target; mutate() below
   // re-reads it fresh once the lock is held, so a candidate that went stale
   // between this search and the lock can never be written over.
   let found = directiveId ? readDirective(directiveId) : null;
   if (found && found.status !== "active") found = null;
-  if (!found && consolePid) {
-    found = activeDirectives().find((g) => Number(g.consolePid) === Number(consolePid)) || null;
-  }
   if (!found) return null;
 
   return mutate(found.id, (directive) => {
     if (directive.status !== "active") return false; // went inactive since the lookup
-    // A non-UUID id (garbage, or simply absent) never touches sessionId/
-    // needsKick/boundAt below -- it is inert, not "no-op with side effects".
+    // A non-UUID id (garbage, or simply absent) never touches sessionId (OI-006)
+    // -- it is inert, not "no-op with side effects".
     const validId = sessionId && SESSION_ID_RE.test(String(sessionId)) ? sessionId : null;
-    const fresh = validId !== null && directive.sessionId !== validId;
     if (validId !== null) directive.sessionId = validId;
-    if (consolePid) directive.consolePid = Number(consolePid);
     if (!directive.cwd && cwd) directive.cwd = cwd;
-    if (fresh) {
-      // A new session for a live directive is exactly the state that needs a prompt
-      // typed into it - whether this is the launch or the 4th resume.
-      directive.needsKick = true;
-      directive.boundAt = nowIso();
-    }
   });
 }
 
@@ -345,7 +256,6 @@ export function logTail(id, maxChars = 3000) {
 export function setStatus(id, status, why) {
   const directive = mutate(id, (d) => {
     d.status = status;
-    d.needsKick = false;
     if (why) d.why = String(why).slice(0, 500);
   });
   if (!directive) return null;
@@ -361,66 +271,6 @@ export function setStatus(id, status, why) {
     } catch {}
   }
   return directive;
-}
-
-// What clearbot asks for every cycle. Everything that makes a kick unsafe is
-// decided HERE, in one place, so the watcher stays a dumb executor:
-//   - directive must be active
-//   - its console must still exist
-//   - the binding must have settled (TUI ready)
-//   - the cooldown must have expired
-export function pendingKicks(now = Date.now(), opts = {}) {
-  const tuiReadyMs =
-    opts.tuiReadySettleMs != null ? Number(opts.tuiReadySettleMs) : TUI_READY_MS_DEFAULT;
-  const settleMs =
-    opts.kickSettleSeconds != null ? Number(opts.kickSettleSeconds) * 1000 : KICK_SETTLE_MS_DEFAULT;
-  const holdMs =
-    opts.humanHoldMinutes != null ? Number(opts.humanHoldMinutes) * 60000 : HUMAN_HOLD_MS_DEFAULT;
-  const list = activeDirectives();
-  // issue #14's second half: a kick whose keystrokes missed produces no turn,
-  // so nothing ever re-arms needsKick and the loop stalls silently. A kick
-  // with no turn end after KICK_REARM_MS is presumed swallowed and re-armed.
-  // Worst case (the turn is genuinely still running that long) the retyped
-  // constant queues as the next prompt — the same text the loop sends anyway.
-  for (const g of list) {
-    if (!g.needsKick && g.lastKickAt && now - Date.parse(g.lastKickAt) >= KICK_REARM_MS &&
-        (!g.turnEndedAt || Date.parse(g.turnEndedAt) < Date.parse(g.lastKickAt))) {
-      mutate(g.id, (d) => { d.needsKick = true; });
-      g.needsKick = true;
-    }
-  }
-  return list
-    .filter((g) => g.needsKick)
-    .filter((g) => consoleAlive(g.consolePid))
-    .filter((g) => !g.boundAt || now - Date.parse(g.boundAt) >= tuiReadyMs)
-    // Turn-end settle: the TUI needs a moment after a turn ends, and an instant
-    // kick would race the model's own closing tool calls.
-    .filter((g) => !g.turnEndedAt || now - Date.parse(g.turnEndedAt) >= settleMs)
-    // Human hold: quiet while he is typing, self-healing once he stops.
-    .filter((g) => !g.humanPromptAt || now - Date.parse(g.humanPromptAt) >= holdMs)
-    .filter((g) => !g.lastKickAt || now - Date.parse(g.lastKickAt) >= KICK_COOLDOWN_MS)
-    .map((g) => ({ id: g.id, consolePid: g.consolePid, cycles: g.cycles, sessionId: g.sessionId }));
-}
-
-// Called from the Stop hook on every turn end of a directive session that did NOT go
-// over budget (the over-budget path has its own clear/resume chain). This is the
-// liveness trigger: it re-arms the kick, and pendingKicks() above decides when
-// firing it is safe. `human` marks a turn Kyle prompted, which backs the kick
-// off - see HUMAN_HOLD_MS_DEFAULT.
-export function recordTurnEnd(id, { human } = {}) {
-  return mutate(id, (directive) => {
-    if (directive.status !== "active") return false;
-    directive.needsKick = true;
-    directive.turnEndedAt = nowIso();
-    if (human) directive.humanPromptAt = nowIso();
-  });
-}
-
-export function markKicked(id) {
-  return mutate(id, (directive) => {
-    directive.needsKick = false;
-    directive.lastKickAt = nowIso();
-  });
 }
 
 // ------------------------------------------------------------- CLI
@@ -467,31 +317,6 @@ export function main() {
     console.log(JSON.stringify(activeDirectives(), null, 2));
     return;
   }
-  if (cmd === "reap") {
-    console.log(JSON.stringify(reapDeadDirectives()));
-    return;
-  }
-  if (cmd === "pending") {
-    // Dials live in policy.json so they can be tuned without a restart; a
-    // missing or broken policy just uses the defaults (fail open).
-    let dials = {};
-    try {
-      const pol = JSON.parse(
-        fs.readFileSync(process.env.ACC_POLICY || path.join(root(), "policy.json"), "utf8")
-      );
-      dials = {
-        kickSettleSeconds: pol?.directives?.kickSettleSeconds,
-        humanHoldMinutes: pol?.directives?.humanHoldMinutes,
-        tuiReadySettleMs: pol?.tui?.readySettleMs,
-      };
-    } catch {}
-    console.log(JSON.stringify(pendingKicks(Date.now(), dials)));
-    return;
-  }
-  if (cmd === "kicked") {
-    markKicked(resolveId(argv));
-    return;
-  }
   if (cmd === "show") {
     const g = readDirective(resolveId(argv));
     console.log(g ? JSON.stringify(g, null, 2) : "no active directive");
@@ -516,7 +341,7 @@ export function main() {
     return;
   }
   console.log(
-    "usage: directive.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id] | pending | kicked [id] | reap"
+    "usage: directive.mjs new (--text T | --text-file F) [--cwd D] [--profile P] | list | show [id] | log [id] --text T | done [id] [--why W] | blocked [id] --why W | paused [id]"
   );
 }
 

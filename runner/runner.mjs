@@ -41,7 +41,7 @@ export function loadDirectiveJob(id) {
   if (!d.cwd) throw new Error(`directive "${id}" has no working folder (cwd) — a headless run needs one`);
   return {
     name: `directive-${id}`, workdir: d.cwd, bootstrap: KICK_TEXT, directiveId: id,
-    maxStuck: 3, maxRuns: 100, runTimeoutMin: 180,
+    profile: d.profile || "", maxStuck: 3, maxRuns: 100, runTimeoutMin: 180,
   };
 }
 
@@ -142,9 +142,7 @@ export function runClaudeOnce(job) {
       detached: process.platform !== "win32", // see killTree
       // runTimeoutMin owns the clock; never let the 600s print-mode
       // background-wait ceiling kill a session mid-task (lost run 2).
-      // ACC_PTY must not leak: a runner child that inherited it would
-      // masquerade as the embedded session and route clearbot's pipe writes
-      // into the wrong terminal. NODE_V8_COVERAGE must not leak either: this
+      // NODE_V8_COVERAGE must not leak: this
       // spawn is a hard `killTree` target on timeout (taskkill /t /f on
       // Windows, SIGTERM on the process group on POSIX), and a coverage-
       // instrumented child killed mid-write leaves a truncated raw-profile
@@ -157,9 +155,13 @@ export function runClaudeOnce(job) {
       // directive context into this child — the entire continuity mechanism
       // for directive jobs, and set ONLY for them: a file job's child must
       // never adopt a directive it was not launched for.
+      // ACC_PROFILE: the Start-work page stores the chosen profile ON the
+      // directive; this spawn is the only remaining path that can hand it to
+      // the session (budget.mjs/statusline.mjs apply it via applyProfile).
       env: {
-        ...process.env, ACC_PTY: "", CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined,
+        ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", CLAUDE_CODE_RUNNER: "1", NODE_V8_COVERAGE: undefined,
         ACC_DIRECTIVE: job.directiveId || "",
+        ACC_PROFILE: job.profile || "",
       },
     };
     const child = sp.args ? spawn(sp.file, sp.args, opts) : spawn(sp.file, opts);
@@ -199,9 +201,9 @@ export function runOnce(job) {
   );
 }
 
-// The week tier, via the same `usage.mjs check` verb clearbot shells
-// (Invoke-Kicks) — one authority, two callers. Any failure reads as green:
-// the console path fails open the same way (deliberate parity, revisit when
+// The week tier, via the same `usage.mjs check` verb the Command Center
+// status route shells — one authority, two callers. Any failure reads as
+// green: fail-open by design (revisit when
 // SL-010 gives usage.mjs an in-process API with its own coverage budget).
 // `exec` is injectable so the failure branches are testable without breaking
 // a real usage store.
@@ -274,9 +276,9 @@ async function runLoopInner(job, once, { run, tier }) {
       log(job, job.directiveId ? "directive left active status — complete" : `done marker "${job.doneMarker}" present — queue complete`);
       return 0;
     }
-    // FR-005 on the headless path: a red week is a hard stop for anything
-    // that spends tokens unattended — same brake clearbot applies to kicks.
-    // Directive jobs only; file jobs never had a tier gate (unchanged here).
+    // FR-005: a red week is a hard stop for anything that spends tokens
+    // unattended. Directive jobs only; file jobs never had a tier gate
+    // (unchanged here).
     if (job.directiveId && tier() === "red") {
       alert(job, "week token tier is RED — holding headless directive runs (exit 5)");
       return 5;

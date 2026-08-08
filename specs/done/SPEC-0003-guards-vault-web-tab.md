@@ -2,10 +2,10 @@
 title: The vault tab exists in the web GUI, with secret values never leaving the stdin channel
 spec_id: SPEC-0003-guards-vault-web-tab
 slice: SL-009
-status: in-progress
+status: done
 created: 2026-08-07
-updated: 2026-08-07
-completed:
+updated: 2026-08-08
+completed: 2026-08-08
 owner: Kyle Smith
 traces: [FR-010, NFR-001]
 ---

@@ -74,11 +74,11 @@ The step-by-step prompt pack that used to live in `prompts/` was removed (unused
 ## Commands
 
 ```bash
-npm test              # fast tier, hermetic, portable subset (Linux CI + local)
-npm run test:windows  # fast tier, full set including Windows-only PowerShell suites
+npm test              # fast tier, hermetic (Linux CI + local)
+npm run gui           # the web Command Center -> http://127.0.0.1:43117
 node hooks/covgate.mjs   # coverage gate on changed lib files (lines 100 / functions 100 / branches 90)
-node e2e/loop.e2e.mjs    # proof tier — spends real tokens, run deliberately
 node kernel/kernel.e2e.mjs   # proof tier — spends real tokens, run deliberately
+node runner/runner.mjs directive:<id>   # proof tier (SL-008) — real headless run, spends tokens
 npm run e2e:gui        # Playwright GUI e2e
 ```
 
@@ -88,7 +88,7 @@ Full regression command block, including the Windows-only PowerShell/GUI suites 
 
 ```yaml
 PROJECT_NAME:  Agentic Command Center (ACC / "guards")
-LANGUAGE:      Node 22 (hooks, kernel, runner), PowerShell 5.1+ (GUI, watcher, shim), C# / .NET (PtyHost)
+LANGUAGE:      Node 22 (hooks, kernel, runner, gui server), PowerShell 5.1+ (launch shim + cap-watch only)
 FRAMEWORK:     node:test (zero runtime deps); @playwright/test (one devDependency, GUI e2e only)
 DATABASE:      none — JSONL append-only files, no schema
 MAIN_BRANCH:   main

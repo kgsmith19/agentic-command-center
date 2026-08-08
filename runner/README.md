@@ -31,7 +31,7 @@ the run's closing summary changed from the previous run's (each run's summary
 is appended to the directive log — it is both the next fresh context's
 continuity and the stuck signal; a model repeating itself verbatim is the
 headless stuck mode). A RED week tier holds the loop before any spawn
-(exit 5) — same `usage.mjs check` verb clearbot consults, same fail-open on an
+(exit 5) — same `usage.mjs check` verb the Command Center consults, same fail-open on an
 unreadable usage store. `--install` is refused for directive jobs (they are
 ad-hoc, not scheduled).
 

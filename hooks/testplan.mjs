@@ -11,7 +11,7 @@
 //
 // ADVISORY BY DESIGN, same philosophy as route.mjs — and here it is load-
 // bearing, not taste: a blocking verdict needs replay machinery (route has
-// clearbot; this has none), and a blocked prompt inside a directive session stalls
+// it; this has none), and a blocked prompt inside a directive session stalls
 // the autonomous loop. The contract's teeth are in its GATES (fast tier green,
 // covgate green), not in eating prompts.
 //
@@ -31,7 +31,7 @@ const STATE = path.join(ROOT, "runner", "state");
 
 // Planning kickoff, not chat. Verbs that start implementation work, plus the
 // board/slice vocabulary the runner bootstraps use. Slash commands and the
-// clearbot constants must never match — they are machinery, not intent.
+// runner bootstrap constants must never match — they are machinery, not intent.
 const PLAN_RE =
   /\b(plan(ning)? (out|the|a|this)|write (a |the )?(spec|plan|prd)|spec (out|for)|design (a|the|this)|implement|build (out|a|the|this)|add (a|the) (feature|hook|endpoint|command|cell|skill|migration|tab|watcher)|refactor|next slice|work the board|start (the |a )?(task|slice|feature))\b/i;
 

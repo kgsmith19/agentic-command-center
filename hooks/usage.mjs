@@ -8,7 +8,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
@@ -481,54 +480,6 @@ function cmdClears(project) {
         s.ts ? new Date(s.ts).toISOString().slice(5, 16).replace("T", " ") : "?"
       }`
     );
-}
-
-// ------------------------------------------------------------ process anchor
-
-// The pty window record (budget.mjs, ACC_PTY path) must name the process that
-// PERSISTS across /clear. The hook's immediate parent on Windows is a
-// transient shell (node -> bash -> bash -> claude.exe) that dies with the
-// turn; recording it handed clearbot a dead pid (observed live 2026-07-31:
-// consolePid 80480 GONE while claude.exe 70152 hosted the session). The
-// anchor is the first ancestor that is not a shell wrapper. Lives here, not
-// in budget.mjs, because budget.mjs runs main() on import and tests cannot
-// import it.
-const SHELL_NAMES = new Set([
-  "bash.exe", "sh.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe",
-]);
-
-export function ptyAnchorPid(chain) {
-  const hit = chain.find((p) => p && p.name && !SHELL_NAMES.has(String(p.name).toLowerCase()));
-  if (hit) return hit.pid;
-  return chain.length ? chain[0].pid : process.ppid;
-}
-
-// One Win32_Process snapshot, walked in JS (a CIM query per hop would cost
-// ~200ms each at SessionStart). Returns [] on any failure -> caller falls
-// back to ppid.
-export function ancestorChain() {
-  try {
-    const out = execFileSync(
-      "powershell",
-      ["-NoProfile", "-Command",
-       "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name)\" }"],
-      { encoding: "utf8", timeout: 15000, windowsHide: true }
-    );
-    const byPid = new Map();
-    for (const line of out.split(/\r?\n/)) {
-      const m = line.match(/^(\d+) (\d+) (.+)$/);
-      if (m) byPid.set(Number(m[1]), { ppid: Number(m[2]), name: m[3].trim() });
-    }
-    const chain = [];
-    let pid = process.ppid;
-    for (let i = 0; i < 8 && pid > 0 && byPid.has(pid); i++) {
-      chain.push({ pid, name: byPid.get(pid).name });
-      pid = byPid.get(pid).ppid;
-    }
-    return chain;
-  } catch {
-    return [];
-  }
 }
 
 // ---------------------------------------------------------------- cli

@@ -5,18 +5,16 @@ A guard rail and control panel that lets Claude Code sessions run longer and mor
 ## Prerequisites
 
 - Node.js >= 22 (pinned in `package.json`'s `engines`)
-- Windows, PowerShell 5.1+, and the WebView2 runtime for the GUI/watcher/shim layers (`gui/`, `watcher/`, `shim/`) — these do not run on Linux
+- Windows + PowerShell 5.1+ only for the launch shim and cap-watch (`shim/`, `watcher/`) — everything else runs anywhere Node does
 - `npm install` (pulls the one devDependency, `@playwright/test`, for GUI e2e only)
 
 ## Run it
 
 ```bash
+npm run gui                             # the web Command Center -> http://127.0.0.1:43117
 node kernel/run.mjs <contract.json>     # one headless, bounded, verified task
 node kernel/ledger.mjs query            # inspect past kernel runs
-```
-
-```powershell
-.\Guards Control.cmd                    # the GUI control panel (Windows only)
+node runner/runner.mjs directive:<id>   # run a directive headless to completion
 ```
 
 ## Test it
@@ -26,7 +24,7 @@ npm test               # fast tier, hermetic, portable subset — runs on Linux 
 node hooks/covgate.mjs # coverage gate on changed lib files
 ```
 
-Windows-only suites (PowerShell, C#, the full GUI) and the real-token proof-tier suites are documented in `AGENTS.md`, "The regression, exactly" — they are not part of `npm test` because they either need Windows or spend real API tokens.
+The three Windows-only PowerShell suites (shim + cap-watch) and the real-token proof-tier suites are documented in `AGENTS.md`, "The regression, exactly" — they are not part of `npm test` because they either need Windows or spend real API tokens.
 
 ## Where things are
 
@@ -35,7 +33,7 @@ Windows-only suites (PowerShell, C#, the full GUI) and the real-token proof-tier
 | `docs/PRD.md` | What this does, for whom, and why — the source of truth |
 | `docs/SYSTEM-REQUIREMENTS.md` | What the system must be so the PRD is achievable |
 | `docs/DATA-FLOW-DIAGRAM.md` | Where data comes from, goes, and rests |
-| `docs/adr/` | Standing architecture decisions, including one still-open question (`ADR-0001`) |
+| `docs/adr/` | Standing architecture decisions, see `ADR-0005`/`ADR-0006` for the latest |
 | `AGENTS.md` | The deep operational reference for every subsystem |
 | `CLAUDE.md` | How an agent should work in this repo |
 | `specs/` | In-progress and completed specs, and the test justification ledger |

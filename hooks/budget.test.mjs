@@ -1,10 +1,15 @@
-// Tests for the Stop-gate precedence in hooks/budget.mjs (OI-011).
+// Tests for the Stop-gate precedence in hooks/budget.mjs (OI-011) and the
+// SessionStart directive injection, post keystroke-stack retirement
+// (SPEC-0005 PR-2).
 //
-// The bug being pinned: onStop early-allowed whenever stop_hook_active was set,
-// so after the forced checkpoint turn the latched path (clear request + directive
-// cycle) never ran - auto-clear deadlocked even with no other Stop hook, and a
-// /directive Stop hook that kept blocking pinned the session over the ceiling
-// forever. Once the budget latch exists, budget must win on EVERY stop.
+// The OI-011 bug being pinned, reworded for the headless era: onStop
+// early-allowed whenever stop_hook_active was set, so after the forced
+// checkpoint turn the latched path (hand-off message + directive cycle) never
+// ran — a /directive Stop hook that kept blocking pinned the session over the
+// ceiling forever. Once the budget latch exists, budget must win on EVERY
+// stop. What the latched path DOES changed with SPEC-0005 PR-2: no clear
+// request, no clearbot — the message tells the human to /clear and names the
+// exact headless resume command instead.
 //
 // The hook process.exit()s on every path, so each case runs it as a child
 // process and asserts on stdout plus the files it leaves in a throwaway
@@ -19,7 +24,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ptyAnchorPid } from "./usage.mjs";
 // directive.mjs resolves its store from ACC_ROOT/ACC_DIRECTIVES_DIR on every call, not
 // at import time (see hooks/directive.mjs), specifically so a single shared import
 // works across many tests each pointed at their own sandbox -- important here
@@ -46,16 +50,15 @@ const HOOK = path.join(HERE, "budget.mjs");
 // with --test-concurrency=1, so not a race).
 delete process.env.NODE_V8_COVERAGE;
 
-// Small dials keep the fixture transcripts tiny; autoClear stays on because the
-// clear-request file IS the assertion. Shape mirrors the live policy.json.
+// Small dials keep the fixture transcripts tiny. Shape mirrors the live
+// policy.json (post-SPEC-0005: no autoClear/directives blocks; the checkpoint
+// board is the cwd-relative .acc/BOARD.md).
 const POLICY = {
   context: { softK: 40, hardK: 50 },
   week: { amberTokens: 0, redTokens: 0, effectiveFrom: "" },
   subagents: { mode: "allowlist", allow: ["Explore"], maxPerSession: 6, exploreMaxReportLines: 80 },
   review: { fullLeanReview: "manual-only", localFullSuiteInReview: false, maxFinders: 3 },
-  runner: { stopOnRed: true, statusFile: "SLICE-RUNNER.md", waitingGuard: true },
-  autoClear: { enabled: true },
-  directives: { autoResume: true, maxCycles: 0 },
+  runner: { stopOnRed: true, statusFile: ".acc/BOARD.md", waitingGuard: true },
 };
 
 // Real Claude Code session ids are UUIDs, and OI-006's bindSession guard now
@@ -97,83 +100,96 @@ function writeTranscript(sb, sid, ctxTokens) {
   return f;
 }
 
-// The window record clearbot would type into; without it requestClear refuses.
-function seedWindow(sb, sid) {
-  fs.writeFileSync(
-    path.join(sb.root, "runner", "state", `${sid}.window`),
-    JSON.stringify({ ok: true, hwnd: 111, consolePid: 4242, title: "test console" })
-  );
-}
-
-function runStop(sb, { sid, transcript, active, profile }) {
+function runHook(sb, input, envExtra = {}) {
   return execFileSync("node", [HOOK], {
-    input: JSON.stringify({
-      hook_event_name: "Stop",
-      session_id: sid,
-      transcript_path: transcript,
-      stop_hook_active: !!active,
-      cwd: sb.root,
-    }),
+    input: JSON.stringify(input),
     env: {
       ...process.env,
       ACC_ROOT: sb.root,
       ACC_POLICY: sb.policyPath,
       ACC_DIRECTIVES_DIR: "",
-      ACC_PROFILE: profile || "",
+      ACC_PROFILE: "",
       ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
       CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
       CLAUDE_CODE_RUNNER: "",
+      ACC_DIRECTIVE: "",
+      ...envExtra,
     },
     encoding: "utf8",
   });
 }
 
-const clearReq = (sb, sid) => path.join(sb.root, "runner", "clear-requests", `${sid}.json`);
-const statePath = (sb, sid, suffix) => path.join(sb.root, "runner", "state", `${sid}.${suffix}`);
+function runStop(sb, { sid, transcript, active, profile }) {
+  return runHook(
+    sb,
+    { hook_event_name: "Stop", session_id: sid, transcript_path: transcript, stop_hook_active: !!active, cwd: sb.root },
+    { ACC_PROFILE: profile || "" }
+  );
+}
 
-test("over hard, no latch: blocks once to force the checkpoint", () => {
+const statePath = (sb, sid, suffix) => path.join(sb.root, "runner", "state", `${sid}.${suffix}`);
+// The clear-request channel is DEAD (SPEC-0005 PR-2): nothing may ever write
+// into it again, whatever the stop's state. Missing dir = trivially empty.
+const clearRequests = (sb) => {
+  try { return fs.readdirSync(path.join(sb.root, "runner", "clear-requests")); } catch { return []; }
+};
+
+// Seed a directive in the sandbox and bind this session to it, as SessionStart
+// does (by explicit id — the console-pid thread of continuity is gone).
+function seedDirective(sb, sid) {
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_DIRECTIVES_DIR = "";
+  const g = gm.createDirective({ text: "keep going", cwd: sb.root });
+  gm.bindSession({ sessionId: sid, directiveId: g.id });
+  return gm.readDirective(g.id);
+}
+
+test("over hard, no latch: blocks once to force the checkpoint, naming the board file", () => {
   const sb = sandbox();
   const sid = "s-first";
-  seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
   const out = runStop(sb, { sid, transcript: t, active: false });
   assert.match(out, /"decision":"block"/);
+  assert.match(out, /\.acc\/BOARD\.md/, "the checkpoint instruction names the statusFile dial");
   assert.ok(fs.existsSync(statePath(sb, sid, "budget")), "budget latch written");
-  assert.ok(!fs.existsSync(clearReq(sb, sid)), "no clear request on the blocking stop");
+  assert.equal(clearRequests(sb).length, 0);
 });
 
-test("latched + stop_hook_active: clear request still fires (the OI-011 deadlock)", () => {
+test("latched + stop_hook_active: the hand-off still fires — manual /clear, no clear request, no clearbot (OI-011 reworded)", () => {
   const sb = sandbox();
   const sid = "s-latched";
-  seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
   runStop(sb, { sid, transcript: t, active: false }); // block + latch
   const out = runStop(sb, { sid, transcript: t, active: true });
-  assert.match(out, /systemMessage/, "hand-off message reaches the operator");
-  assert.ok(fs.existsSync(clearReq(sb, sid)), "clear request written despite stop_hook_active");
+  assert.match(out, /systemMessage/, "hand-off message reaches the operator despite stop_hook_active");
+  assert.match(out, />>> TYPE \/clear NOW <<</);
+  assert.doesNotMatch(out, /auto-clear|clearbot/i, "the keystroke chain is gone — no auto-clear promise, no watcher hints");
+  assert.equal(clearRequests(sb).length, 0, "the clear-request channel is dead");
 });
 
-test("further over-budget stops re-request the clear; the directive cycle is one-shot", async () => {
+test("latched with an active directive: the message names the exact headless resume command; the cycle is one-shot", () => {
   const sb = sandbox();
   const sid = SID(1);
-  seedWindow(sb, sid);
+  const g = seedDirective(sb, sid);
   const t = writeTranscript(sb, sid, 60000);
 
-  // Seed a directive in the sandbox tree and bind this session to it, the same way
-  // SessionStart would. directive.mjs resolves its store from ACC_ROOT on every call.
-  process.env.ACC_ROOT = sb.root;
-  process.env.ACC_DIRECTIVES_DIR = "";
-  const g = gm.createDirective({ text: "finish the thing", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, directiveId: g.id });
-
   runStop(sb, { sid, transcript: t, active: false }); // block + latch
-  runStop(sb, { sid, transcript: t, active: true }); // latched stop 1
-  assert.ok(fs.existsSync(clearReq(sb, sid)), "first latched stop requests the clear");
-  fs.unlinkSync(clearReq(sb, sid)); // consumed, but the turn still is not dying
-  const out = runStop(sb, { sid, transcript: t, active: true }); // latched stop 2
-  assert.match(out, /systemMessage/);
-  assert.ok(fs.existsSync(clearReq(sb, sid)), "request re-written for the stuck turn");
+  const out1 = runStop(sb, { sid, transcript: t, active: true }); // latched stop 1
+  assert.match(out1, new RegExp(`runner\\.mjs directive:${g.id}`), "the resume path is the headless runner, spelled out");
+  const out2 = runStop(sb, { sid, transcript: t, active: true }); // latched stop 2 (stuck turn)
+  assert.match(out2, /systemMessage/);
   assert.equal(gm.readDirective(g.id).cycles, 1, "cycle logged exactly once across latched stops");
+  assert.equal(clearRequests(sb).length, 0, "no clear-request entry ever appears");
+});
+
+test("latched without a directive: the message names the board re-prime path and drops the dead CLI hints", () => {
+  const sb = sandbox();
+  const sid = "s-noboard";
+  const t = writeTranscript(sb, sid, 60000);
+  runStop(sb, { sid, transcript: t, active: false });
+  const out = runStop(sb, { sid, transcript: t, active: true });
+  assert.match(out, /\.acc\/BOARD\.md/, "a directive-less session re-primes from the board file");
+  assert.doesNotMatch(out, /clearbot-status|usage\.mjs clears/, "hints to deleted CLI verbs must not survive");
 });
 
 test("under hard: stop passes silently", () => {
@@ -184,14 +200,24 @@ test("under hard: stop passes silently", () => {
   assert.equal(out.trim(), "");
 });
 
-// Single source of truth (2026-07-31): the Process-tab dials are the budget for
-// every session. A profile may scope subagents but must not shadow the dials.
+test("under budget with an active directive: plain allow — no store mutation, no output (the kick re-arm died with clearbot)", () => {
+  const sb = sandbox();
+  const sid = SID(2);
+  const before = seedDirective(sb, sid);
+  const t = writeTranscript(sb, sid, 10000);
+  const out = runStop(sb, { sid, transcript: t, active: false });
+  assert.equal(out.trim(), "", "still silent");
+  assert.deepEqual(gm.readDirective(before.id), before,
+    "an under-budget turn end must not touch the directive store — the headless runner owns continuation now");
+});
+
+// Single source of truth (2026-07-31): the Command Center dials are the budget
+// for every session. A profile may scope subagents but must not shadow the dials.
 test("profile without a context block: the base dials still govern", () => {
   const sb = sandbox({
     profiles: { Normal: { subagents: { allow: ["Explore"], maxPerSession: 6 } } },
   });
   const sid = "s-prof-nocontext";
-  seedWindow(sb, sid);
   const t = writeTranscript(sb, sid, 60000); // over base hardK 50
   const out = runStop(sb, { sid, transcript: t, active: false, profile: "Normal" });
   assert.match(out, /"decision":"block"/, "base hardK enforced despite ACC_PROFILE");
@@ -207,189 +233,47 @@ test("profile context (when present) still overrides for that session", () => {
   assert.equal(out.trim(), "", "profile hardK 80 applied, 60k passes");
 });
 
-// --- liveness: an under-budget turn end must re-arm the kick ---------------
-// The 2026-07-31 stall, pinned. A directive session that simply finishes its turn
-// well under the ceiling used to get nothing: no clear, no resume, dead air
-// until a human typed. The Stop hook must report that turn end to the directive
-// store - silently, without changing its own output.
-
-// The classifier reads the LAST USER message, so these transcripts need one.
-function writeTranscriptWithUser(sb, sid, ctxTokens, userText) {
-  const f = path.join(sb.root, `${sid}.jsonl`);
-  const user = JSON.stringify({
-    type: "user",
-    timestamp: "2026-07-31T12:00:00.000Z",
-    message: { role: "user", content: [{ type: "text", text: userText }] },
-  });
-  fs.writeFileSync(f, user + "\n" + turn(ctxTokens, "did the work") + "\n");
-  return f;
-}
-
-// Seed a directive in the sandbox and bind this session to it, as SessionStart does.
-function seedDirective(sb, sid) {
-  process.env.ACC_ROOT = sb.root;
-  process.env.ACC_DIRECTIVES_DIR = "";
-  const g = gm.createDirective({ text: "keep going", cwd: sb.root });
-  gm.bindSession({ sessionId: sid, consolePid: process.pid, directiveId: g.id });
-  gm.markKicked(g.id); // a kick already fired; needsKick is false
-  return { gm, g };
-}
-
-test("under budget with an active directive: the turn end re-arms the kick", async () => {
-  const sb = sandbox();
-  const sid = SID(2);
-  const { gm, g } = await seedDirective(sb, sid);
-  const t = writeTranscriptWithUser(sb, sid, 10000, "Continue the active ACC directive.");
-
-  const out = runStop(sb, { sid, transcript: t, active: false });
-  assert.equal(out.trim(), "", "still silent - liveness must not add output");
-
-  const after = gm.readDirective(g.id);
-  assert.equal(after.needsKick, true, "kick re-armed");
-  assert.ok(after.turnEndedAt, "turn end stamped");
-  assert.ok(!after.humanPromptAt, "the kick constant is a MACHINE turn");
-});
-
-test("a human-prompted turn end is classified as human", async () => {
-  const sb = sandbox();
-  const sid = SID(3);
-  const { gm, g } = await seedDirective(sb, sid);
-  const t = writeTranscriptWithUser(sb, sid, 10000, "actually, do this other thing first");
-
-  runStop(sb, { sid, transcript: t, active: false });
-  assert.ok(gm.readDirective(g.id).humanPromptAt, "human prompt stamped -> the kick backs off");
-});
-
-// --- self-healing watcher --------------------------------------------------
-// A dead clearbot means no clear and no resume, and a directive session cannot
-// notice on its own. The Stop hook is the right place to check: it IS the turn
-// boundary where a clear or a kick is about to be needed. The sandbox gets a
-// FAKE start-clearbot.cmd, so these prove the decision without starting a real
-// watcher.
-function fakeStarter(sb) {
-  const dir = path.join(sb.root, "watcher");
-  fs.mkdirSync(dir, { recursive: true });
-  const marker = path.join(dir, "STARTED");
-  fs.writeFileSync(path.join(dir, "start-clearbot.cmd"), `@echo off\r\necho started > "${marker}"\r\n`);
-  return marker;
-}
-
-function heartbeat(sb, ageMs) {
-  const dir = path.join(sb.root, "watcher");
-  fs.mkdirSync(dir, { recursive: true });
-  const f = path.join(dir, "clearbot.heartbeat");
-  fs.writeFileSync(f, "alive");
-  const when = new Date(Date.now() - ageMs);
-  fs.utimesSync(f, when, when);
-}
-
-// A portable synchronous sleep — no shell-out, works identically on every OS.
-function sleepMs(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-// ensureClearbot spawns detached, so the marker lands a moment later.
-function appears(file, ms = 6000) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (fs.existsSync(file)) return true;
-    sleepMs(200);
-  }
-  return false;
-}
-
-// ensureClearbot() spawns cmd.exe directly (hooks/budget.mjs:80) — genuinely
-// Windows-only functionality, not a portability gap. Same pattern already used
-// by hooks/testplan.test.mjs for its POSIX-only chmod fault-injection case.
-test("a stale heartbeat at a turn boundary revives the watcher", { skip: process.platform !== "win32" }, () => {
-  const sb = sandbox();
-  const sid = "s-revive";
-  const marker = fakeStarter(sb);
-  heartbeat(sb, 120000);
-  runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
-  assert.ok(appears(marker), "start-clearbot was invoked");
-});
-
-test("a fresh heartbeat leaves the watcher alone", () => {
-  const sb = sandbox();
-  const sid = "s-norevive";
-  const marker = fakeStarter(sb);
-  heartbeat(sb, 2000);
-  runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
-  assert.equal(appears(marker, 2500), false, "a live watcher is not restarted");
-});
-
-test("a deliberate stop is never overridden by the revive", () => {
-  const sb = sandbox();
-  const sid = "s-killswitch";
-  const marker = fakeStarter(sb);
-  fs.writeFileSync(path.join(sb.root, "watcher", "clearbot.stop"), "stopped on purpose");
-  // no heartbeat at all = looks dead, but Kyle turned it off deliberately
-  runStop(sb, { sid, transcript: writeTranscript(sb, sid, 10000), active: false });
-  assert.equal(appears(marker, 2500), false, "the kill switch wins");
-});
-
 test("no directive: an under-budget stop still does nothing at all", () => {
   const sb = sandbox();
   const sid = "s-live-nodirective";
-  const t = writeTranscriptWithUser(sb, sid, 10000, "hello");
+  const t = writeTranscript(sb, sid, 10000);
   assert.equal(runStop(sb, { sid, transcript: t, active: false }).trim(), "");
 });
 
-// --- pty window record (spec 2026-07-31): an ACC-hosted session has no HWND to
-// find - the GUI is the terminal. It sets ACC_PTY=<pipe name>; the record must
-// carry transport:"pty" + that pipe, and consolePid must be the hook's PARENT
-// (the claude process, which survives /clear; here, this test process).
-test("SessionStart with ACC_PTY records a pty window bound to the parent pid", () => {
-  const sb = sandbox({ autoClear: { enabled: false } });
-  const sid = "sid-pty";
-  execFileSync("node", [HOOK], {
-    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }),
-    env: {
-      ...process.env,
-      ACC_ROOT: sb.root,
-      ACC_POLICY: sb.policyPath,
-      ACC_DIRECTIVES_DIR: "",
-      ACC_SCAN_CACHE: path.join(sb.root, "scan-cache.json"),
-      CLAUDE_CONFIG_DIR: path.join(sb.root, "cfg"),
-      CLAUDE_CODE_RUNNER: "",
-      ACC_PTY: "acc-term-cafe12",
-    },
-    encoding: "utf8",
-  });
-  const win = JSON.parse(fs.readFileSync(statePath(sb, sid, "window"), "utf8"));
-  assert.equal(win.transport, "pty");
-  assert.equal(win.pipe, "acc-term-cafe12");
-  assert.equal(win.consolePid, process.pid,
-    "consolePid must be the hook's PARENT (the claude process; here, the test runner)");
+// --- SessionStart, post keystroke-retirement -------------------------------
+// The window-capture / clearbot machinery is gone: a session binds its
+// directive by ACC_DIRECTIVE alone, and no watcher warning can ever fire.
+
+function runSessionStart(sb, sid, envExtra) {
+  return runHook(sb, { hook_event_name: "SessionStart", session_id: sid, cwd: sb.root }, envExtra);
+}
+
+test("SessionStart with ACC_DIRECTIVE binds by id and injects the directive with the headless resume framing", () => {
+  const sb = sandbox();
+  const sid = SID(3);
+  process.env.ACC_ROOT = sb.root;
+  process.env.ACC_DIRECTIVES_DIR = "";
+  const g = gm.createDirective({ text: "do the long thing", cwd: sb.root });
+  // A stale-looking watcher heartbeat must be MEANINGLESS now — the warning
+  // path died with clearbot.
+  fs.mkdirSync(path.join(sb.root, "watcher"), { recursive: true });
+  fs.writeFileSync(path.join(sb.root, "watcher", "clearbot.heartbeat"), "old");
+  const past = new Date(Date.now() - 120000);
+  fs.utimesSync(path.join(sb.root, "watcher", "clearbot.heartbeat"), past, past);
+
+  const out = runSessionStart(sb, sid, { ACC_DIRECTIVE: g.id });
+  assert.match(out, /\[ACC DIRECTIVE/, "the directive context is injected");
+  assert.match(out, /runner\.mjs directive:/, "the how-this-ends block names the headless resume, not an auto-clear promise");
+  assert.doesNotMatch(out, /clearbot|watcher|start-clearbot|resumes you automatically/i);
+  assert.equal(gm.readDirective(g.id).sessionId, sid, "bound by ACC_DIRECTIVE alone");
+  assert.ok(!fs.existsSync(statePath(sb, sid, "window")), "no window record is ever captured");
 });
 
-// The anchor rule behind that record: the hook's immediate parent on a live
-// launch is a transient shell (node -> bash -> bash -> claude.exe) that dies
-// with the turn - recording it handed clearbot a dead pid (observed live:
-// consolePid 80480 GONE while claude.exe 70152 hosted the session). The
-// persistent process is the first NON-SHELL ancestor. Lives in usage.mjs
-// because budget.mjs runs main() on import and cannot be imported by tests.
-test("ptyAnchorPid skips transient shell ancestors and lands on claude", () => {
-  const chain = [
-    { pid: 111, name: "bash.exe" },
-    { pid: 222, name: "bash.exe" },
-    { pid: 333, name: "claude.exe" },
-    { pid: 444, name: "cmd.exe" },
-  ];
-  assert.equal(ptyAnchorPid(chain), 333);
-});
-
-test("ptyAnchorPid anchors at the immediate parent when it is not a shell", () => {
-  // The test-runner case: the hook's parent is node.exe (alive, persistent).
-  const chain = [
-    { pid: 555, name: "node.exe" },
-    { pid: 666, name: "powershell.exe" },
-    { pid: 777, name: "claude.exe" },
-  ];
-  assert.equal(ptyAnchorPid(chain), 555);
-});
-
-test("ptyAnchorPid falls back to the first ancestor when all are shells", () => {
-  assert.equal(ptyAnchorPid([{ pid: 888, name: "cmd.exe" }]), 888);
+test("SessionStart without ACC_DIRECTIVE injects the budget lines only — no window machinery, no warnings", () => {
+  const sb = sandbox();
+  const sid = "s-plain-start";
+  const out = runSessionStart(sb, sid, {});
+  assert.match(out, /Context budget: soft 40k, hard 50k/);
+  assert.doesNotMatch(out, /clearbot|watcher/i);
+  assert.ok(!fs.existsSync(statePath(sb, sid, "window")));
 });

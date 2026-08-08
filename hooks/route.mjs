@@ -6,11 +6,13 @@
 //
 // Two callers:
 //   node route.mjs --text "add a supabase migration"   -> JSON on stdout,
-//       used by the ACC Start-work tab to preselect the working folder.
+//       used by the web Start-work page (gui/server.mjs /api/route/suggest)
+//       to preselect the working folder.
 //   node route.mjs (with hook JSON on stdin)           -> UserPromptSubmit hook.
-//       Injects one advisory line, and only when all of these hold: it is the
-//       first prompt of the session, the text scores a route, and that route
-//       differs from the session cwd. Otherwise silent.
+//       Injects one advisory line when the text scores a route that differs
+//       from what was last said for this session. Otherwise silent. Advisory
+//       ONLY: it never blocks a prompt (the deny/cd-request channel died with
+//       the keystroke stack, SPEC-0005 PR-2).
 //
 // Fails open in every direction — a router that errors must not cost a turn.
 
@@ -24,8 +26,6 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // THIS file without touching live session state (same contract as budget.mjs).
 const ROOT = resolveRoot(HERE);
 const STATE = path.join(ROOT, "runner", "state");
-const REQDIR = path.join(ROOT, "runner", "clear-requests");
-const QUEUEDIR = path.join(ROOT, "runner", "queued");
 // The table is config, not runner state: it anchors to the repo (ACC_ROOT
 // must not move it, or sandboxed tests would lose the real routes).
 const TABLE = process.env.ACC_ROUTING_MD || path.resolve(HERE, "..", "..", "ROUTING.md");
@@ -125,85 +125,6 @@ function cli(argv) {
   }
 }
 
-// A prompt is safe to replay only if it is one ordinary line of text. Anything
-// with newlines or control characters is not typed back — the console injector
-// turns those into real keystrokes, and a stray Enter would submit a fragment.
-export function replayable(s) {
-  return typeof s === "string" && s.length > 0 && s.length <= 2000 && !/[\x00-\x1f\x7f]/.test(s);
-}
-
-function deny(reason) {
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: reason },
-      decision: "block",
-      reason,
-    }) + "\n"
-  );
-}
-
-// Write the request the watcher executes. Returns null (no deny, fall through to
-// the advisory line) whenever anything is missing or already tried — a router
-// that cannot finish the cd must not eat the prompt.
-function cdRequest(p, sid, r, cwd, midSession, prev) {
-  let policy = {};
-  try { policy = JSON.parse(fs.readFileSync(path.join(ROOT, "policy.json"), "utf8")).autoCd || {}; } catch {}
-  if (policy.enabled === false) return null;
-
-  // One attempt per destination per session. If the cd silently fails to take,
-  // the next prompt goes through normally instead of being denied forever.
-  if ((prev.cdTried || []).includes(norm(r.path))) return null;
-
-  let win = null;
-  try { win = JSON.parse(fs.readFileSync(path.join(STATE, `${sid}.window`), "utf8")); } catch {}
-  if (!win || !win.consolePid) return null;
-  if (!fs.existsSync(r.path)) return null;
-
-  const prompt = String(p.prompt || "");
-
-  // Mid-session re-scope starts over: cwd alone cannot unload what was already
-  // read, so the clear is what actually makes the new scope thin. On the first
-  // scope of a session there is nothing to clear.
-  const clear = midSession && policy.clearOnRescope !== false;
-
-  // A prompt the injector cannot type (multi-line, or over its length limit)
-  // still gets re-scoped: it travels as a file and the SessionStart of the
-  // post-clear session injects it, with only a constant ever typed. That channel
-  // EXISTS ONLY WHEN THERE IS A CLEAR - no clear, no SessionStart, no injection -
-  // so without one an untypable prompt still falls through to the advisory line
-  // rather than being eaten.
-  let queued = false;
-  if (!replayable(prompt)) {
-    if (!clear || !prompt.trim()) return null;
-    try {
-      fs.mkdirSync(QUEUEDIR, { recursive: true });
-      fs.writeFileSync(path.join(QUEUEDIR, `${win.consolePid}.md`), prompt);
-    } catch {
-      return null;
-    }
-    queued = true;
-  }
-
-  const req = {
-    kind: "cd",
-    sessionId: sid,
-    consolePid: win.consolePid,
-    path: r.path,
-    label: r.label,
-    from: cwd,
-    clear,
-    replay: queued ? "" : prompt,
-    queued,
-  };
-  try {
-    fs.mkdirSync(REQDIR, { recursive: true });
-    fs.writeFileSync(path.join(REQDIR, `${sid}.cd.json`), JSON.stringify(req));
-  } catch {
-    return null;
-  }
-  return req;
-}
-
 function hook() {
   let p = {};
   try { p = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); } catch { return; }
@@ -228,26 +149,11 @@ function hook() {
 
   const cwd = p.cwd || process.cwd();
   const save = (mode, extra) =>
-    fs.writeFileSync(latch, JSON.stringify({ path: r.path, mode, cdTried: prev.cdTried || [], ...extra }));
+    fs.writeFileSync(latch, JSON.stringify({ path: r.path, mode, ...extra }));
 
   // Already living in the routed folder: the session is scoped by cwd, nothing
   // to say and nothing to type.
   if (norm(r.path) === norm(cwd)) { try { save("advise"); } catch {} return; }
-
-  // The session cannot cd itself and neither can a hook, so hand the job to the
-  // watcher that already types /clear from outside. It types /cd, and replays
-  // this prompt so the work lands in the new scope instead of the old one.
-  // Only ever attempted once per (session, destination) — see cdRequest.
-  const req = cdRequest(p, sid, r, cwd, Boolean(last), prev);
-  if (req) {
-    try { save("deny", { cdTried: [...(prev.cdTried || []), norm(r.path)] }); } catch {}
-    deny(
-      `[ACC route] Re-scoping this session to ${r.label} (${r.path}) — ${r.reason}.\n` +
-        (req.clear ? "Clearing context and cd-ing" : "Cd-ing") +
-        ", then your prompt re-runs there automatically. Nothing to do."
-    );
-    return;
-  }
 
   try {
     fs.mkdirSync(STATE, { recursive: true });

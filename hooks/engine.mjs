@@ -1,4 +1,4 @@
-﻿// CLI engine for guards. The GUI (guards-gui.ps1) shells to this for every
+﻿// CLI engine for guards. The web GUI (gui/server.mjs) shells to this for every
 // mutation; agents use `vault-keys` and `apply` to consume user-uploaded
 // secrets without the values ever entering a conversation, and `list` /
 // `run` / `trash` to work the runbox (see AGENTS.md). Values travel
