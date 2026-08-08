@@ -1,8 +1,5 @@
 # Machine-readable, repo-specific facts for the shared agent-engineering
-# standard (see .agent/standard.lock for the pinned revision). Only verified
-# facts belong here — every command below was actually run during the
-# 2026-08-08 migration. Large policy prose lives in the standard repo or
-# AGENTS.md, not here.
+# standard. Large policy prose lives in the standard repo or AGENTS.md.
 
 project:
   name: agentic-command-center
@@ -13,52 +10,43 @@ project:
 runtime:
   node_min: "22"
   package_manager: npm
-  runtime_dependencies: 0   # CON-002: zero by design, enforced by review, not tooling
+  runtime_dependencies: 0
   dev_dependencies:
-    - "@playwright/test"    # GUI e2e only
+    - "@playwright/test"
 
 commands:
   setup: npm install
-  # No formatter, linter, or type-checker is configured in this repo (plain
-  # JS, no build step, no bundler) — do not invent one; format/lint/typecheck
-  # discipline here is manual review against rules/00-CORE.md and
-  # rules/03-WRITING.md, not a tool.
-  fast_verify: npm test              # hermetic, portable, ~490 tests, Linux + local
-  full_verify_windows: npm run test:windows   # native PowerShell suites only run here
-  coverage_gate: npm run covgate     # changed-file floors: lines 100 / funcs 100 / branches 90
-  e2e: npm run e2e:gui               # Playwright, single worker, sandboxed
-  dev_server: npm run gui            # http://127.0.0.1:43117, not a verification command
+  fast_verify: npm test
+  full_verify_windows: npm run test:windows
+  coverage_gate: npm run covgate
+  e2e: npm run e2e:gui
+  dev_server: npm run gui
 
 ci:
-  workflow: .github/workflows/ci.yml
-  trigger: workflow_dispatch only    # push/pull_request disabled 2026-08-06 (hosted-runner
-                                      # infra reliability, see the workflow's own header comment)
-                                      # — re-enabling automatic triggers is a call for the repo
-                                      # owner, not something this migration changed
-  jobs:
-    - fast-tier-linux        # npm test on ubuntu-latest
-    - coverage-gate          # npm run covgate against the real PR/push diff
-    - windows-integration    # npm run test:windows + 3 native PowerShell suites
-    - gui-e2e                # npm run e2e:gui
+  required_workflow: .github/workflows/pr-gate.yml
+  required_check: "PR Gate"
+  required_trigger: "ready pull request + merge_group"
+  deep_workflow: .github/workflows/ci.yml
+  deep_trigger: workflow_dispatch
+  deep_jobs:
+    - fast-tier-linux
+    - coverage-gate
+    - windows-integration
+    - gui-e2e
 
 risk:
   default: R1
-  # Paths that always warrant R3+ review regardless of diff size: guard
-  # machinery and anything that could weaken it, plus the vault's stdin-only
-  # secret channel.
   protected_paths:
     - hooks/guard.mjs
     - hooks/engine.mjs
     - config.json
-    - "~/.claude/settings.json"      # external; edited only via the runbox handoff, never directly
+    - "~/.claude/settings.json"
+    - .github/workflows/**
+    - .agent/**
 
 work_tracking:
   system: github-issues
   labels_present: [leanness-pass, test-coverage, needs-kyle, future]
-  # risk:R0..R4 and status:ready/status:blocked are recommended by the
-  # standard but could not be created by this migration — no label-write
-  # tool was available in this session. See AGENTS.md's migration report.
-  labels_recommended_not_created: [risk:R0, risk:R1, risk:R2, risk:R3, risk:R4, "status:ready", "status:blocked"]
 
 telemetry:
-  integration_point: none   # no ACC/Toolbelt wiring exists yet; see AGENTS.md Remaining Gaps
+  integration_point: none
