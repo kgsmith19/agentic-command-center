@@ -19,10 +19,39 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadKernelPolicy, saveKernelPolicy } from "../kernel/policy.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// Exact-match route map — request input never touches a filesystem path, so
-// there is no traversal surface to defend.
+// Exact-match route map for the built-in pages — request input never touches
+// a filesystem path here. The ONE request-derived path in this server is the
+// --ui-dist static route below, which is containment-checked (SPEC-0006).
 const PAGES = { "/": "kernel.html", "/kernel.html": "kernel.html", "/guards": "guards.html" };
 const BODY_CAP = 64 * 1024;
+
+// --- --ui-dist static serving (SPEC-0006, ADR-0006) ------------------------
+// When ACC_UI_DIST (or --ui-dist) names the UI repo's built dist/, `/` and
+// every non-API, non-built-in GET serve from it, same-origin — so the
+// loopback/X-ACC security model is unchanged and no CORS grant ever exists.
+// Built-ins stay reachable at /guards and /kernel.html until the ADR-0006
+// parity criterion retires them.
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
+  ".svg": "image/svg+xml", ".json": "application/json", ".ico": "image/x-icon",
+  ".png": "image/png", ".woff2": "font/woff2", ".txt": "text/plain",
+};
+function serveDist(res, dist, route) {
+  const root = path.resolve(dist);
+  // Deliberately NO decodeURIComponent: an encoded ".." stays a literal
+  // filename that resolves inside root and simply misses (SPA fallback).
+  // Backslashes normalize to slashes so a Windows-shaped escape cannot
+  // slip past the containment check on POSIX either.
+  const candidate = path.resolve(root, "." + route.replaceAll("\\", "/"));
+  let file = candidate === root || candidate.startsWith(root + path.sep) ? candidate : null;
+  try { if (!file || !fs.statSync(file).isFile()) file = path.join(root, "index.html"); }
+  catch { file = path.join(root, "index.html"); } // unknown path -> SPA shell (client routing)
+  try {
+    return send(res, 200, fs.readFileSync(file), MIME[path.extname(file).toLowerCase()] || "application/octet-stream");
+  } catch (e) {
+    return send(res, 500, { error: e.message });
+  }
+}
 
 // --- guards API (SPEC-0002): thin shell over hooks/engine.mjs -------------
 // The engine stays the single owner of every state change — this server adds
@@ -195,6 +224,12 @@ export function handler(req, res) {
   if (!localHost(req.headers.host)) return send(res, 403, { error: "non-local Host" });
   if (!localOrigin(req.headers.origin)) return send(res, 403, { error: "non-local Origin" });
   const route = req.url.split("?")[0];
+  // With a dist configured, it owns "/" and every non-API, non-built-in GET;
+  // /guards and /kernel.html keep serving the built-ins (ADR-0006).
+  const dist = process.env.ACC_UI_DIST;
+  if (req.method === "GET" && dist && !route.startsWith("/api/") && (route === "/" || !PAGES[route])) {
+    return serveDist(res, dist, route);
+  }
   if (req.method === "GET" && PAGES[route]) {
     return send(res, 200, fs.readFileSync(path.join(HERE, PAGES[route])), "text/html; charset=utf-8");
   }
@@ -451,6 +486,8 @@ export function startServer({ port = 0 } = {}) {
 // coverage — so cli() is exported and unit-tested directly instead.
 export async function cli(argv = process.argv) {
   const i = argv.indexOf("--port");
+  const d = argv.indexOf("--ui-dist");
+  if (d !== -1 && argv[d + 1]) process.env.ACC_UI_DIST = argv[d + 1];
   const s = await startServer({ port: i === -1 ? 0 : Number(argv[i + 1]) });
   console.log(`LISTENING ${s.port}`); // consumers (Playwright, scripts) parse this line
   return s;
