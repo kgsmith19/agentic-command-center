@@ -246,4 +246,7 @@ function main() {
   console.log(`covgate: PASS — ${changed.length} changed file(s) at or above the floors`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+// No cross-file import for this check (unlike the other hooks' root.mjs-based
+// isMainModule): covgate.mjs is deliberately copied standalone into fixture
+// repos (hooks/pre-push.test.mjs) and must have zero sibling-file deps.
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) main();

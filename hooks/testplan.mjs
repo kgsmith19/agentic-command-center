@@ -23,7 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveRoot } from "./root.mjs";
+import { resolveRoot, readStdinJson, isMainModule } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = resolveRoot(HERE);
@@ -55,9 +55,8 @@ export function contract() {
 }
 
 function hook() {
-  let p = {};
-  try { p = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); } catch { return; }
-  if (!shouldFire(p.prompt)) return;
+  const p = readStdinJson(null);
+  if (p === null || !shouldFire(p.prompt)) return;
 
   const sid = String(p.session_id || "unknown").slice(0, 40);
   const latch = path.join(STATE, `${sid}.testplan`);
@@ -79,4 +78,4 @@ function hook() {
   );
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) hook();
+if (isMainModule(import.meta.url)) hook();

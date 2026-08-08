@@ -139,8 +139,8 @@ async function scenario2() {
 // ------------------------------------------------------------- pollution check
 // Neither scenario is allowed to leave a mark on the live ACC goal-loop state
 // this kernel effort shares a repo with. A user-level hook firing inside a
-// kernel run would show up here — if it does, this is NOT fixed silently
-//: it is ledgered and reported instead.
+// kernel run would show up here — if it does, this is NOT fixed silently:
+// it is ledgered and reported instead.
 function checkNoPollution(before) {
   const after = listSafe(path.join(REPO, "runner", "directives"));
   const pass = JSON.stringify(before) === JSON.stringify(after);

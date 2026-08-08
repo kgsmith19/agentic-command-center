@@ -51,7 +51,7 @@ const good = () => ({
 const fakeAdapter = (over = {}) => ({
   id: "fake", identity: () => ({ name: "fake", version: "1.0.0" }),
   startTask: async () => ({ pid: 1, done: Promise.resolve({ code: 0, events: [] }) }),
-  sendStep: async () => {}, readState: () => ({ toolCalls: 0, tokens: 0, texts: [], sessionId: null }),
+  sendStep: async () => {}, readState: () => ({ toolCalls: 0, tokens: 0, sessionId: null }),
   stopTask: async () => {}, ...over,
 });
 
@@ -179,7 +179,7 @@ function recordingAdapter({ onLaunch, exitCode = 0, events = [] } = {}) {
         return { pid: 1, events, done: Promise.resolve({ code: exitCode, events }) };
       },
       sendStep: async () => {}, stopTask: async () => {},
-      readState: (evts) => ({ toolCalls: evts.length, tokens: 42, texts: [], sessionId: "s" }),
+      readState: (evts) => ({ toolCalls: evts.length, tokens: 42, sessionId: "s" }),
     },
     seen,
   };
@@ -299,7 +299,7 @@ test("a run over its wall-clock ceiling is stopped and marked aborted-by-budget 
       return { pid: 1, events: [], done, stop: async () => { stopped = true; resolveDone({ code: 143, events: [] }); } };
     },
     sendStep: async () => {}, stopTask: async (h) => h.stop(),
-    readState: () => ({ toolCalls: 0, tokens: 0, texts: [], sessionId: "s" }),
+    readState: () => ({ toolCalls: 0, tokens: 0, sessionId: "s" }),
   };
   const r = await R.runTask(contractFile(c), { adapter, tickMs: 10 });
   assert.equal(stopped, true, "the harness must actually be stopped");
@@ -321,7 +321,7 @@ test("a stopTask that itself throws while enforcing a breach is swallowed, not c
     // process) while the OS-level kill still lands moments later — the
     // kernel's abort must not depend on stopTask() resolving cleanly.
     stopTask: async () => { setTimeout(() => resolveDone({ code: 143, events: [] }), 5); throw new Error("kill failed"); },
-    readState: () => ({ toolCalls: 0, tokens: 0, texts: [], sessionId: "s" }),
+    readState: () => ({ toolCalls: 0, tokens: 0, sessionId: "s" }),
   };
   const r = await R.runTask(contractFile(c), { adapter, tickMs: 10 });
   assert.equal(r.outcome, "aborted-by-budget");
@@ -382,7 +382,7 @@ test("a run over its token ceiling is stopped, using the LIVE event stream (AC-B
       return { pid: 1, events, done, stop: async () => resolveDone({ code: 143, events }) };
     },
     sendStep: async () => {}, stopTask: async (h) => h.stop(),
-    readState: (evts) => ({ toolCalls: 0, tokens: evts.length * 999, texts: [], sessionId: "s" }),
+    readState: (evts) => ({ toolCalls: 0, tokens: evts.length * 999, sessionId: "s" }),
   };
   const r = await R.runTask(contractFile(c), { adapter, tickMs: 10 });
   assert.equal(r.outcome, "aborted-by-budget");

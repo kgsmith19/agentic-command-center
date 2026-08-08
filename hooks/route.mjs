@@ -19,7 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveRoot } from "./root.mjs";
+import { resolveRoot, readStdinJson } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_ROOT redirects every runner/ path at a throwaway tree so tests exercise
@@ -126,8 +126,8 @@ function cli(argv) {
 }
 
 function hook() {
-  let p = {};
-  try { p = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); } catch { return; }
+  const p = readStdinJson(null);
+  if (p === null) return;
   const sid = String(p.session_id || "unknown").slice(0, 40);
   const latch = path.join(STATE, `${sid}.route`);
 

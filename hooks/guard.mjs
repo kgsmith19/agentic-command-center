@@ -29,7 +29,8 @@
 // process.exit calls or its blocking stdin read.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isMainModule } from "./root.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // ACC_GUARD_CONFIG lets a test point this file at a fixture config without
@@ -119,11 +120,7 @@ export function decide(payload, config) {
 }
 
 // --- I/O wrapper: only when this file is the process entry point -----------
-const isMain = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1] ?? "").href; } catch { return false; }
-})();
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   function deny(msg) {
     console.error(msg);
     process.exit(2);
